@@ -824,9 +824,16 @@ void G_AddViewAngle (int yaw)
 
 CVAR (Bool, bot_allowspy, false, 0)
 
+
+enum {
+	SPY_CANCEL = 0,
+	SPY_NEXT,
+	SPY_PREV,
+};
+
 // [RH] Spy mode has been separated into two console commands.
 //		One goes forward; the other goes backward.
-static void ChangeSpy (bool forward)
+static void ChangeSpy (int changespy)
 {
 	// If you're not in a level, then you can't spy.
 	if (gamestate != GS_LEVEL)
@@ -852,20 +859,24 @@ static void ChangeSpy (bool forward)
 
 	// Otherwise, cycle to the next player.
 	bool checkTeam = !demoplayback && deathmatch;
-	int pnum = int(players[consoleplayer].camera->player - players);
-	int step = forward ? 1 : -1;
-
-	do
+	int pnum = consoleplayer;
+	if (changespy != SPY_CANCEL) 
 	{
-		pnum += step;
-		pnum &= MAXPLAYERS-1;
-		if (playeringame[pnum] &&
-			(!checkTeam || players[pnum].mo->IsTeammate (players[consoleplayer].mo) ||
-			(bot_allowspy && players[pnum].isbot)))
+		pnum = int(players[consoleplayer].camera->player - players);
+		int step = (changespy == SPY_NEXT) ? 1 : -1;
+
+		do
 		{
-			break;
-		}
-	} while (pnum != consoleplayer);
+			pnum += step;
+			pnum &= MAXPLAYERS-1;
+			if (playeringame[pnum] &&
+				(!checkTeam || players[pnum].mo->IsTeammate (players[consoleplayer].mo) ||
+				(bot_allowspy && players[pnum].isbot)))
+			{
+				break;
+			}
+		} while (pnum != consoleplayer);
+	}
 
 	players[consoleplayer].camera = players[pnum].mo;
 	S_UpdateSounds(players[consoleplayer].camera);
@@ -879,15 +890,20 @@ static void ChangeSpy (bool forward)
 CCMD (spynext)
 {
 	// allow spy mode changes even during the demo
-	ChangeSpy (true);
+	ChangeSpy (SPY_NEXT);
 }
 
 CCMD (spyprev)
 {
 	// allow spy mode changes even during the demo
-	ChangeSpy (false);
+	ChangeSpy (SPY_PREV);
 }
 
+CCMD (spycancel)
+{
+	// allow spy mode changes even during the demo
+	ChangeSpy (SPY_CANCEL);
+}
 
 //
 // G_Responder
