@@ -41,12 +41,12 @@ const char *GetVersionString();
 
 /** Lots of different version numbers **/
 
-#define VERSIONSTR "2.7.1"
+#define VERSIONSTR "2.8pre"
 
 // The version as seen in the Windows resource
-#define RC_FILEVERSION 2,7,1,0
-#define RC_PRODUCTVERSION 2,7,1,0
-#define RC_PRODUCTVERSION2 "2.7"
+#define RC_FILEVERSION 2,7,9999,0
+#define RC_PRODUCTVERSION 2,7,9999,0
+#define RC_PRODUCTVERSION2 "2.8pre"
 
 // Version identifier for network games.
 // Bump it every time you do a release unless you're certain you
@@ -76,7 +76,7 @@ const char *GetVersionString();
 
 // Use 4500 as the base git save version, since it's higher than the
 // SVN revision ever got.
-#define SAVEVER 4501
+#define SAVEVER 4502
 
 #define SAVEVERSTRINGIFY2(x) #x
 #define SAVEVERSTRINGIFY(x) SAVEVERSTRINGIFY2(x)
