@@ -70,6 +70,7 @@
 #include "m_bbox.h"
 #include "r_data/r_translate.h"
 #include "p_trace.h"
+#include "gstrings.h"
 
 
 static FRandom pr_camissile ("CustomActorfire");
@@ -2133,6 +2134,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Print)
 	ACTION_PARAM_FLOAT(time, 1);
 	ACTION_PARAM_NAME(fontname, 2);
 
+	if (text[0] == '$') text = GStrings(text+1);
 	if (self->CheckLocalView (consoleplayer) ||
 		(self->target!=NULL && self->target->CheckLocalView (consoleplayer)))
 	{
@@ -2171,6 +2173,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_PrintBold)
 	float saved = con_midtime;
 	FFont *font = NULL;
 	
+	if (text[0] == '$') text = GStrings(text+1);
 	if (fontname != NAME_None)
 	{
 		font = V_GetFont(fontname);
@@ -2196,11 +2199,13 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Log)
 {
 	ACTION_PARAM_START(1);
 	ACTION_PARAM_STRING(text, 0);
+
+	if (text[0] == '$') text = GStrings(text+1);
 	Printf("%s\n", text);
 	ACTION_SET_RESULT(false);	// Prints should never set the result for inventory state chains!
 }
 
-//===========================================================================
+//=========================================================================
 //
 // A_LogInt
 //
@@ -2494,6 +2499,68 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_CheckSightOrRange)
 			// If a player is viewing from a non-player, check that too.
 			if (players[i].camera != NULL && players[i].camera->player == NULL &&
 				DoCheckSightOrRange(self, players[i].camera, range))
+			{
+				return;
+			}
+		}
+	}
+	ACTION_JUMP(jump);
+}
+
+//===========================================================================
+//
+// A_CheckRange
+// Jumps if this actor is out of range of all players.
+//
+//===========================================================================
+static bool DoCheckRange(AActor *self, AActor *camera, double range)
+{
+	if (camera == NULL)
+	{
+		return false;
+	}
+	// Check distance first, since it's cheaper than checking sight.
+	double dx = self->x - camera->x;
+	double dy = self->y - camera->y;
+	double dz;
+	fixed_t eyez = (camera->z + camera->height - (camera->height>>2));	// same eye height as P_CheckSight
+	if (eyez > self->z + self->height){
+		dz = self->z + self->height - eyez;
+	}
+	else if (eyez < self->z){
+		dz = self->z - eyez;
+	}
+	else{
+		dz = 0;
+	}
+	if ((dx*dx) + (dy*dy) + (dz*dz) <= range){
+		// Within range
+		return true;
+	}
+	return false;
+}
+
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_CheckRange)
+{
+	ACTION_PARAM_START(2);
+	double range = EvalExpressionF(ParameterIndex+0, self);
+	ACTION_PARAM_STATE(jump, 1);
+
+	ACTION_SET_RESULT(false);	// Jumps should never set the result for inventory state chains!
+
+	range = range * range * (double(FRACUNIT) * FRACUNIT);		// no need for square roots
+	for (int i = 0; i < MAXPLAYERS; ++i)
+	{
+		if (playeringame[i])
+		{
+			// Always check from each player.
+			if (DoCheckRange(self, players[i].mo, range))
+			{
+				return;
+			}
+			// If a player is viewing from a non-player, check that too.
+			if (players[i].camera != NULL && players[i].camera->player == NULL &&
+				DoCheckRange(self, players[i].camera, range))
 			{
 				return;
 			}
