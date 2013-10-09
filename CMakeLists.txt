@@ -19,16 +19,16 @@ function( add_pk3 PK3_NAME PK3_DIR )
 		set( PK3_TARGET "pk3" )
 	endif( ${PK3_TARGET} STREQUAL "zdoom_pk3" )
 
-	if( NO_GENERATOR_EXPRESSIONS )
+	if( NOT NO_GENERATOR_EXPRESSIONS )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
 			COMMAND ${ZIPDIR_EXE} -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} $<TARGET_FILE_DIR:zdoom>
 			DEPENDS zipdir ${PK3_DIR} )
-	else( NO_GENERATOR_EXPRESSIONS )
+	else( NOT NO_GENERATOR_EXPRESSIONS )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
 			COMMAND ${ZIPDIR_EXE} -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}
 			DEPENDS zipdir ${PK3_DIR} )
-	endif( NO_GENERATOR_EXPRESSIONS )
+	endif( NOT NO_GENERATOR_EXPRESSIONS )
 
 	add_custom_target( ${PK3_TARGET} ALL
 		DEPENDS ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} )
@@ -61,7 +61,8 @@ if( MSVC )
 	# String pooling
 	# Function-level linking
 	# Disable run-time type information
-	set( ALL_C_FLAGS "/GF /Gy /GR-" )
+	# Set floating point model to fast or the GL render will suffer for it.
+	set( ALL_C_FLAGS "/GF /Gy /GR- /fp:fast" )
 	
 	# Avoid CRT DLL dependancies in release builds
 	set( REL_C_FLAGS "/MT" )
