@@ -200,8 +200,12 @@ void AActor::Serialize (FArchive &arc)
 		<< flags3
 		<< flags4
 		<< flags5
-		<< flags6
-		<< special1
+		<< flags6;
+	if (SaveVersion >= 4504)
+	{
+		arc << flags7;
+	}
+	arc	<< special1
 		<< special2
 		<< health
 		<< movedir
@@ -826,7 +830,7 @@ void AActor::CopyFriendliness (AActor *other, bool changeTarget, bool resetHealt
 	flags4 = (flags4 & ~(MF4_NOHATEPLAYERS | MF4_BOSSSPAWNED)) | (other->flags4 & (MF4_NOHATEPLAYERS | MF4_BOSSSPAWNED));
 	FriendPlayer = other->FriendPlayer;
 	DesignatedTeam = other->DesignatedTeam;
-	if (changeTarget && other->target != NULL && !(other->target->flags3 & MF3_NOTARGET))
+	if (changeTarget && other->target != NULL && !(other->target->flags3 & MF3_NOTARGET) && !(other->target->flags7 & MF7_NEVERTARGET))
 	{
 		// LastHeard must be set as well so that A_Look can react to the new target if called
 		LastHeard = target = other->target;
@@ -2958,6 +2962,30 @@ void AActor::SetShade (int r, int g, int b)
 	fillcolor = MAKEARGB(ColorMatcher.Pick (r, g, b), r, g, b);
 }
 
+void AActor::SetPitch(int p)
+{
+	if (p != pitch)
+	{
+		pitch = p;
+		if (player != NULL)
+		{
+			player->cheats |= CF_INTERPVIEW;
+		}
+	}
+}
+
+void AActor::SetAngle(angle_t ang)
+{
+	if (ang != angle)
+	{
+		angle = ang;
+		if (player != NULL)
+		{
+			player->cheats |= CF_INTERPVIEW;
+		}
+	}
+}
+
 //
 // P_MobjThinker
 //
@@ -3521,19 +3549,23 @@ void AActor::Tick ()
 		Destroy();
 		return;
 	}
-	if (ObjectFlags & OF_JustSpawned && state->GetNoDelay())
+	if ((flags7 & MF7_HANDLENODELAY) && !(flags2 & MF2_DORMANT))
 	{
-		// For immediately spawned objects with the NoDelay flag set for their
-		// Spawn state, explicitly set the current state so that it calls its
-		// action and chains 0-tic states.
-		int starttics = tics;
-		if (!SetState(state))
-			return;				// freed itself
-		// If the initial state had a duration of 0 tics, let the next state run
-		// normally. Otherwise, increment tics by 1 so that we don't double up ticks.
-		if (starttics > 0 && tics >= 0)
+		flags7 &= ~MF7_HANDLENODELAY;
+		if (state->GetNoDelay())
 		{
-			tics++;
+			// For immediately spawned objects with the NoDelay flag set for their
+			// Spawn state, explicitly set the current state so that it calls its
+			// action and chains 0-tic states.
+			int starttics = tics;
+			if (!SetState(state))
+				return;				// freed itself
+			// If the initial state had a duration of 0 tics, let the next state run
+			// normally. Otherwise, increment tics by 1 so that we don't double up ticks.
+			else if (starttics > 0 && tics >= 0)
+			{
+				tics++;
+			}
 		}
 	}
 	// cycle through states, calling action functions at transitions
@@ -4020,6 +4052,7 @@ void AActor::PostBeginPlay ()
 		Renderer->StateChanged(this);
 	}
 	PrevAngle = angle;
+	flags7 |= MF7_HANDLENODELAY;
 }
 
 void AActor::MarkPrecacheSounds() const
@@ -4841,7 +4874,7 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		z += pr_spawnblood.Random2 () << 10;
 		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
@@ -4912,7 +4945,7 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 	}
 
 statedone:
-
+	if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	if (bloodtype >= 1)
 		P_DrawSplash2 (40, x, y, z, dir, 2, bloodcolor);
 }
@@ -4933,7 +4966,7 @@ void P_BloodSplatter (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 
@@ -4948,6 +4981,8 @@ void P_BloodSplatter (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -4971,7 +5006,7 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 		
@@ -4986,6 +5021,8 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -5014,7 +5051,7 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *th;
 		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
@@ -5031,6 +5068,8 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 		{
 			th->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -6137,6 +6176,9 @@ void PrintMiscActorInfo(AActor *query)
 		Printf("\n\tflags6: %x", query->flags6);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags6 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags6));
+		Printf("\n\tflags7: %x", query->flags7);
+		for (flagi = 0; flagi <= 31; flagi++)
+			if (query->flags7 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags7));
 		Printf("\nBounce flags: %x\nBounce factors: f:%f, w:%f", 
 			query->BounceFlags, FIXED2FLOAT(query->bouncefactor), 
 			FIXED2FLOAT(query->wallbouncefactor));

@@ -4250,6 +4250,7 @@ enum EACSFunctions
 	ACSF_SpawnDecal,
 	ACSF_CheckFont,
 	ACSF_DropItem,
+	ACSF_CheckFlag,
 
 	// ZDaemon
 	ACSF_GetTeamScore = 19620,	// (int team)
@@ -5281,6 +5282,16 @@ doplaysound:			if (funcIndex == ACSF_PlayActorSound)
 					}
 				}
 				return cnt;
+			}
+			break;
+		}
+
+		case ACSF_CheckFlag:
+		{
+			AActor *actor = SingleActorFromTID(args[0], activator);
+			if (actor != NULL)
+			{
+				return !!CheckActorFlag(actor, FBehavior::StaticLookupString(args[1]));
 			}
 			break;
 		}
@@ -8250,7 +8261,9 @@ scriptwait:
 			if (STACK(2) == 0)
 			{
 				if (activator != NULL)
-					activator->angle = STACK(1) << 16;
+				{
+					activator->SetAngle(STACK(1) << 16);
+				}
 			}
 			else
 			{
@@ -8259,7 +8272,7 @@ scriptwait:
 
 				while ( (actor = iterator.Next ()) )
 				{
-					actor->angle = STACK(1) << 16;
+					actor->SetAngle(STACK(1) << 16);
 				}
 			}
 			sp -= 2;
@@ -8269,7 +8282,9 @@ scriptwait:
 			if (STACK(2) == 0)
 			{
 				if (activator != NULL)
-					activator->pitch = STACK(1) << 16;
+				{
+					activator->SetPitch(STACK(1) << 16);
+				}
 			}
 			else
 			{
@@ -8278,7 +8293,7 @@ scriptwait:
 
 				while ( (actor = iterator.Next ()) )
 				{
-					actor->pitch = STACK(1) << 16;
+					actor->SetPitch(STACK(1) << 16);
 				}
 			}
 			sp -= 2;
