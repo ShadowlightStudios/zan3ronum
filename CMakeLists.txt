@@ -13,6 +13,17 @@ else(${CMAKE_MAJOR_VERSION} GREATER 2 OR ${CMAKE_MINOR_VERSION} GREATER 7)
 	set( NO_GENERATOR_EXPRESSIONS ON )
 endif(${CMAKE_MAJOR_VERSION} GREATER 2 OR ${CMAKE_MINOR_VERSION} GREATER 7)
 
+# Support cross compiling
+option( FORCE_CROSSCOMPILE "Turn on cross compiling." NO )
+if( FORCE_CROSSCOMPILE )
+	set( CMAKE_CROSSCOMPILING TRUE )
+endif( FORCE_CROSSCOMPILE )
+
+if(CMAKE_CROSSCOMPILING)
+	set(IMPORT_EXECUTABLES "IMPORTFILE-NOTFOUND" CACHE FILEPATH "Export file from native build.")
+	include(${IMPORT_EXECUTABLES})
+endif(CMAKE_CROSSCOMPILING)
+
 # Simplify pk3 building, add_pk3(filename srcdirectory)
 function( add_pk3 PK3_NAME PK3_DIR )
 	get_target_property(ZIPDIR_EXE zipdir LOCATION)
@@ -27,14 +38,17 @@ function( add_pk3 PK3_NAME PK3_DIR )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
 			COMMAND ${ZIPDIR_EXE} -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} $<TARGET_FILE_DIR:zdoom>/${PK3_NAME}
-			DEPENDS zipdir ${PK3_DIR} )
+			DEPENDS zipdir )
 	else( NOT NO_GENERATOR_EXPRESSIONS AND NOT ZDOOM_OUTPUT_OLDSTYLE )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
-			COMMAND ${ZIPDIR_EXE} -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}/${PK3_NAME}
-			DEPENDS zipdir ${PK3_DIR} )
+			COMMAND ${ZIPDIR_EXE} -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}
+			DEPENDS zipdir )
 	endif( NOT NO_GENERATOR_EXPRESSIONS AND NOT ZDOOM_OUTPUT_OLDSTYLE )
 
+	# Touch the zipdir executable here so that the pk3s are forced to rebuild
+	# each time since their dependecy has "changed."
 	add_custom_target( ${PK3_TARGET} ALL
+		COMMAND ${CMAKE_COMMAND} -E touch ${ZIPDIR_EXE}
 		DEPENDS ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} )
 endfunction( add_pk3 )
 
@@ -91,13 +105,27 @@ if( MSVC )
 	# Disable run-time type information
 	set( ALL_C_FLAGS "/GF /Gy /GR-" )
 	
+	if( CMAKE_SIZEOF_VOID_P MATCHES "4")
+		# SSE2 option (mostly to switch it off in VC2012 and later where it's the default
+		option (ZDOOM_USE_SSE2	"Use SSE2 instruction set")
+		if (ZDOOM_USE_SSE2)
+			set( ALL_C_FLAGS "${ALL_C_FLAGS} /arch:SSE2")
+		else (ZDOOM_USE_SSE2)
+			if (MSVC_VERSION GREATER 1699)
+				# On Visual C++ 2012 and later SSE2 is the default, so we need to switch it off explicitly
+				set( ALL_C_FLAGS "${ALL_C_FLAGS} /arch:IA32")
+			endif (MSVC_VERSION GREATER 1699)
+		endif (ZDOOM_USE_SSE2)
+	endif( CMAKE_SIZEOF_VOID_P MATCHES "4")
+	
 	# Avoid CRT DLL dependancies in release builds, optionally generate assembly output for checking crash locations.
 	option( ZDOOM_GENERATE_ASM "Generate assembly output." OFF )
 	if( ZDOOM_GENERATE_ASM )
-		set( REL_C_FLAGS "/MT /Oy /FAcs" )
+		set( REL_C_FLAGS "/MT /Oy /Oi /FAcs" )
 	else( ZDOOM_GENERATE_ASM )
-		set( REL_C_FLAGS "/MT /Oy" )
+		set( REL_C_FLAGS "/MT /Oy /Oi" )
 	endif( ZDOOM_GENERATE_ASM )
+
 	
 	# Debug allocations in debug builds
 	set( DEB_C_FLAGS "/D _CRTDBG_MAP_ALLOC /MTd" )
@@ -191,3 +219,7 @@ add_subdirectory( src )
 if( NOT WIN32 AND NOT APPLE )
 	add_subdirectory( output_sdl )
 endif( NOT WIN32 AND NOT APPLE )
+
+if( NOT CMAKE_CROSSCOMPILING )
+	export(TARGETS ${CROSS_EXPORTS} FILE "${CMAKE_BINARY_DIR}/ImportExecutables.cmake" )
+endif( NOT CMAKE_CROSSCOMPILING )

@@ -104,9 +104,6 @@ if( WIN32 )
 		include_directories( ${XINPUT_INCLUDE_DIR} )
 	endif( NOT XINPUT_INCLUDE_DIR )
 
-	find_library( DX_ddraw_LIBRARY ddraw
-		PATHS ENV DXSDK_DIR
-		PATH_SUFFIXES Lib Lib/${XBITS} )
 	find_library( DX_dxguid_LIBRARY dxguid
 		PATHS ENV DXSDK_DIR
 		PATH_SUFFIXES Lib Lib/${XBITS} )
@@ -115,9 +112,6 @@ if( WIN32 )
 		PATH_SUFFIXES Lib Lib/${XBITS} )
 
 	set( DX_LIBS_FOUND YES )
-	if( NOT DX_ddraw_LIBRARY )
-		set( DX_LIBS_FOUND NO )
-	endif( NOT DX_ddraw_LIBRARY )
 	if( NOT DX_dxguid_LIBRARY )
 		set( DX_LIBS_FOUND NO )
 	endif( NOT DX_dxguid_LIBRARY )
@@ -132,7 +126,6 @@ if( WIN32 )
 	set( ZDOOM_LIBS
 		wsock32
 		winmm
-		"${DX_ddraw_LIBRARY}"
 		"${DX_dxguid_LIBRARY}"
 		"${DX_dinput8_LIBRARY}"
 		ole32
@@ -367,20 +360,23 @@ endif( NOT NO_ASM )
 
 set( SSE_MATTERS NO )
 
-# SSE only matters on 32-bit targets. We check compiler flags to know if we can do it.
-if( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
-	CHECK_CXX_COMPILER_FLAG( "-msse2 -mfpmath=sse" CAN_DO_MFPMATH )
-	CHECK_CXX_COMPILER_FLAG( -arch:SSE2 CAN_DO_ARCHSSE2 )
-	if( CAN_DO_MFPMATH )
-		set( SSE1_ENABLE "-msse -mfpmath=sse" )
-		set( SSE2_ENABLE "-msse2 -mfpmath=sse" )
-		set( SSE_MATTERS YES )
-	elseif( CAN_DO_ARCHSSE2 )
-		set( SSE1_ENABLE -arch:SSE )
-		set( SSE2_ENABLE -arch:SSE2 )
-		set( SSE_MATTERS YES )
-	endif( CAN_DO_MFPMATH )
-endif( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+# with global use of SSE 2 we do not need special handling for selected files
+if (NOT ZDOOM_USE_SSE2)
+	# SSE only matters on 32-bit targets. We check compiler flags to know if we can do it.
+	if( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+		CHECK_CXX_COMPILER_FLAG( "-msse2 -mfpmath=sse" CAN_DO_MFPMATH )
+		CHECK_CXX_COMPILER_FLAG( -arch:SSE2 CAN_DO_ARCHSSE2 )
+		if( CAN_DO_MFPMATH )
+			set( SSE1_ENABLE "-msse -mfpmath=sse" )
+			set( SSE2_ENABLE "-msse2 -mfpmath=sse" )
+			set( SSE_MATTERS YES )
+		elseif( CAN_DO_ARCHSSE2 )
+			set( SSE1_ENABLE -arch:SSE )
+			set( SSE2_ENABLE -arch:SSE2 )
+			set( SSE_MATTERS YES )
+		endif( CAN_DO_MFPMATH )
+	endif( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+endif (NOT ZDOOM_USE_SSE2)
 
 if( SSE_MATTERS )
 	if( WIN32 )
@@ -416,7 +412,7 @@ if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STRE
 	set( CMAKE_CXX_FLAGS_MINSIZEREL "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}" )
 	set( CMAKE_CXX_FLAGS_RELWITHDEBINFO "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" )
 
-	set( CMAKE_CXX_FLAGS "-Wall -Wno-unused -Wextra -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
+	set( CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-unused -Wno-unused-parameter -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
 
 	# Remove extra warnings when using the official DirectX headers.
 	# Also, TDM-GCC 4.4.0 no longer accepts glibc-style printf formats as valid,
@@ -752,7 +748,7 @@ set( NOT_COMPILED_SOURCE_FILES
 add_executable( zdoom WIN32
 	${HEADER_FILES}
 	${NOT_COMPILED_SOURCE_FILES}
-	autostart.cpp
+	__autostart.cpp
 	${ASM_SOURCES}
 	${SYSTEM_SOURCES}
 	${X86_SOURCES}
@@ -1056,7 +1052,7 @@ add_executable( zdoom WIN32
 	r_data/renderstyle.cpp
 	r_data/r_interpolate.cpp
 	r_data/r_translate.cpp
-	autozend.cpp
+	zzautozend.cpp
 )
 
 set_source_files_properties( xlat/parse_xlat.cpp PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/xlat_parser.c" )
@@ -1095,16 +1091,23 @@ if( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
 	# Linux distributions are slow to adopt 2.6. :(
 	set_target_properties( zdoom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
 	set_target_properties( zdoom PROPERTIES OUTPUT_NAME ${ZDOOM_EXE_NAME} )
+else( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
+	set_target_properties( zdoom PROPERTIES
+		RUNTIME_OUTPUT_NAME ${ZDOOM_EXE_NAME}
+		RUNTIME_OUTPUT_DIRECTORY_RELEASE ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_DEBUG ${ZDOOM_EXE_NAME}d
+		RUNTIME_OUTPUT_DIRECTORY_DEBUG ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_MINSIZEREL ${ZDOOM_EXE_NAME}msr
+		RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_RELWITHDEBINFO ${ZDOOM_EXE_NAME}rd
+		RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${ZDOOM_OUTPUT_DIR}
+	)
 endif( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
 
 if( MSVC )
 	option( ZDOOM_GENERATE_MAPFILE "Generate .map file for debugging." OFF )
 	if( ZDOOM_GENERATE_MAPFILE )
-		if( NOT MSVC80 )
-			set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\" /MAP:${ZDOOM_EXE_NAME}.map")
-		else( NOT MSVC80 ) # 2005 doesn't support naming the map file.
-			set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\" /MAP")
-		endif( NOT MSVC80 )
+		set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\" /MAP")
 	else( ZDOOM_GENERATE_MAPFILE )
 		set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\"")
 	endif( ZDOOM_GENERATE_MAPFILE )
@@ -1116,26 +1119,6 @@ if( MSVC )
 
 	create_default_target_launcher( zdoom WORKING_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
 endif( MSVC )
-
-if( ZDOOM_OUTPUT_OLDSTYLE AND NOT NO_GENERATOR_EXPRESSIONS )
-	set_target_properties( zdoom PROPERTIES
-		RUNTIME_OUTPUT_NAME ${ZDOOM_EXE_NAME}
-		RUNTIME_OUTPUT_NAME_DEBUG ${ZDOOM_EXE_NAME}d
-		RUNTIME_OUTPUT_NAME_MINSIZEREL ${ZDOOM_EXE_NAME}msr
-		RUNTIME_OUTPUT_NAME_RELWITHDEBINFO ${ZDOOM_EXE_NAME}rd
-	)
-
-	if( ZDOOM_GENERATE_MAPFILE )
-		add_custom_command(TARGET zdoom POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:zdoom> ${ZDOOM_OUTPUT_DIR}/$<TARGET_FILE_NAME:zdoom>
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:zdoom>/zdoom.map ${ZDOOM_OUTPUT_DIR}/$<TARGET_FILE_NAME:zdoom>.map
-			COMMENT "Copying to output directory..." )
-	else( ZDOOM_GENERATE_MAPFILE )
-		add_custom_command(TARGET zdoom POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:zdoom> ${ZDOOM_OUTPUT_DIR}/$<TARGET_FILE_NAME:zdoom>
-			COMMENT "Copying to output directory..." )
-	endif( ZDOOM_GENERATE_MAPFILE )
-endif( ZDOOM_OUTPUT_OLDSTYLE AND NOT NO_GENERATOR_EXPRESSIONS )
 
 if( NOT WIN32 )
 	FILE( WRITE ${CMAKE_CURRENT_BINARY_DIR}/link-make "if [ ! -e ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME} ]; then ln -sf ${CMAKE_CURRENT_BINARY_DIR}/${ZDOOM_EXE_NAME} ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME}; fi" )
@@ -1177,7 +1160,7 @@ source_group("Render Data\\Textures" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE
 source_group("Render Interface" FILES r_defs.h r_renderer.h r_sky.cpp r_sky.h r_state.h r_utility.cpp r_utility.h)
 source_group("Resource Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/resourcefiles/.+")
 source_group("SDL Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sdl/.+")
-source_group("SFML" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
+source_group("SFMT" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
 source_group("Shared Game" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/g_shared/.+")
 source_group("Versioning" FILES version.h win32/zdoom.rc)
 source_group("Win32 Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/win32/.+")
