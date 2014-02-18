@@ -2726,12 +2726,16 @@ int P_FindUniqueTID(int start_tid, int limit)
 
 	if (start_tid != 0)
 	{ // Do a linear search.
-		limit = start_tid + limit - 1;
-		if (limit < start_tid)
-		{ // If it overflowed, clamp to INT_MAX
-			limit = INT_MAX;
+		int end_tid = start_tid;
+		if (start_tid > 0 && limit > INT_MAX - start_tid + 1)
+		{ // If 'limit+start_tid-1' overflows, clamp 'end_tid' to INT_MAX
+			end_tid = INT_MAX;
 		}
-		for (tid = start_tid; tid <= limit; ++tid)
+		else
+		{
+			end_tid += limit-1;
+		}
+		for (tid = start_tid; tid <= end_tid; ++tid)
 		{
 			if (tid != 0 && !P_IsTIDUsed(tid))
 			{
@@ -2769,7 +2773,7 @@ CCMD(utid)
 {
 	Printf("%d\n",
 		P_FindUniqueTID(argv.argc() > 1 ? atoi(argv[1]) : 0,
-		argv.argc() > 2 ? atoi(argv[2]) : 0));
+		(argv.argc() > 2 && atoi(argv[2]) >= 0) ? atoi(argv[2]) : 0));
 }
 
 //==========================================================================
@@ -4672,6 +4676,12 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 		if (defaults->SpawnState == NULL ||
 			sprites[defaults->SpawnState->sprite].numframes == 0)
 		{
+			// We don't load mods for shareware games so we'll just ignore
+			// missing actors. Heretic needs this since the shareware includes
+			// the retail weapons in Deathmatch.
+			if (gameinfo.flags & GI_SHAREWARE)
+				return NULL;
+
 			Printf ("%s at (%i, %i) has no frames\n",
 					i->TypeName.GetChars(), mthing->x>>FRACBITS, mthing->y>>FRACBITS);
 			i = PClass::FindClass("Unknown");
@@ -5159,7 +5169,7 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 			}
 		}
 		planez = rover->bottom.plane->ZatPoint(x, y);
-		if (planez < z) return false;
+		if (planez < z && !(planez < thing->floorz)) return false;
 	}
 #endif
 	hsec = sec->GetHeightSec();
