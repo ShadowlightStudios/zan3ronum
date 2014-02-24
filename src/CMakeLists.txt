@@ -528,12 +528,14 @@ message( STATUS "Fluid synth libs: ${FLUIDSYNTH_LIBRARIES}" )
 set( ZDOOM_LIBS ${ZDOOM_LIBS} "${ZLIB_LIBRARIES}" "${JPEG_LIBRARIES}" "${BZIP2_LIBRARIES}" "${FMOD_LIBRARY}" )
 include_directories( "${ZLIB_INCLUDE_DIR}" "${FMOD_INCLUDE_DIR}" "${BZIP2_INCLUDE_DIR}" "${LZMA_INCLUDE_DIR}" "${JPEG_INCLUDE_DIR}" )
 
-if( FLUIDSYNTH_FOUND )
-  if( NOT DYN_FLUIDSYNTH)
-	set( ZDOOM_LIBS ${ZDOOM_LIBS} "${FLUIDSYNTH_LIBRARIES}" )
-	include_directories( "${FLUIDSYNTH_INCLUDE_DIR}" )
-  endif( NOT DYN_FLUIDSYNTH )
-endif( FLUIDSYNTH_FOUND )
+if( NOT DYN_FLUIDSYNTH)
+	if( FLUIDSYNTH_FOUND )
+		set( ZDOOM_LIBS ${ZDOOM_LIBS} "${FLUIDSYNTH_LIBRARIES}" )
+		include_directories( "${FLUIDSYNTH_INCLUDE_DIR}" )
+	endif( FLUIDSYNTH_FOUND )
+else( NOT DYN_FLUIDSYNTH )
+	set( ZDOOM_LIBS ${ZDOOM_LIBS} ${CMAKE_DL_LIBS} )
+endif( NOT DYN_FLUIDSYNTH )
 
 # Start defining source files for ZDoom
 
@@ -1015,10 +1017,11 @@ if( NOT WIN32 )
 		COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/link-make
 		COMMAND /bin/sh -c ${CMAKE_CURRENT_BINARY_DIR}/link-make )
 endif( NOT WIN32 )
-if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
 	# GCC misoptimizes this file
 	set_source_files_properties( oplsynth/fmopl.cpp PROPERTIES COMPILE_FLAGS "-fno-tree-dominator-opts -fno-tree-fre" )
-
+endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
 	# Need to enable intrinsics for this file.
 	if( SSE_MATTERS )
 		set_source_files_properties( x86.cpp PROPERTIES COMPILE_FLAGS "-msse2 -mmmx" )
