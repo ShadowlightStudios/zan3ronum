@@ -4250,6 +4250,9 @@ enum EACSFunctions
 	ACSF_SpawnDecal,
 	ACSF_CheckFont,
 	ACSF_DropItem,
+	ACSF_CheckFlag,
+	ACSF_SetLineActivation,
+	ACSF_GetLineActivation,
 
 	// ZDaemon
 	ACSF_GetTeamScore = 19620,	// (int team)
@@ -5284,6 +5287,36 @@ doplaysound:			if (funcIndex == ACSF_PlayActorSound)
 			}
 			break;
 		}
+
+		case ACSF_CheckFlag:
+		{
+			AActor *actor = SingleActorFromTID(args[0], activator);
+			if (actor != NULL)
+			{
+				return !!CheckActorFlag(actor, FBehavior::StaticLookupString(args[1]));
+			}
+			break;
+		}
+
+		case ACSF_SetLineActivation:
+			if (argCount >= 2)
+			{
+				int line = -1;
+
+				while ((line = P_FindLineFromID(args[0], line)) >= 0)
+				{
+					lines[line].activation = args[1];
+				}
+			}
+			break;
+
+		case ACSF_GetLineActivation:
+			if (argCount > 0)
+			{
+				int line = P_FindLineFromID(args[0], -1);
+				return line >= 0 ? lines[line].activation : 0;
+			}
+			break;
 
 		default:
 			break;
@@ -6796,12 +6829,16 @@ scriptwait:
 			break;
 
 		case PCD_PRINTBINARY:
-#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && (__GNUC_MINOR__ >= 6)))
+#if (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && (__GNUC_MINOR__ >= 6)))) || defined(__clang__)
 #define HAS_DIAGNOSTIC_PRAGMA
 #endif
 #ifdef HAS_DIAGNOSTIC_PRAGMA
 #pragma GCC diagnostic push
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wformat-invalid-specifier"
+#else
 #pragma GCC diagnostic ignored "-Wformat="
+#endif
 #pragma GCC diagnostic ignored "-Wformat-extra-args"
 #endif
 			work.AppendFormat ("%B", STACK(1));
@@ -8250,7 +8287,9 @@ scriptwait:
 			if (STACK(2) == 0)
 			{
 				if (activator != NULL)
-					activator->angle = STACK(1) << 16;
+				{
+					activator->SetAngle(STACK(1) << 16);
+				}
 			}
 			else
 			{
@@ -8259,7 +8298,7 @@ scriptwait:
 
 				while ( (actor = iterator.Next ()) )
 				{
-					actor->angle = STACK(1) << 16;
+					actor->SetAngle(STACK(1) << 16);
 				}
 			}
 			sp -= 2;
@@ -8269,7 +8308,9 @@ scriptwait:
 			if (STACK(2) == 0)
 			{
 				if (activator != NULL)
-					activator->pitch = STACK(1) << 16;
+				{
+					activator->SetPitch(STACK(1) << 16);
+				}
 			}
 			else
 			{
@@ -8278,7 +8319,7 @@ scriptwait:
 
 				while ( (actor = iterator.Next ()) )
 				{
-					actor->pitch = STACK(1) << 16;
+					actor->SetPitch(STACK(1) << 16);
 				}
 			}
 			sp -= 2;

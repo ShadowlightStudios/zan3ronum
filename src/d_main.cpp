@@ -38,7 +38,7 @@
 #endif
 #include <float.h>
 
-#if defined(unix) || defined(__APPLE__)
+#if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
 #endif
 
@@ -856,7 +856,7 @@ void D_Display ()
 		FTexture *tex;
 		int x;
 
-		tex = TexMan[gameinfo.PauseSign];
+		tex = TexMan(gameinfo.PauseSign);
 		x = (SCREENWIDTH - tex->GetScaledWidth() * CleanXfac)/2 +
 			tex->GetScaledLeftOffset() * CleanXfac;
 		screen->DrawTexture (tex, x, 4, DTA_CleanNoMove, true, TAG_DONE);
@@ -1807,19 +1807,23 @@ static FString ParseGameInfo(TArray<FString> &pwads, const char *fn, const char 
 				// Try looking for the wad in the same directory as the .wad
 				// before looking for it in the current directory.
 
+				FString checkpath;
 				if (lastSlash != NULL)
 				{
-					FString checkpath(fn, (lastSlash - fn) + 1);
+					checkpath = FString(fn, (lastSlash - fn) + 1);
 					checkpath += sc.String;
-
-					if (!FileExists (checkpath))
-					{
-						pos += D_AddFile(pwads, sc.String, true, pos);
-					}
-					else
-					{
-						pos += D_AddFile(pwads, checkpath, true, pos);
-					}
+				}
+				else
+				{
+					checkpath = sc.String;
+				}
+				if (!FileExists(checkpath))
+				{
+					pos += D_AddFile(pwads, sc.String, true, pos);
+				}
+				else
+				{
+					pos += D_AddFile(pwads, checkpath, true, pos);
 				}
 			}
 			while (sc.CheckToken(','));
@@ -2019,7 +2023,7 @@ static void AddAutoloadFiles(const char *gamesection)
 			D_AddFile (allwads, wad);
 	
 		// [RH] Add any .wad files in the skins directory
-#ifdef unix
+#ifdef __unix__
 		file = SHARE_DIR;
 #else
 		file = progdir;
@@ -2027,7 +2031,7 @@ static void AddAutoloadFiles(const char *gamesection)
 		file += "skins";
 		D_AddDirectory (allwads, file);
 
-#ifdef unix
+#ifdef __unix__
 		file = NicePath("~/" GAME_DIR "/skins");
 		D_AddDirectory (allwads, file);
 #endif	
@@ -2146,17 +2150,6 @@ static void CheckCmdLine()
 	{
 		Printf ("%s", GStrings("D_DEVSTR"));
 	}
-
-#if !defined(unix) && !defined(__APPLE__)
-	// We do not need to support -cdrom under Unix, because all the files
-	// that would go to c:\\zdoomdat are already stored in .zdoom inside
-	// the user's home directory.
-	if (Args->CheckParm("-cdrom"))
-	{
-		Printf ("%s", GStrings("D_CDROM"));
-		mkdir (CDROM_DIR, 0);
-	}
-#endif
 
 	// turbo option  // [RH] (now a cvar)
 	v = Args->CheckValue("-turbo");
