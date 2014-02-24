@@ -4251,6 +4251,8 @@ enum EACSFunctions
 	ACSF_CheckFont,
 	ACSF_DropItem,
 	ACSF_CheckFlag,
+	ACSF_SetLineActivation,
+	ACSF_GetLineActivation,
 
 	// ZDaemon
 	ACSF_GetTeamScore = 19620,	// (int team)
@@ -4934,7 +4936,7 @@ int DLevelScript::CallFunction(int argCount, int funcIndex, SDWORD *args, const 
 			break;
 
 		case ACSF_UniqueTID:
-			return P_FindUniqueTID(argCount > 0 ? args[0] : 0, argCount > 1 ? args[1] : 0);
+			return P_FindUniqueTID(argCount > 0 ? args[0] : 0, (argCount > 1 && args[1] >= 0) ? args[1] : 0);
 
 		case ACSF_IsTIDUsed:
 			return P_IsTIDUsed(args[0]);
@@ -5295,6 +5297,26 @@ doplaysound:			if (funcIndex == ACSF_PlayActorSound)
 			}
 			break;
 		}
+
+		case ACSF_SetLineActivation:
+			if (argCount >= 2)
+			{
+				int line = -1;
+
+				while ((line = P_FindLineFromID(args[0], line)) >= 0)
+				{
+					lines[line].activation = args[1];
+				}
+			}
+			break;
+
+		case ACSF_GetLineActivation:
+			if (argCount > 0)
+			{
+				int line = P_FindLineFromID(args[0], -1);
+				return line >= 0 ? lines[line].activation : 0;
+			}
+			break;
 
 		default:
 			break;
@@ -6807,12 +6829,16 @@ scriptwait:
 			break;
 
 		case PCD_PRINTBINARY:
-#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && (__GNUC_MINOR__ >= 6)))
+#if (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && (__GNUC_MINOR__ >= 6)))) || defined(__clang__)
 #define HAS_DIAGNOSTIC_PRAGMA
 #endif
 #ifdef HAS_DIAGNOSTIC_PRAGMA
 #pragma GCC diagnostic push
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wformat-invalid-specifier"
+#else
 #pragma GCC diagnostic ignored "-Wformat="
+#endif
 #pragma GCC diagnostic ignored "-Wformat-extra-args"
 #endif
 			work.AppendFormat ("%B", STACK(1));

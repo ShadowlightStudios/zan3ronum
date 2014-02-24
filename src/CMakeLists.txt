@@ -50,6 +50,20 @@ set( MINOR_VERSIONS "50" "49" "48" "47" "46" "45" "44" "43" "42" "41"
 	"15" "14" "13" "12" "11" "10" "09" "08" "07" "06" "05" "04" "03"
 	"02" "01" "00" )
 set( MAJOR_VERSIONS "44" "34" "28" "26" "24" "22" "20" )
+
+if( NOT FMOD_DIR_VERSIONS )
+	set( FMOD_DIR_VERSIONS "" )
+endif( NOT FMOD_DIR_VERSIONS )
+if( NOT FMOD_VERSIONS )
+	set( FMOD_VERSIONS "" )
+endif( NOT FMOD_VERSIONS )
+if( NOT FMOD_LOCAL_INC_DIRS )
+	set( FMOD_LOCAL_INC_DIRS "" )
+endif( NOT FMOD_LOCAL_INC_DIRS )
+if( NOT FMOD_LOCAL_LIB_DIRS )
+	set( FMOD_LOCAL_LIB_DIRS "" )
+endif( NOT FMOD_LOCAL_LIB_DIRS )
+
 set( FMOD_DIR_VERSIONS ${FMOD_DIR_VERSIONS} "../fmod" )
 foreach( majver ${MAJOR_VERSIONS} )
 	foreach( minver ${MINOR_VERSIONS} )
@@ -61,6 +75,10 @@ foreach( majver ${MAJOR_VERSIONS} )
 		set( FMOD_LOCAL_LIB_DIRS ${FMOD_LOCAL_LIB_DIRS} "${dir}/api/lib" )
 	endforeach( dir ${FMOD_DIR_VERSIONS} )
 endforeach( majver ${MAJOR_VERSIONS} )
+
+if( NOT ZDOOM_LIBS )
+	set( ZDOOM_LIBS "" )
+endif( NOT ZDOOM_LIBS )
 
 if( WIN32 )
 	if( X64 )
@@ -340,12 +358,16 @@ if( NOT NO_ASM )
 	endif( UNIX )
 	if( WIN32 )
 		set( FIXRTEXT fixrtext )
+	else( WIN32 )
+		set( FIXRTEXT "" )
 	endif( WIN32 )
 	message( STATUS "Selected assembler: ${ASSEMBLER}" )
 	MACRO( ADD_ASM_FILE indir infile )
 		set( ASM_OUTPUT_${infile} "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/zdoom.dir/${indir}/${infile}${ASM_OUTPUT_EXTENSION}" )
 		if( WIN32 )
 			set( FIXRTEXT_${infile} COMMAND ${FIXRTEXT} "${ASM_OUTPUT_${infile}}" )
+		else( WIN32 )
+			set( FIXRTEXT_${infile} COMMAND "" )
 		endif( WIN32 )
 		add_custom_command( OUTPUT ${ASM_OUTPUT_${infile}}
 			COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/zdoom.dir/${indir}
@@ -412,7 +434,7 @@ if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STRE
 	set( CMAKE_CXX_FLAGS_MINSIZEREL "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}" )
 	set( CMAKE_CXX_FLAGS_RELWITHDEBINFO "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" )
 
-	set( CMAKE_CXX_FLAGS "-Wall -Wno-unused -Wextra -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
+	set( CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-unused -Wno-unused-parameter -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
 
 	# Remove extra warnings when using the official DirectX headers.
 	# Also, TDM-GCC 4.4.0 no longer accepts glibc-style printf formats as valid,
@@ -576,6 +598,9 @@ endif( WIN32 )
 if( NO_ASM )
 	add_definitions( -DNOASM )
 else( NO_ASM )
+	if( NOT ASM_SOURCES )
+		set( ASM_SOURCES "" )
+	endif( NOT ASM_SOURCES )
 	if( X64 )
 		ADD_ASM_FILE( asm_x86_64 tmap3 )
 	else( X64 )
@@ -748,7 +773,7 @@ set( NOT_COMPILED_SOURCE_FILES
 add_executable( zdoom WIN32
 	${HEADER_FILES}
 	${NOT_COMPILED_SOURCE_FILES}
-	autostart.cpp
+	__autostart.cpp
 	${ASM_SOURCES}
 	${SYSTEM_SOURCES}
 	${X86_SOURCES}
@@ -1052,7 +1077,7 @@ add_executable( zdoom WIN32
 	r_data/renderstyle.cpp
 	r_data/r_interpolate.cpp
 	r_data/r_translate.cpp
-	autozend.cpp
+	zzautozend.cpp
 )
 
 set_source_files_properties( xlat/parse_xlat.cpp PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/xlat_parser.c" )
@@ -1126,10 +1151,11 @@ if( NOT WIN32 )
 		COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/link-make
 		COMMAND /bin/sh -c ${CMAKE_CURRENT_BINARY_DIR}/link-make )
 endif( NOT WIN32 )
-if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
 	# GCC misoptimizes this file
 	set_source_files_properties( oplsynth/fmopl.cpp PROPERTIES COMPILE_FLAGS "-fno-tree-dominator-opts -fno-tree-fre" )
-
+endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
 	# Need to enable intrinsics for this file.
 	if( SSE_MATTERS )
 		set_source_files_properties( x86.cpp PROPERTIES COMPILE_FLAGS "-msse2 -mmmx" )
@@ -1160,7 +1186,7 @@ source_group("Render Data\\Textures" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE
 source_group("Render Interface" FILES r_defs.h r_renderer.h r_sky.cpp r_sky.h r_state.h r_utility.cpp r_utility.h)
 source_group("Resource Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/resourcefiles/.+")
 source_group("SDL Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sdl/.+")
-source_group("SFML" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
+source_group("SFMT" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
 source_group("Shared Game" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/g_shared/.+")
 source_group("Versioning" FILES version.h win32/zdoom.rc)
 source_group("Win32 Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/win32/.+")
