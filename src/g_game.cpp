@@ -775,7 +775,7 @@ void G_AddViewPitch (int look)
 	else if (look > 0)
 	{
 		// Avoid overflowing
-		if (LocalViewPitch + look <= LocalViewPitch)
+		if (LocalViewPitch > INT_MAX - look)
 		{
 			LocalViewPitch = 0x78000000;
 		}
@@ -787,7 +787,7 @@ void G_AddViewPitch (int look)
 	else if (look < 0)
 	{
 		// Avoid overflowing
-		if (LocalViewPitch + look >= LocalViewPitch)
+		if (LocalViewPitch < INT_MIN - look)
 		{
 			LocalViewPitch = -0x78000000;
 		}
@@ -1919,32 +1919,10 @@ FString G_BuildSaveName (const char *prefix, int slot)
 	leader = Args->CheckValue ("-savedir");
 	if (leader.IsEmpty())
 	{
-#if !defined(unix) && !defined(__APPLE__)
-		if (Args->CheckParm ("-cdrom"))
-		{
-			leader = CDROM_DIR "/";
-		}
-		else
-#endif
-		{
-			leader = save_dir;
-		}
+		leader = save_dir;
 		if (leader.IsEmpty())
 		{
-#ifdef unix
-			leader = "~/" GAME_DIR;
-#elif defined(__APPLE__)
-			char cpath[PATH_MAX];
-			FSRef folder;
-
-			if (noErr == FSFindFolder(kUserDomain, kDocumentsFolderType, kCreateFolder, &folder) &&
-				noErr == FSRefMakePath(&folder, (UInt8*)cpath, PATH_MAX))
-			{
-				leader << cpath << "/" GAME_DIR "/Savegames/";
-			}
-#else
-			leader = progdir;
-#endif
+			leader = M_GetSavegamesPath();
 		}
 	}
 	size_t len = leader.Len();
