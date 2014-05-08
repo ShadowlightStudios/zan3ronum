@@ -333,7 +333,7 @@ struct userinfo_t : TMap<FName,FBaseCVar *>
 
 	void Reset();
 	int TeamChanged(int team);
-	int SkinChanged(const char *skinname);
+	int SkinChanged(const char *skinname, int playerclass);
 	int SkinNumChanged(int skinnum);
 	int GenderChanged(const char *gendername);
 	int PlayerClassChanged(const char *classname);
@@ -343,8 +343,8 @@ struct userinfo_t : TMap<FName,FBaseCVar *>
 	int ColorSetChanged(int setnum);
 };
 
-FArchive &operator<< (FArchive &arc, userinfo_t &info);
-
+void ReadUserInfo(FArchive &arc, userinfo_t &info, FString &skin);
+void WriteUserInfo(FArchive &arc, userinfo_t &info);
 
 //
 // Extended player object info: player_t
@@ -434,6 +434,7 @@ public:
 	TObjPtr<AWeapon>	PremorphWeapon;		// ready weapon before morphing
 	int			chickenPeck;			// chicken peck countdown
 	int			jumpTics;				// delay the next jump for a moment
+	bool		onground;				// Identifies if this player is on the ground or other object
 
 	int			respawn_time;			// [RH] delay respawning until this tic
 	TObjPtr<AActor>		camera;			// [RH] Whose eyes this player sees through

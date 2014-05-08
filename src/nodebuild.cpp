@@ -90,7 +90,7 @@ FNodeBuilder::~FNodeBuilder()
 	}
 	if (OldVertexTable != NULL)
 	{
-		delete OldVertexTable;
+		delete[] OldVertexTable;
 	}
 }
 
@@ -503,10 +503,6 @@ int FNodeBuilder::SelectSplitter (DWORD set, node_t &node, DWORD &splitseg, int 
 				{
 					nosplitters = true;
 				}
-			}
-			else
-			{
-				pseg = pseg;
 			}
 		}
 

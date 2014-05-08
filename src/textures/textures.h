@@ -107,8 +107,6 @@ struct FDoorAnimation
 	FName CloseSound;
 };
 
-
-
 // Patches.
 // A patch holds one or more columns.
 // Patches are used for sprites and all masked pictures, and we compose
@@ -119,7 +117,7 @@ struct patch_t
 	SWORD			height; 
 	SWORD			leftoffset; 	// pixels to the left of origin 
 	SWORD			topoffset;		// pixels below the origin 
-	DWORD 			columnofs[8];	// only [width] used
+	DWORD 			columnofs[];	// only [width] used
 	// the [0] is &columnofs[width] 
 };
 
@@ -177,6 +175,7 @@ public:
 							// fully composited before subjected to any kind of postprocessing instead of
 							// doing it per patch.
 	BYTE bMultiPatch:1;		// This is a multipatch texture (we really could use real type info for textures...)
+	BYTE bKeepAround:1;		// This texture was used as part of a multi-patch texture. Do not free it.
 
 	WORD Rotations;
 	SWORD SkyOffset;

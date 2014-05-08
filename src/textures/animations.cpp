@@ -659,6 +659,17 @@ void FTextureManager::ParseCameraTexture(FScanner &sc)
 			sc.UnGet ();
 		}
 	}
+	if (sc.GetString())
+	{
+		if (sc.Compare("WorldPanning"))
+		{
+			viewer->bWorldPanning = true;
+		}
+		else
+		{
+			sc.UnGet();
+		}
+	}
 	viewer->SetScaledSize(fitwidth, fitheight);
 }
 
@@ -738,8 +749,11 @@ void FTextureManager::ParseAnimatedDoor(FScanner &sc)
 	{
 		error = true;
 	}
-
-	while (sc.GetString ())
+	else
+	{
+		Texture(anim.BaseTexture)->bNoDecals = true;
+	}
+	while (sc.GetString())
 	{
 		if (sc.Compare ("opensound"))
 		{
@@ -765,8 +779,12 @@ void FTextureManager::ParseAnimatedDoor(FScanner &sc)
 				{
 					sc.ScriptError ("Unknown texture %s", sc.String);
 				}
-				frames.Push (v);
 			}
+			frames.Push(v);
+		}
+		else if (sc.Compare("allowdecals"))
+		{
+			if (anim.BaseTexture.Exists()) Texture(anim.BaseTexture)->bNoDecals = false;
 		}
 		else
 		{

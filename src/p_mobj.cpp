@@ -1,4 +1,5 @@
 // Emacs style mode select	 -*- C++ -*- 
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
 // $Id:$
@@ -219,8 +220,12 @@ void AActor::Serialize (FArchive &arc)
 		<< threshold
 		<< player
 		<< SpawnPoint[0] << SpawnPoint[1] << SpawnPoint[2]
-		<< SpawnAngle
-		<< skillrespawncount
+		<< SpawnAngle;
+	if (SaveVersion >= 4506)
+	{
+		arc << StartHealth;
+	}
+	arc << skillrespawncount
 		<< tracer
 		<< floorclip
 		<< tid
@@ -401,7 +406,7 @@ bool AActor::InStateSequence(FState * newstate, FState * basestate)
 //
 // Get the actual duration of the next state
 // We are using a state flag now to indicate a state that should be
-// accelerated in Fast mode.
+// accelerated in Fast mode or slowed in Slow mode.
 //
 //==========================================================================
 
@@ -411,6 +416,10 @@ int AActor::GetTics(FState * newstate)
 	if (isFast() && newstate->Fast)
 	{
 		return tics - (tics>>1);
+	}
+	else if (isSlow() && newstate->Slow)
+	{
+		return tics<<1;
 	}
 	return tics;
 }
@@ -2138,7 +2147,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 	fixed_t oldz = mo->z;
 	fixed_t grav = mo->GetGravity();
 
-//	
+//
 // check for smooth step up
 //
 	if (mo->player && mo->player->mo == mo && mo->z < mo->floorz)
@@ -2726,10 +2735,13 @@ int P_FindUniqueTID(int start_tid, int limit)
 
 	if (start_tid != 0)
 	{ // Do a linear search.
-		limit = start_tid + limit - 1;
-		if (limit < start_tid)
-		{ // If it overflowed, clamp to INT_MAX
+		if (start_tid > INT_MAX-limit+1)
+		{ // If 'limit+start_tid-1' overflows, clamp 'limit' to INT_MAX
 			limit = INT_MAX;
+		}
+		else
+		{
+			limit += start_tid-1;
 		}
 		for (tid = start_tid; tid <= limit; ++tid)
 		{
@@ -2769,7 +2781,7 @@ CCMD(utid)
 {
 	Printf("%d\n",
 		P_FindUniqueTID(argv.argc() > 1 ? atoi(argv[1]) : 0,
-		argv.argc() > 2 ? atoi(argv[2]) : 0));
+		(argv.argc() > 2 && atoi(argv[2]) >= 0) ? atoi(argv[2]) : 0));
 }
 
 //==========================================================================
@@ -2933,7 +2945,7 @@ bool AActor::IsOkayToAttack (AActor *link)
 	if (P_CheckSight (this, link))
 	{
 		// AMageStaffFX2::IsOkayToAttack had an extra check here, generalized with a flag,
-		// to only allow the check to succeed if the enemy was in a ~84° FOV of the player
+		// to only allow the check to succeed if the enemy was in a ~84ï¿½ FOV of the player
 		if (flags3 & MF3_SCREENSEEKER)
 		{
 			angle_t angle = R_PointToAngle2(Friend->x, 
@@ -4075,6 +4087,11 @@ bool AActor::isFast()
 	return !!G_SkillProperty(SKILLP_FastMonsters);
 }
 
+bool AActor::isSlow()
+{
+	return !!G_SkillProperty(SKILLP_SlowMonsters);
+}
+
 void AActor::Activate (AActor *activator)
 {
 	if ((flags3 & MF3_ISMONSTER) && (health > 0 || (flags & MF_ICECORPSE)))
@@ -4672,6 +4689,12 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 		if (defaults->SpawnState == NULL ||
 			sprites[defaults->SpawnState->sprite].numframes == 0)
 		{
+			// We don't load mods for shareware games so we'll just ignore
+			// missing actors. Heretic needs this since the shareware includes
+			// the retail weapons in Deathmatch.
+			if (gameinfo.flags & GI_SHAREWARE)
+				return NULL;
+
 			Printf ("%s at (%i, %i) has no frames\n",
 					i->TypeName.GetChars(), mthing->x>>FRACBITS, mthing->y>>FRACBITS);
 			i = PClass::FindClass("Unknown");
@@ -4780,11 +4803,39 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 		}
 	}
 
+	// Set various UDMF options
+	if (mthing->alpha != -1)
+		mobj->alpha = mthing->alpha;
+	if (mthing->RenderStyle != STYLE_Count)
+		mobj->RenderStyle = (ERenderStyle)mthing->RenderStyle;
+	if (mthing->scaleX)
+		mobj->scaleX = FixedMul(mthing->scaleX, mobj->scaleX);
+	if (mthing->scaleY)
+		mobj->scaleY = FixedMul(mthing->scaleY, mobj->scaleY);
+	if (mthing->pitch)
+		mobj->pitch = ANGLE_1 * mthing->pitch;
+	if (mthing->roll)
+		mobj->roll = ANGLE_1 * mthing->roll;
+	if (mthing->score)
+		mobj->Score = mthing->score;
+	if (mthing->fillcolor)
+		mobj->fillcolor = mthing->fillcolor;
+
 	mobj->BeginPlay ();
 	if (!(mobj->ObjectFlags & OF_EuthanizeMe))
 	{
 		mobj->LevelSpawned ();
 	}
+
+	if (mthing->health > 0)
+		mobj->health *= mthing->health;
+	else
+		mobj->health = -mthing->health;
+	if (mthing->health == 0)
+		mobj->Die(NULL, NULL);
+	else if (mthing->health != 1)
+		mobj->StartHealth = mobj->health;
+
 	return mobj;
 }
 
@@ -4874,7 +4925,7 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		z += pr_spawnblood.Random2 () << 10;
 		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
@@ -4945,7 +4996,7 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 	}
 
 statedone:
-
+	if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	if (bloodtype >= 1)
 		P_DrawSplash2 (40, x, y, z, dir, 2, bloodcolor);
 }
@@ -4966,7 +5017,7 @@ void P_BloodSplatter (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 
@@ -4981,6 +5032,8 @@ void P_BloodSplatter (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -5004,7 +5057,7 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 		
@@ -5019,6 +5072,8 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -5047,7 +5102,7 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *th;
 		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
@@ -5064,6 +5119,8 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 		{
 			th->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -5153,7 +5210,7 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 			}
 		}
 		planez = rover->bottom.plane->ZatPoint(x, y);
-		if (planez < z) return false;
+		if (planez < z && !(planez < thing->floorz)) return false;
 	}
 #endif
 	hsec = sec->GetHeightSec();
@@ -6001,19 +6058,63 @@ void AActor::SetIdle()
 
 int AActor::SpawnHealth()
 {
-	if (!(flags3 & MF3_ISMONSTER) || GetDefault()->health == 0)
+	int defhealth = StartHealth ? StartHealth : GetDefault()->health;
+	if (!(flags3 & MF3_ISMONSTER) || defhealth == 0)
 	{
-		return GetDefault()->health;
+		return defhealth;
 	}
 	else if (flags & MF_FRIENDLY)
 	{
-		int adj = FixedMul(GetDefault()->health, G_SkillProperty(SKILLP_FriendlyHealth));
+		int adj = FixedMul(defhealth, G_SkillProperty(SKILLP_FriendlyHealth));
 		return (adj <= 0) ? 1 : adj;
 	}
 	else
 	{
-		int adj = FixedMul(GetDefault()->health, G_SkillProperty(SKILLP_MonsterHealth));
+		int adj = FixedMul(defhealth, G_SkillProperty(SKILLP_MonsterHealth));
 		return (adj <= 0) ? 1 : adj;
+	}
+}
+
+FState *AActor::GetRaiseState()
+{
+	if (!(flags & MF_CORPSE))
+	{
+		return NULL;	// not a monster
+	}
+
+	if (tics != -1 && // not lying still yet
+		!state->GetCanRaise()) // or not ready to be raised yet
+	{
+		return NULL;
+	}
+
+	if (IsKindOf(RUNTIME_CLASS(APlayerPawn)))
+	{
+		return NULL;	// do not resurrect players
+	}
+
+	return FindState(NAME_Raise);
+}
+
+void AActor::Revive()
+{
+	AActor *info = GetDefault();
+	flags = info->flags;
+	flags2 = info->flags2;
+	flags3 = info->flags3;
+	flags4 = info->flags4;
+	flags5 = info->flags5;
+	flags6 = info->flags6;
+	flags7 = info->flags7;
+	DamageType = info->DamageType;
+	health = SpawnHealth();
+	target = NULL;
+	lastenemy = NULL;
+
+	// [RH] If it's a monster, it gets to count as another kill
+	if (CountsAsKill())
+	{
+		level.total_monsters++;
 	}
 }
 
@@ -6152,25 +6253,25 @@ void PrintMiscActorInfo(AActor *query)
 		static const char * renderstyles[]= {"None", "Normal", "Fuzzy", "SoulTrans",
 			"OptFuzzy", "Stencil", "Translucent", "Add", "Shaded", "TranslucentStencil"};
 
-		Printf("%s @ %p has the following flags:\n\tflags: %x", query->GetTag(), query, query->flags);
+		Printf("%s @ %p has the following flags:\n   flags: %x", query->GetTag(), query, query->flags);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags));
-		Printf("\n\tflags2: %x", query->flags2);
+		Printf("\n   flags2: %x", query->flags2);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags2 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags2));
-		Printf("\n\tflags3: %x", query->flags3);
+		Printf("\n   flags3: %x", query->flags3);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags3 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags3));
-		Printf("\n\tflags4: %x", query->flags4);
+		Printf("\n   flags4: %x", query->flags4);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags4 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags4));
-		Printf("\n\tflags5: %x", query->flags5);
+		Printf("\n   flags5: %x", query->flags5);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags5 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags5));
-		Printf("\n\tflags6: %x", query->flags6);
+		Printf("\n   flags6: %x", query->flags6);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags6 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags6));
-		Printf("\n\tflags7: %x", query->flags7);
+		Printf("\n   flags7: %x", query->flags7);
 		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags7 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags7));
 		Printf("\nBounce flags: %x\nBounce factors: f:%f, w:%f", 

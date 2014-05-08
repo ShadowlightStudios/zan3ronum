@@ -24,7 +24,7 @@ if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STRE
 	endif( APPLE )
 endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
 
-option( DYN_FLUIDSYNTH "Dynamically load fluidsynth" )
+option( DYN_FLUIDSYNTH "Dynamically load fluidsynth" ON )
 
 if( CMAKE_SIZEOF_VOID_P MATCHES "8" )
 	set( X64 64 )
@@ -50,6 +50,20 @@ set( MINOR_VERSIONS "50" "49" "48" "47" "46" "45" "44" "43" "42" "41"
 	"15" "14" "13" "12" "11" "10" "09" "08" "07" "06" "05" "04" "03"
 	"02" "01" "00" )
 set( MAJOR_VERSIONS "44" "34" "28" "26" "24" "22" "20" )
+
+if( NOT FMOD_DIR_VERSIONS )
+	set( FMOD_DIR_VERSIONS "" )
+endif( NOT FMOD_DIR_VERSIONS )
+if( NOT FMOD_VERSIONS )
+	set( FMOD_VERSIONS "" )
+endif( NOT FMOD_VERSIONS )
+if( NOT FMOD_LOCAL_INC_DIRS )
+	set( FMOD_LOCAL_INC_DIRS "" )
+endif( NOT FMOD_LOCAL_INC_DIRS )
+if( NOT FMOD_LOCAL_LIB_DIRS )
+	set( FMOD_LOCAL_LIB_DIRS "" )
+endif( NOT FMOD_LOCAL_LIB_DIRS )
+
 set( FMOD_DIR_VERSIONS ${FMOD_DIR_VERSIONS} "../fmod" )
 foreach( majver ${MAJOR_VERSIONS} )
 	foreach( minver ${MINOR_VERSIONS} )
@@ -61,6 +75,10 @@ foreach( majver ${MAJOR_VERSIONS} )
 		set( FMOD_LOCAL_LIB_DIRS ${FMOD_LOCAL_LIB_DIRS} "${dir}/api/lib" )
 	endforeach( dir ${FMOD_DIR_VERSIONS} )
 endforeach( majver ${MAJOR_VERSIONS} )
+
+if( NOT ZDOOM_LIBS )
+	set( ZDOOM_LIBS "" )
+endif( NOT ZDOOM_LIBS )
 
 if( WIN32 )
 	if( X64 )
@@ -104,9 +122,6 @@ if( WIN32 )
 		include_directories( ${XINPUT_INCLUDE_DIR} )
 	endif( NOT XINPUT_INCLUDE_DIR )
 
-	find_library( DX_ddraw_LIBRARY ddraw
-		PATHS ENV DXSDK_DIR
-		PATH_SUFFIXES Lib Lib/${XBITS} )
 	find_library( DX_dxguid_LIBRARY dxguid
 		PATHS ENV DXSDK_DIR
 		PATH_SUFFIXES Lib Lib/${XBITS} )
@@ -115,9 +130,6 @@ if( WIN32 )
 		PATH_SUFFIXES Lib Lib/${XBITS} )
 
 	set( DX_LIBS_FOUND YES )
-	if( NOT DX_ddraw_LIBRARY )
-		set( DX_LIBS_FOUND NO )
-	endif( NOT DX_ddraw_LIBRARY )
 	if( NOT DX_dxguid_LIBRARY )
 		set( DX_LIBS_FOUND NO )
 	endif( NOT DX_dxguid_LIBRARY )
@@ -132,7 +144,6 @@ if( WIN32 )
 	set( ZDOOM_LIBS
 		wsock32
 		winmm
-		"${DX_ddraw_LIBRARY}"
 		"${DX_dxguid_LIBRARY}"
 		"${DX_dinput8_LIBRARY}"
 		ole32
@@ -142,7 +153,8 @@ if( WIN32 )
 		comdlg32
 		ws2_32
 		setupapi
-		oleaut32 )
+		oleaut32 
+		DelayImp )
 else( WIN32 )
 	if( APPLE )
 		set( FMOD_SEARCH_PATHS "/Developer/FMOD Programmers API Mac/api" )
@@ -346,12 +358,16 @@ if( NOT NO_ASM )
 	endif( UNIX )
 	if( WIN32 )
 		set( FIXRTEXT fixrtext )
+	else( WIN32 )
+		set( FIXRTEXT "" )
 	endif( WIN32 )
 	message( STATUS "Selected assembler: ${ASSEMBLER}" )
 	MACRO( ADD_ASM_FILE indir infile )
 		set( ASM_OUTPUT_${infile} "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/zdoom.dir/${indir}/${infile}${ASM_OUTPUT_EXTENSION}" )
 		if( WIN32 )
 			set( FIXRTEXT_${infile} COMMAND ${FIXRTEXT} "${ASM_OUTPUT_${infile}}" )
+		else( WIN32 )
+			set( FIXRTEXT_${infile} COMMAND "" )
 		endif( WIN32 )
 		add_custom_command( OUTPUT ${ASM_OUTPUT_${infile}}
 			COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/zdoom.dir/${indir}
@@ -366,20 +382,23 @@ endif( NOT NO_ASM )
 
 set( SSE_MATTERS NO )
 
-# SSE only matters on 32-bit targets. We check compiler flags to know if we can do it.
-if( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
-	CHECK_CXX_COMPILER_FLAG( "-msse2 -mfpmath=sse" CAN_DO_MFPMATH )
-	CHECK_CXX_COMPILER_FLAG( -arch:SSE2 CAN_DO_ARCHSSE2 )
-	if( CAN_DO_MFPMATH )
-		set( SSE1_ENABLE "-msse -mfpmath=sse" )
-		set( SSE2_ENABLE "-msse2 -mfpmath=sse" )
-		set( SSE_MATTERS YES )
-	elseif( CAN_DO_ARCHSSE2 )
-		set( SSE1_ENABLE -arch:SSE )
-		set( SSE2_ENABLE -arch:SSE2 )
-		set( SSE_MATTERS YES )
-	endif( CAN_DO_MFPMATH )
-endif( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+# with global use of SSE 2 we do not need special handling for selected files
+if (NOT ZDOOM_USE_SSE2)
+	# SSE only matters on 32-bit targets. We check compiler flags to know if we can do it.
+	if( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+		CHECK_CXX_COMPILER_FLAG( "-msse2 -mfpmath=sse" CAN_DO_MFPMATH )
+		CHECK_CXX_COMPILER_FLAG( -arch:SSE2 CAN_DO_ARCHSSE2 )
+		if( CAN_DO_MFPMATH )
+			set( SSE1_ENABLE "-msse -mfpmath=sse" )
+			set( SSE2_ENABLE "-msse2 -mfpmath=sse" )
+			set( SSE_MATTERS YES )
+		elseif( CAN_DO_ARCHSSE2 )
+			set( SSE1_ENABLE -arch:SSE )
+			set( SSE2_ENABLE -arch:SSE2 )
+			set( SSE_MATTERS YES )
+		endif( CAN_DO_MFPMATH )
+	endif( CMAKE_SIZEOF_VOID_P MATCHES "4" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES ppc )
+endif (NOT ZDOOM_USE_SSE2)
 
 if( SSE_MATTERS )
 	if( WIN32 )
@@ -415,7 +434,7 @@ if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STRE
 	set( CMAKE_CXX_FLAGS_MINSIZEREL "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}" )
 	set( CMAKE_CXX_FLAGS_RELWITHDEBINFO "${REL_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" )
 
-	set( CMAKE_CXX_FLAGS "-Wall -Wno-unused -Wextra -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
+	set( CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-unused -Wno-unused-parameter -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS}" )
 
 	# Remove extra warnings when using the official DirectX headers.
 	# Also, TDM-GCC 4.4.0 no longer accepts glibc-style printf formats as valid,
@@ -503,15 +522,17 @@ add_custom_target( revision_check ALL
 # Libraries ZDoom needs
 
 message( STATUS "Fluid synth libs: ${FLUIDSYNTH_LIBRARIES}" )
-set( ZDOOM_LIBS ${ZDOOM_LIBS} "${ZLIB_LIBRARIES}" "${JPEG_LIBRARIES}" "${BZIP2_LIBRARIES}" "${FMOD_LIBRARY}" )
-include_directories( "${ZLIB_INCLUDE_DIR}" "${FMOD_INCLUDE_DIR}" "${BZIP2_INCLUDE_DIR}" "${LZMA_INCLUDE_DIR}" "${JPEG_INCLUDE_DIR}" )
+set( ZDOOM_LIBS ${ZDOOM_LIBS} "${ZLIB_LIBRARIES}" "${JPEG_LIBRARIES}" "${BZIP2_LIBRARIES}" "${GME_LIBRARIES}" "${FMOD_LIBRARY}" )
+include_directories( "${ZLIB_INCLUDE_DIR}" "${FMOD_INCLUDE_DIR}" "${BZIP2_INCLUDE_DIR}" "${LZMA_INCLUDE_DIR}" "${JPEG_INCLUDE_DIR}" "${GME_INCLUDE_DIR}" )
 
-if( FLUIDSYNTH_FOUND )
-  if( NOT DYN_FLUIDSYNTH)
-	set( ZDOOM_LIBS ${ZDOOM_LIBS} "${FLUIDSYNTH_LIBRARIES}" )
-	include_directories( "${FLUIDSYNTH_INCLUDE_DIR}" )
-  endif( NOT DYN_FLUIDSYNTH )
-endif( FLUIDSYNTH_FOUND )
+if( NOT DYN_FLUIDSYNTH)
+	if( FLUIDSYNTH_FOUND )
+		set( ZDOOM_LIBS ${ZDOOM_LIBS} "${FLUIDSYNTH_LIBRARIES}" )
+		include_directories( "${FLUIDSYNTH_INCLUDE_DIR}" )
+	endif( FLUIDSYNTH_FOUND )
+else( NOT DYN_FLUIDSYNTH )
+	set( ZDOOM_LIBS ${ZDOOM_LIBS} ${CMAKE_DL_LIBS} )
+endif( NOT DYN_FLUIDSYNTH )
 
 # Start defining source files for ZDoom
 set( PLAT_WIN32_SOURCES
@@ -577,6 +598,9 @@ endif( WIN32 )
 if( NO_ASM )
 	add_definitions( -DNOASM )
 else( NO_ASM )
+	if( NOT ASM_SOURCES )
+		set( ASM_SOURCES "" )
+	endif( NOT ASM_SOURCES )
 	if( X64 )
 		ADD_ASM_FILE( asm_x86_64 tmap3 )
 	else( X64 )
@@ -749,7 +773,7 @@ set( NOT_COMPILED_SOURCE_FILES
 add_executable( zdoom WIN32
 	${HEADER_FILES}
 	${NOT_COMPILED_SOURCE_FILES}
-	autostart.cpp
+	__autostart.cpp
 	${ASM_SOURCES}
 	${SYSTEM_SOURCES}
 	${X86_SOURCES}
@@ -1053,7 +1077,7 @@ add_executable( zdoom WIN32
 	r_data/renderstyle.cpp
 	r_data/r_interpolate.cpp
 	r_data/r_translate.cpp
-	autozend.cpp
+	zzautozend.cpp
 )
 
 set_source_files_properties( xlat/parse_xlat.cpp PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/xlat_parser.c" )
@@ -1065,7 +1089,7 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "SunOS")
 	set( ZDOOM_LIBS ${ZDOOM_LIBS} nsl socket)
 endif(${CMAKE_SYSTEM_NAME} STREQUAL "SunOS")
 
-target_link_libraries( zdoom ${ZDOOM_LIBS} gme gdtoa dumb lzma )
+target_link_libraries( zdoom ${ZDOOM_LIBS} gdtoa dumb lzma )
 include_directories( .
 	g_doom
 	g_heretic
@@ -1079,7 +1103,6 @@ include_directories( .
 	thingdef
 	timidity
 	xlat
-	../game-music-emu/gme
 	../gdtoa
 	../dumb/include
 	${CMAKE_BINARY_DIR}/gdtoa
@@ -1087,10 +1110,40 @@ include_directories( .
 
 add_dependencies( zdoom revision_check )
 
-# RUNTIME_OUTPUT_DIRECTORY does not exist in CMake 2.4.
-# Linux distributions are slow to adopt 2.6. :(
-set_target_properties( zdoom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
-set_target_properties( zdoom PROPERTIES OUTPUT_NAME ${ZDOOM_EXE_NAME} )
+# Due to some quirks, we need to do this in this order
+if( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
+	# RUNTIME_OUTPUT_DIRECTORY does not exist in CMake 2.4.
+	# Linux distributions are slow to adopt 2.6. :(
+	set_target_properties( zdoom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
+	set_target_properties( zdoom PROPERTIES OUTPUT_NAME ${ZDOOM_EXE_NAME} )
+else( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
+	set_target_properties( zdoom PROPERTIES
+		RUNTIME_OUTPUT_NAME ${ZDOOM_EXE_NAME}
+		RUNTIME_OUTPUT_DIRECTORY_RELEASE ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_DEBUG ${ZDOOM_EXE_NAME}d
+		RUNTIME_OUTPUT_DIRECTORY_DEBUG ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_MINSIZEREL ${ZDOOM_EXE_NAME}msr
+		RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${ZDOOM_OUTPUT_DIR}
+		RUNTIME_OUTPUT_NAME_RELWITHDEBINFO ${ZDOOM_EXE_NAME}rd
+		RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${ZDOOM_OUTPUT_DIR}
+	)
+endif( NOT ZDOOM_OUTPUT_OLDSTYLE OR NO_GENERATOR_EXPRESSIONS )
+
+if( MSVC )
+	option( ZDOOM_GENERATE_MAPFILE "Generate .map file for debugging." OFF )
+	if( ZDOOM_GENERATE_MAPFILE )
+		set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\" /MAP")
+	else( ZDOOM_GENERATE_MAPFILE )
+		set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO /DELAYLOAD:\"fmodex${X64}.dll\"")
+	endif( ZDOOM_GENERATE_MAPFILE )
+
+	add_custom_command(TARGET zdoom POST_BUILD
+		COMMAND "mt.exe" -manifest \"${CMAKE_CURRENT_SOURCE_DIR}\\win32\\zdoom.exe.manifest\" -outputresource:\"$(TargetDir)$(TargetFileName)\"\;\#1
+		COMMENT "Adding manifest..."
+	)
+
+	create_default_target_launcher( zdoom WORKING_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
+endif( MSVC )
 
 if( NOT WIN32 )
 	FILE( WRITE ${CMAKE_CURRENT_BINARY_DIR}/link-make "if [ ! -e ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME} ]; then ln -sf ${CMAKE_CURRENT_BINARY_DIR}/${ZDOOM_EXE_NAME} ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME}; fi" )
@@ -1098,23 +1151,16 @@ if( NOT WIN32 )
 		COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/link-make
 		COMMAND /bin/sh -c ${CMAKE_CURRENT_BINARY_DIR}/link-make )
 endif( NOT WIN32 )
-if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
 	# GCC misoptimizes this file
 	set_source_files_properties( oplsynth/fmopl.cpp PROPERTIES COMPILE_FLAGS "-fno-tree-dominator-opts -fno-tree-fre" )
-
+endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
 	# Need to enable intrinsics for this file.
 	if( SSE_MATTERS )
 		set_source_files_properties( x86.cpp PROPERTIES COMPILE_FLAGS "-msse2 -mmmx" )
 	endif( SSE_MATTERS )
 endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
-
-if( MSVC )
-	set_target_properties(zdoom PROPERTIES LINK_FLAGS "/MANIFEST:NO")
-	add_custom_command(TARGET zdoom POST_BUILD
-		COMMAND "mt.exe" -manifest \"${CMAKE_CURRENT_SOURCE_DIR}\\win32\\zdoom.exe.manifest\" -outputresource:\"$(TargetDir)$(TargetFileName)\"\;\#2
-		COMMENT "Adding manifest..."
-	)
-endif( MSVC )
 
 source_group("Assembly Files\\ia32" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/asm_ia32/.+")
 source_group("Assembly Files\\x86_64" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/asm_x86_64/.+")
@@ -1140,7 +1186,7 @@ source_group("Render Data\\Textures" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE
 source_group("Render Interface" FILES r_defs.h r_renderer.h r_sky.cpp r_sky.h r_state.h r_utility.cpp r_utility.h)
 source_group("Resource Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/resourcefiles/.+")
 source_group("SDL Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sdl/.+")
-source_group("SFML" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
+source_group("SFMT" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/sfmt/.+")
 source_group("Shared Game" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/g_shared/.+")
 source_group("Versioning" FILES version.h win32/zdoom.rc)
 source_group("Win32 Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/win32/.+")

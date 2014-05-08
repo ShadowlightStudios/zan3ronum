@@ -387,7 +387,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	StatusBar->NewGame ();
 	setsizeneeded = true;
 
-	if (gameinfo.gametype == GAME_Strife || (SBarInfoScript != NULL && SBarInfoScript[SCRIPT_CUSTOM]->GetGameType() == GAME_Strife))
+	if (gameinfo.gametype == GAME_Strife || (SBarInfoScript[SCRIPT_CUSTOM] != NULL && SBarInfoScript[SCRIPT_CUSTOM]->GetGameType() == GAME_Strife))
 	{
 		// Set the initial quest log text for Strife.
 		for (i = 0; i < MAXPLAYERS; ++i)
@@ -408,9 +408,11 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 
 	if (!savegamerestore)
 	{
-		if (!netgame)
-		{ // [RH] Change the random seed for each new single player game
-			rngseed = rngseed + 1;
+		if (!netgame && !demorecording && !demoplayback)
+		{
+			// [RH] Change the random seed for each new single player game
+			// [ED850] The demo already sets the RNG.
+			rngseed = use_staticrng ? staticrngseed : (rngseed + 1);
 		}
 		FRandom::StaticClearRandom ();
 		P_ClearACSVars(true);
@@ -1084,6 +1086,7 @@ void G_StartTravel ()
 		{
 			AActor *pawn = players[i].mo;
 			AInventory *inv;
+			players[i].camera = NULL;
 
 			// Only living players travel. Dead ones get a new body on the new level.
 			if (players[i].health > 0)

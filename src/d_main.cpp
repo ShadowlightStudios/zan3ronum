@@ -218,6 +218,7 @@ int NoWipe;				// [RH] Allow wipe? (Needs to be set each time)
 bool singletics = false;	// debug flag to cancel adaptiveness
 FString startmap;
 bool autostart;
+FString StoredWarp;
 bool advancedemo;
 FILE *debugfile;
 event_t events[MAXEVENTS];
@@ -1806,19 +1807,23 @@ static FString ParseGameInfo(TArray<FString> &pwads, const char *fn, const char 
 				// Try looking for the wad in the same directory as the .wad
 				// before looking for it in the current directory.
 
+				FString checkpath;
 				if (lastSlash != NULL)
 				{
-					FString checkpath(fn, (lastSlash - fn) + 1);
+					checkpath = FString(fn, (lastSlash - fn) + 1);
 					checkpath += sc.String;
-
-					if (!FileExists (checkpath))
-					{
-						pos += D_AddFile(pwads, sc.String, true, pos);
-					}
-					else
-					{
-						pos += D_AddFile(pwads, checkpath, true, pos);
-					}
+				}
+				else
+				{
+					checkpath = sc.String;
+				}
+				if (!FileExists(checkpath))
+				{
+					pos += D_AddFile(pwads, sc.String, true, pos);
+				}
+				else
+				{
+					pos += D_AddFile(pwads, checkpath, true, pos);
 				}
 			}
 			while (sc.CheckToken(','));
@@ -1859,6 +1864,15 @@ static FString ParseGameInfo(TArray<FString> &pwads, const char *fn, const char 
 		{
 			sc.MustGetString();
 			DoomStartupInfo.Song = sc.String;
+		}
+		else
+		{
+			// Silently ignore unknown properties
+			do
+			{
+				sc.MustGetAnyToken();
+			}
+			while(sc.CheckToken(','));
 		}
 	}
 	return iwad;
@@ -1979,7 +1993,19 @@ static void D_DoomInit()
 
 	SetLanguageIDs ();
 
-	rngseed = I_MakeRNGSeed();
+	const char *v = Args->CheckValue("-rngseed");
+	if (v)
+	{
+		rngseed = staticrngseed = atoi(v);
+		use_staticrng = true;
+		Printf("D_DoomInit: Static RNGseed %d set.\n", rngseed);
+	}
+	else
+	{
+		rngseed = I_MakeRNGSeed();
+		use_staticrng = false;
+	}
+		
 	FRandom::StaticClearRandom ();
 
 	Printf ("M_LoadDefaults: Load system defaults.\n");
@@ -2081,7 +2107,7 @@ static void CheckCmdLine()
 	{
 		startmap = "&wt@01";
 	}
-	autostart = false;
+	autostart = StoredWarp.IsNotEmpty();
 				
 	const char *val = Args->CheckValue ("-skill");
 	if (val)
@@ -2208,6 +2234,13 @@ void D_DoomMain (void)
 	TArray<FString> pwads;
 	FString *args;
 	int argcount;
+
+	// +logfile gets checked too late to catch the full startup log in the logfile so do some extra check for it here.
+	FString logfile = Args->TakeValue("+logfile");
+	if (logfile != NULL)
+	{
+		execLogfile(logfile);
+	}
 
 	D_DoomInit();
 	PClass::StaticInit ();
@@ -2518,6 +2551,11 @@ void D_DoomMain (void)
 					if (demorecording)
 						G_BeginRecording (startmap);
 					G_InitNew (startmap, false);
+					if (StoredWarp.IsNotEmpty())
+					{
+						AddCommandString(StoredWarp.LockBuffer());
+						StoredWarp = NULL;
+					}
 				}
 				else
 				{
