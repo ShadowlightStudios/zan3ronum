@@ -200,6 +200,9 @@ bool ATeamItem::TryPickup( AActor *&pToucher )
 		// If we're in simple CTF mode, we need to display the pickup messages.
 		if ( TEAM_GetSimpleCTFSTMode( ))
 		{
+			// [CK] Signal that the flag/skull/some pickableable team item was taken
+			GAMEMODE_HandleEvent ( GAMEEVENT_TOUCHES, pToucher, static_cast<int> ( TEAM_GetTeamFromItem( this ) ) );
+
 			// Display the flag taken message.
 			DisplayFlagTaken( pToucher );
 
@@ -410,6 +413,8 @@ bool AFlag::HandlePickup( AInventory *pItem )
 	char				szString[256];
 	DHUDMessageFadeOut	*pMsg;
 	AInventory			*pInventory;
+	bool				selfAssist = false;
+	int playerAssistNumber = GAMEEVENT_CAPTURE_NOASSIST; // [CK] Need these for game event activators
 
 	// If this object being given isn't a flag, then we don't really care.
 	if ( pItem->GetClass( )->IsDescendantOf( RUNTIME_CLASS( AFlag )) == false )
@@ -474,9 +479,9 @@ bool AFlag::HandlePickup( AInventory *pItem )
 
 			// [RC] Create the "scored by" and "assisted by" message.
 			sprintf( szString, "\\c%cScored by: %s", V_GetColorChar( TEAM_GetTextColor( Owner->player->ulTeam )), Owner->player->userinfo.netname );
-			if(TEAM_GetAssistPlayer(Owner->player->ulTeam) != MAXPLAYERS)
+			const bool bAssisted = (TEAM_GetAssistPlayer(Owner->player->ulTeam) != MAXPLAYERS);
+			if ( bAssisted )
 			{
-				bool selfAssist = false;
 				for(ULONG i = 0; i < MAXPLAYERS; i++)
 					if(&players[i] == Owner->player)
 						if( TEAM_GetAssistPlayer( Owner->player->ulTeam) == i)
@@ -505,12 +510,22 @@ bool AFlag::HandlePickup( AInventory *pItem )
 			}
 			// If necessary, send it to clients.
 			else
+			{
 				SERVERCOMMANDS_PrintHUDMessageFadeOut( szString, 1.5f, TEAM_MESSAGE_Y_AXIS_SUB, 0, 0, CR_UNTRANSLATED, 3.0f, 0.5f, "SmallFont", false, MAKE_ID( 'S','U','B','S' ));
+
+				if( ( bAssisted ) && ( ! selfAssist ) )
+					SERVER_Printf( PRINT_HIGH, "%s \\c-and %s \\c-scored for the \\c%c%s \\c-team!\n", Owner->player->userinfo.netname, players[TEAM_GetAssistPlayer( Owner->player->ulTeam )].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( Owner->player->ulTeam )), TEAM_GetName( Owner->player->ulTeam ));
+				else
+					SERVER_Printf( PRINT_HIGH, "%s \\c-scored for the \\c%c%s \\c-team!\n", Owner->player->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( Owner->player->ulTeam )), TEAM_GetName( Owner->player->ulTeam ));
+			}
 
 			
 			// If someone just recently returned the flag, award him with an "Assist!" medal.
-			if ( TEAM_GetAssistPlayer( Owner->player->ulTeam ) != MAXPLAYERS )
+			if ( bAssisted )
 			{
+				// [CK] Mark the assisting player
+				playerAssistNumber = TEAM_GetAssistPlayer( Owner->player->ulTeam );
+
 				MEDAL_GiveMedal( TEAM_GetAssistPlayer( Owner->player->ulTeam ), MEDAL_ASSIST );
 
 				// Tell clients about the medal that been given.
@@ -519,6 +534,10 @@ bool AFlag::HandlePickup( AInventory *pItem )
 
 				TEAM_SetAssistPlayer( Owner->player->ulTeam, MAXPLAYERS );
 			}
+
+			// [CK] Now we have the information to trigger an event script (Activator is the capturer, assister is the second arg)
+			// PlayerAssistNumber will be GAMEEVENT_CAPTURE_NOASSIST (-1) if there was no assister
+			GAMEMODE_HandleEvent ( GAMEEVENT_CAPTURES, Owner, playerAssistNumber );
 
 			// Take the flag away.
 			pInventory = Owner->FindInventory( this->GetClass( ));
@@ -650,7 +669,10 @@ void AFlag::DisplayFlagTaken( AActor *pToucher )
 	}
 	// If necessary, send it to clients.
 	else
+	{
 		SERVERCOMMANDS_PrintHUDMessageFadeOut( szString, 1.5f, TEAM_MESSAGE_Y_AXIS_SUB, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "SmallFont", false, MAKE_ID('S','U','B','S'), ULONG( pToucher->player - players ), SVCF_SKIPTHISCLIENT  );
+		SERVER_Printf( PRINT_MEDIUM, "%s \\c-has taken the \\c%c%s \\c-flag.\n", players[playerIndex].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+	}
 }
 
 //===========================================================================
@@ -729,15 +751,30 @@ void AFlag::ReturnFlag( AActor *pReturner )
 		// [RC] Create the "returned by" message for this team.
 		ULONG playerIndex = ULONG( pReturner->player - players );
 		sprintf( szString, "\\c%cReturned by: %s", V_GetColorChar( TEAM_GetTextColor( players[playerIndex].ulTeam )), players[playerIndex].userinfo.netname );
+
+		// [CK] Send out an event that a flag/skull was returned, this is the easiest place to do it
+		// Second argument is the team index, third argument is what kind of return it was
+		GAMEMODE_HandleEvent ( GAMEEVENT_RETURNS, pReturner, static_cast<int> ( ulItemTeam ), GAMEEVENT_RETURN_PLAYERRETURN );
 	}
 	else
 	{
 		// [RC] Create the "returned automatically" message for this team.
 		sprintf( szString, "\\c%cReturned automatically.", V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))));
+
+		// [CK] Indicate the server returned the flag/skull after a timeout
+		GAMEMODE_HandleEvent ( GAMEEVENT_RETURNS, NULL, static_cast<int> ( ulItemTeam ), GAMEEVENT_RETURN_TIMEOUTRETURN );
 	}
 
 	V_ColorizeString( szString );
 	GAMEMODE_DisplaySUBSMessage( szString, true );
+
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+	{
+		if ( pReturner && pReturner->player )
+			SERVER_Printf( PRINT_MEDIUM, "%s \\c-returned the \\c%c%s \\c-flag.\n", pReturner->player->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+		else
+			SERVER_Printf( PRINT_MEDIUM, "\\c%c%s \\c-flag returned.\n", V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+	}
 }
 
 //===========================================================================
@@ -1242,7 +1279,10 @@ void ASkull::DisplayFlagTaken( AActor *pToucher )
 	}
 	// If necessary, send it to clients.
 	else
+	{
 		SERVERCOMMANDS_PrintHUDMessageFadeOut( szString, 1.5f, TEAM_MESSAGE_Y_AXIS_SUB, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "SmallFont", false, MAKE_ID('S','U','B','S'), ULONG( pToucher->player - players ), SVCF_SKIPTHISCLIENT  );
+		SERVER_Printf( PRINT_MEDIUM, "%s \\c-has taken the \\c%c%s \\c-skull.\n", players[playerIndex].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+	}
 }
 
 //===========================================================================
@@ -1330,6 +1370,14 @@ void ASkull::ReturnFlag( AActor *pReturner )
 
 	V_ColorizeString( szString );
 	GAMEMODE_DisplaySUBSMessage( szString, true );
+
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+	{
+		if ( pReturner && pReturner->player )
+			SERVER_Printf( PRINT_MEDIUM, "%s \\c-returned the \\c%c%s \\c-skull.\n", pReturner->player->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+		else
+			SERVER_Printf( PRINT_MEDIUM, "\\c%c%s \\c-skull returned.\n", V_GetColorChar( TEAM_GetTextColor( TEAM_GetTeamFromItem( this ))), TEAM_GetName( TEAM_GetTeamFromItem( this )));
+	}
 }
 
 //===========================================================================

@@ -86,6 +86,7 @@
 #include "cmdlib.h"
 
 #include "md5.h"
+#include "network/sv_auth.h"
 
 enum LumpAuthenticationMode {
 	LAST_LUMP,
@@ -378,9 +379,11 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 					if ( !network_GenerateLumpMD5HashAndWarnIfNeeded( workingLump, lumpsToAuthenticate[i].c_str(), checksum ) )
 						noProtectedLumpsAutoloaded = false;
 
-					// [BB] To make Doom and Freedoom 0.8-beta1 network compatible, we need to ignore its DEHACKED lump.
+					// [BB] To make Doom and Freedoom network compatible, we need to ignore its DEHACKED lump.
 					// Since this lump only changes some strings, this should cause no problems.
-					if ( ( stricmp ( lumpsToAuthenticate[i].c_str(), "DEHACKED" ) == 0 ) && ( stricmp ( checksum.GetChars(), "3c48ccc87e71d791ee3df64668b3fb42" ) == 0 ) )
+					if ( ( stricmp ( lumpsToAuthenticate[i].c_str(), "DEHACKED" ) == 0 )
+						&& ( ( stricmp ( checksum.GetChars(), "3c48ccc87e71d791ee3df64668b3fb42" ) == 0 ) // Freedoom 0.8-beta1
+							|| ( stricmp ( checksum.GetChars(), "9de9ddd0bc435cb8572db76a13d3140f" ) == 0 ) ) ) // Freedoom 0.8
 						continue;
 
 					longChecksum += checksum;
@@ -436,6 +439,10 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 	atterm( NETWORK_Destruct );
 
 	Printf( "UDP Initialized.\n" );
+
+	// [BB] Now that the network is initialized, set up what's necessary
+	// to communicate with the authentication server.
+	NETWORK_AUTH_Construct();
 }
 
 //*****************************************************************************
@@ -454,7 +461,7 @@ void NETWORK_Destruct( void )
 int NETWORK_GetPackets( void )
 {
 	LONG				lNumBytes;
-	INT					iDecodedNumBytes;
+	INT					iDecodedNumBytes = sizeof(g_ucHuffmanBuffer);
 	struct sockaddr_in	SocketFrom;
 	INT					iSocketFromLength;
 
@@ -515,14 +522,25 @@ int NETWORK_GetPackets( void )
 	if ( lNumBytes >= static_cast<LONG>(g_NetworkMessage.ulMaxSize) )
 		return ( 0 );
 
-	// Decode the huffman-encoded message we received.
-	HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
-	g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
-	g_NetworkMessage.ByteStream.pbStream = g_NetworkMessage.pbData;
-	g_NetworkMessage.ByteStream.pbStreamEnd = g_NetworkMessage.ByteStream.pbStream + g_NetworkMessage.ulCurrentSize;
-
 	// Store the IP address of the sender.
 	NETWORK_SocketAddressToNetAddress( &SocketFrom, &g_AddressFrom );
+
+	// Decode the huffman-encoded message we received.
+	// [BB] Communication with the auth server is not Huffman-encoded.
+	if ( NETWORK_CompareAddress( g_AddressFrom, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+	{
+		HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
+		g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
+	}
+	else
+	{
+		// [BB] We don't need to decode, so we just copy the data.
+		// Not very efficient, but this keeps the changes at a minimum for now.
+		memcpy ( g_NetworkMessage.pbData, g_ucHuffmanBuffer, lNumBytes );
+		g_NetworkMessage.ulCurrentSize = lNumBytes;
+	}
+	g_NetworkMessage.ByteStream.pbStream = g_NetworkMessage.pbData;
+	g_NetworkMessage.ByteStream.pbStreamEnd = g_NetworkMessage.ByteStream.pbStream + g_NetworkMessage.ulCurrentSize;
 
 	return ( g_NetworkMessage.ulCurrentSize );
 }
@@ -536,7 +554,7 @@ int NETWORK_GetLANPackets( void )
 		return 0;
 
 	LONG				lNumBytes;
-	INT					iDecodedNumBytes;
+	INT					iDecodedNumBytes = sizeof(g_ucHuffmanBuffer);
 	struct sockaddr_in	SocketFrom;
 	INT					iSocketFromLength;
 
@@ -593,14 +611,25 @@ int NETWORK_GetLANPackets( void )
 	if ( lNumBytes >= static_cast<LONG>(g_NetworkMessage.ulMaxSize) )
 		return ( 0 );
 
+	// Store the IP address of the sender.
+	NETWORK_SocketAddressToNetAddress( &SocketFrom, &g_AddressFrom );
+
 	// Decode the huffman-encoded message we received.
-	HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
-	g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
+	// [BB] Communication with the auth server is not Huffman-encoded.
+	if ( NETWORK_CompareAddress( g_AddressFrom, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+	{
+		HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
+		g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
+	}
+	else 
+	{
+		// [BB] We don't need to decode, so we just copy the data.
+		// Not very efficient, but this keeps the changes at a minimum for now.
+		memcpy ( g_NetworkMessage.pbData, g_ucHuffmanBuffer, lNumBytes );
+		g_NetworkMessage.ulCurrentSize = lNumBytes;
+	}
 	g_NetworkMessage.ByteStream.pbStream = g_NetworkMessage.pbData;
 	g_NetworkMessage.ByteStream.pbStreamEnd = g_NetworkMessage.ByteStream.pbStream + g_NetworkMessage.ulCurrentSize;
-
-	// Store the IP address of the sender.
-    NETWORK_SocketAddressToNetAddress( &SocketFrom, &g_AddressFrom );
 
 	return ( g_NetworkMessage.ulCurrentSize );
 }
@@ -617,7 +646,7 @@ NETADDRESS_s NETWORK_GetFromAddress( void )
 void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 {
 	LONG				lNumBytes;
-	INT					iNumBytesOut;
+	INT					iNumBytesOut = sizeof(g_ucHuffmanBuffer);
 	struct sockaddr_in	SocketAddress;
 
 	pBuffer->ulCurrentSize = NETWORK_CalcBufferSize( pBuffer );
@@ -629,7 +658,16 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 	// Convert the IP address to a socket address.
 	NETWORK_NetAddressToSocketAddress( Address, SocketAddress );
 
-	HUFFMAN_Encode( (unsigned char *)pBuffer->pbData, g_ucHuffmanBuffer, pBuffer->ulCurrentSize, &iNumBytesOut );
+	// [BB] Communication with the auth server is not Huffman-encoded.
+	if ( NETWORK_CompareAddress( Address, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+		HUFFMAN_Encode( (unsigned char *)pBuffer->pbData, g_ucHuffmanBuffer, pBuffer->ulCurrentSize, &iNumBytesOut );
+	else
+	{
+		// [BB] We don't need to encode, so we just copy the data.
+		// Not very efficient, but this keeps the changes at a minimum for now.
+		memcpy ( g_ucHuffmanBuffer, pBuffer->pbData, pBuffer->ulCurrentSize );
+		iNumBytesOut = pBuffer->ulCurrentSize;
+	}
 
 	lNumBytes = sendto( g_NetworkSocket, (const char*)g_ucHuffmanBuffer, iNumBytesOut, 0, (struct sockaddr *)&SocketAddress, sizeof( SocketAddress ));
 

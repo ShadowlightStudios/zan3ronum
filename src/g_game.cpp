@@ -345,7 +345,7 @@ CCMD (centerview)
 			players[consoleplayer].mo->pitch = 0;
 
 		if ( CLIENTDEMO_IsRecording( ))
-			CLIENTDEMO_WriteLocalCommand( CLD_CENTERVIEW, NULL );
+			CLIENTDEMO_WriteLocalCommand( CLD_LCMD_CENTERVIEW, NULL );
 	}
 }
 
@@ -1146,6 +1146,12 @@ static void FinishChangeSpy( int pnum )
 	players[consoleplayer].camera = players[pnum].mo;
 	S_UpdateSounds(players[consoleplayer].camera);
 	StatusBar->AttachToPlayer (&players[pnum]);
+
+	// [Dusk] Rebuild translations if we're overriding player colors, they
+	// may very likely have changed by now.
+	if ( cl_overrideplayercolors )
+		R_BuildAllPlayerTranslations();
+
 	// [BC] We really no longer need to do this since we have a message
 	// that says "FOLLOWING - xxx" on the status bar.
 /*
@@ -1601,6 +1607,9 @@ void G_Ticker ()
 
 			// Tick the domination module.
 			DOMINATION_Tick( );
+
+			// [BB]
+			GAMEMODE_Tick( );
 
 			// Reset the bot cycles counter before we tick their logic.
 			BOTS_ResetCyclesCounter( );
@@ -3216,6 +3225,9 @@ void GAME_ResetMap( bool bRunEnterScripts )
 	// [BB] We are going to reset the map now, so any request for a reset is fulfilled.
 	g_bResetMap = false;
 
+	// [Dusk] Clear list of keys found now.
+	g_keysFound.Clear();
+
 	// [BB] itemcount and secretcount are not synced between client and server, so just reset them here.
 	for ( ULONG ulIdx = 0; ulIdx < MAXPLAYERS; ++ulIdx )
 	{
@@ -3263,29 +3275,35 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		if ( pPoly == NULL )
 			continue;
 
-		// [WS] Did the door move or rotate?
-		if (pPoly->bMoved || pPoly->bRotated)
+		// [BB] Is this object being moved?
+		if ( ( pPoly->specialdata != NULL ) && pPoly->specialdata->IsKindOf ( RUNTIME_CLASS( DPolyAction ) ) )
 		{
-			// [WS] Is the poly object a door?
-			DPolyAction *pPolyDoor = static_cast<DPolyDoor*>(pPoly->specialdata);
-
+			DPolyAction *pPolyAction = static_cast<DPolyAction*> ( pPoly->specialdata );
 			// [WS] We have a poly object door, lets destroy it.
-			if (pPolyDoor)
+			if ( pPolyAction->IsKindOf ( RUNTIME_CLASS( DPolyDoor ) ) )
 			{
-				pPoly->specialdata = NULL;
-
-				// [WS] Tell clients to destroy the door and stop its sound.
+				// [WS] Tell clients to destroy the door.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				{
-					SERVERCOMMANDS_DestroyPolyDoor( pPolyDoor->GetPolyObj() );
-					SERVERCOMMANDS_PlayPolyobjSound( pPolyDoor->GetPolyObj(), POLYSOUND_STOPSEQUENCE );
-				}
-
-				// [BB] Stop all sounds associated with this object. Shouldn't we
-				// destroy all sounds for all poly objects, not only for the doors?
-				SN_StopSequence( pPoly );
-				pPolyDoor->Destroy();
+					SERVERCOMMANDS_DestroyPolyDoor( pPolyAction->GetPolyObj() );
 			}
+			// [BB] We also have to destroy all other movers.
+			else
+			{
+				// [BB] Tell clients to destroy this mover.
+				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+					SERVERCOMMANDS_DestroyMovePoly( pPolyAction->GetPolyObj() );
+			}
+
+			// [BB] Tell clients to destroy the door and stop its sound.
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				SERVERCOMMANDS_PlayPolyobjSound( pPolyAction->GetPolyObj(), POLYSOUND_STOPSEQUENCE );
+
+			// [BB] Stop all sounds associated with this object.
+			SN_StopSequence( pPoly );
+			pPolyAction->Destroy();
+
+			// [BB] We have destoyed the mover, so remove the pointer to it from the polyobj.
+			pPoly->specialdata = NULL;
 		}
 
 		if ( pPoly->bMoved )

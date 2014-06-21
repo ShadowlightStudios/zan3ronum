@@ -66,6 +66,7 @@
 #include "lastmanstanding.h"
 #include "possession.h"
 #include "p_lnspec.h"
+#include "p_acs.h"
 // [BB] The next includes are only needed for GAMEMODE_DisplayStandardMessage
 #include "sbar.h"
 #include "v_video.h"
@@ -196,6 +197,30 @@ void GAMEMODE_Construct( void )
 
 	// Our default game mode is co-op.
 	g_CurrentGameMode = GAMEMODE_COOPERATIVE;
+}
+
+//*****************************************************************************
+//
+void GAMEMODE_Tick( void )
+{
+	static GAMESTATE_e oldState = GAMESTATE_UNSPECIFIED;
+	const GAMESTATE_e state = GAMEMODE_GetState();
+
+	// [BB] If the state change, potentially trigger an event and update the saved state.
+	if ( oldState != state )
+	{
+		// [BB] Apparently the round just ended.
+		if ( ( oldState == GAMESTATE_INPROGRESS ) && ( state == GAMESTATE_INRESULTSEQUENCE ) )
+			GAMEMODE_HandleEvent ( GAMEEVENT_ROUND_ENDS );
+		// [BB] Changing from GAMESTATE_INPROGRESS to anything but GAMESTATE_INRESULTSEQUENCE means the roudn was aborted.
+		else if ( oldState == GAMESTATE_INPROGRESS )
+			GAMEMODE_HandleEvent ( GAMEEVENT_ROUND_ABORTED );
+		// [BB] Changing from anything to GAMESTATE_INPROGRESS means the round started.
+		else if ( state == GAMESTATE_INPROGRESS )
+			GAMEMODE_HandleEvent ( GAMEEVENT_ROUND_STARTS );			
+
+		oldState = state;
+	}
 }
 
 //*****************************************************************************
@@ -340,6 +365,49 @@ void GAMEMODE_DetermineGameMode( void )
 
 //*****************************************************************************
 //
+bool GAMEMODE_IsGameWaitingForPlayers( void )
+{
+	if ( survival )
+		return ( SURVIVAL_GetState( ) == SURVS_WAITINGFORPLAYERS );
+	else if ( invasion )
+		return ( INVASION_GetState( ) == IS_WAITINGFORPLAYERS );
+	else if ( duel )
+		return ( DUEL_GetState( ) == DS_WAITINGFORPLAYERS );
+	else if ( teamlms || lastmanstanding )
+		return ( LASTMANSTANDING_GetState( ) == LMSS_WAITINGFORPLAYERS );
+	else if ( possession || teampossession )
+		return ( POSSESSION_GetState( ) == PSNS_WAITINGFORPLAYERS );
+	// [BB] Non-coop game modes need two or more players.
+	else if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( ) ) & GMF_COOPERATIVE ) == false )
+		return ( GAME_CountActivePlayers( ) < 2 );
+	// [BB] For coop games one player is enough.
+	else
+		return ( GAME_CountActivePlayers( ) < 1 );
+}
+
+//*****************************************************************************
+//
+bool GAMEMODE_IsGameInCountdown( void )
+{
+	if ( survival )
+		return ( SURVIVAL_GetState( ) == SURVS_COUNTDOWN );
+	// [BB] What about IS_COUNTDOWN?
+	else if ( invasion )
+		return ( INVASION_GetState( ) == IS_FIRSTCOUNTDOWN );
+	else if ( duel )
+		return ( DUEL_GetState( ) == DS_COUNTDOWN );
+	else if ( teamlms || lastmanstanding )
+		return ( LASTMANSTANDING_GetState( ) == LMSS_COUNTDOWN );
+	// [BB] What about PSNS_PRENEXTROUNDCOUNTDOWN?
+	else if ( possession || teampossession )
+		return ( ( POSSESSION_GetState( ) == PSNS_COUNTDOWN ) || ( POSSESSION_GetState( ) == PSNS_NEXTROUNDCOUNTDOWN ) );
+	// [BB] The other game modes don't have a countdown.
+	else
+		return ( false );
+}
+
+//*****************************************************************************
+//
 bool GAMEMODE_IsGameInProgress( void )
 {
 	// [BB] Since there is currently no way unified way to check the state of
@@ -354,10 +422,14 @@ bool GAMEMODE_IsGameInProgress( void )
 		return ( LASTMANSTANDING_GetState( ) == LMSS_INPROGRESS );
 	else if ( possession || teampossession )
 		return ( ( POSSESSION_GetState( ) == PSNS_INPROGRESS ) || ( POSSESSION_GetState( ) == PSNS_ARTIFACTHELD ) );
-	// [BB] In the game modes without warmup phase, we just says the game is
-	// in progress when there are two or more players.
+	// [BB] In non-coop game modes without warmup phase, we just say the game is
+	// in progress when there are two or more players and the game is not frozen
+	// due to the end level delay.
+	else if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( ) ) & GMF_COOPERATIVE ) == false )
+		return ( ( GAME_CountActivePlayers( ) >= 2 ) && ( GAME_GetEndLevelDelay () == 0 ) );
+	// [BB] For coop games one player is enough.
 	else
-		return ( GAME_CountActivePlayers( ) >= 2 );
+		return ( ( GAME_CountActivePlayers( ) >= 1 ) && ( GAME_GetEndLevelDelay () == 0 ) );
 }
 
 //*****************************************************************************
@@ -374,8 +446,10 @@ bool GAMEMODE_IsGameInResultSequence( void )
 		return ( LASTMANSTANDING_GetState( ) == LMSS_WINSEQUENCE );
 	// [BB] The other game modes don't have such a sequnce. Arguably, possession
 	// with PSNS_HOLDERSCORED could also be considered for this.
+	// As substitute for such a sequence we consider whether the game is
+	// frozen because of the end level delay.
 	else
-		return ( false );
+		return ( GAME_GetEndLevelDelay () > 0 );
 }
 
 //*****************************************************************************
@@ -700,6 +774,38 @@ void GAMEMODE_ResetSpecalGamemodeStates ( void )
 bool GAMEMODE_IsSpectatorAllowedSpecial ( const int Special )
 {
 	return ( ( Special == Teleport ) || ( Special == Teleport_NoFog ) || ( Special == Teleport_Line ) );
+}
+
+//*****************************************************************************
+//
+GAMESTATE_e GAMEMODE_GetState( void )
+{
+	if ( GAMEMODE_IsGameWaitingForPlayers() )
+		return GAMESTATE_WAITFORPLAYERS;
+	else if ( GAMEMODE_IsGameInCountdown() )
+		return GAMESTATE_COUNTDOWN;
+	else if ( GAMEMODE_IsGameInProgress() )
+		return GAMESTATE_INPROGRESS;
+	else if ( GAMEMODE_IsGameInResultSequence() )
+		return GAMESTATE_INRESULTSEQUENCE;
+
+	// [BB] Some of the above should apply, but this function always has to return something.
+	return GAMESTATE_UNSPECIFIED;
+}
+
+//*****************************************************************************
+//
+void GAMEMODE_HandleEvent ( const GAMEEVENT_e Event, AActor *pActivator, const int DataOne, const int DataTwo )
+{
+	// [BB] Clients don't start scripts.
+	if ( NETWORK_InClientMode() )
+		return;
+
+	// [BB] The activator of the event activates the event script.
+	// The first argument is the type, e.g. GAMEEVENT_PLAYERFRAGS,
+	// the second and third are specific to the event, e.g. the second is the number of the fragged player.
+	// The third argument will be zero if it isn't used in the script.
+	FBehavior::StaticStartTypedScripts( SCRIPT_Event, pActivator, true, Event, false, false, DataOne, DataTwo );
 }
 
 //*****************************************************************************

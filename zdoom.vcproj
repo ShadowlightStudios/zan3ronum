@@ -55,7 +55,7 @@
 				EnableIntrinsicFunctions="true"
 				FavorSizeOrSpeed="1"
 				OmitFramePointers="true"
-				AdditionalIncludeDirectories="src\win32,src\sound,src,zlib,src\g_shared,src\g_doom,src\g_raven,src\g_heretic,src\g_hexen,src\g_strife;flac;jpeg-6b;snes_spc\snes_spc;gdtoa;bzip2;lzma\C;src\OpenGL;src\win32\g15\include"
+				AdditionalIncludeDirectories="src\win32,src\sound,src,zlib,src\g_shared,src\g_doom,src\g_raven,src\g_heretic,src\g_hexen,src\g_strife;flac;jpeg-6b;snes_spc\snes_spc;gdtoa;bzip2;lzma\C;src\huffman;sqlite;src\win32\g15\include"
 				PreprocessorDefinitions="NDEBUG,WIN32,_WIN32,_WINDOWS,USEASM,NO_MANIFEST;_DO_NOT_DECLARE_INTERLOCKED_INTRINSICS_IN_MEMORY,NO_VA_COPY"
 				StringPooling="true"
 				RuntimeLibrary="0"
@@ -90,7 +90,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalOptions="/MACHINE:I386"
-				AdditionalDependencies="gdi32.lib user32.lib comctl32.lib shell32.lib advapi32.lib comdlg32.lib ole32.lib dxguid.lib dsound.lib ddraw.lib dinput8.lib strmiids.lib wsock32.lib winmm.lib fmodex_vc.lib setupapi.lib ws2_32.lib opengl32.lib glu32.lib"
+				AdditionalDependencies="gdi32.lib user32.lib comctl32.lib shell32.lib advapi32.lib comdlg32.lib ole32.lib dxguid.lib dsound.lib ddraw.lib dinput8.lib strmiids.lib wsock32.lib winmm.lib fmodex_vc.lib setupapi.lib ws2_32.lib opengl32.lib glu32.lib libeay32.lib ssleay32.lib"
 				ShowProgress="0"
 				OutputFile="..\$(ProjectName).exe"
 				LinkIncremental="1"
@@ -169,7 +169,7 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="&quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot; "
 				Optimization="0"
-				AdditionalIncludeDirectories="src\win32;src\sound;src;zlib;src\g_shared;src\g_doom;src\g_raven;src\g_heretic;src\g_hexen;src\g_strife;flac;jpeg-6b;snes_spc\snes_spc;gdtoa;bzip2;lzma\C;src\OpenGL;src\win32\g15\include"
+				AdditionalIncludeDirectories="src\win32;src\sound;src;zlib;src\g_shared;src\g_doom;src\g_raven;src\g_heretic;src\g_hexen;src\g_strife;flac;jpeg-6b;snes_spc\snes_spc;gdtoa;bzip2;lzma\C;src\huffman;sqlite;src\win32\g15\include"
 				PreprocessorDefinitions="WIN32,_DEBUG,_WIN32,_WINDOWS,USEASM,_CRTDBG_MAP_ALLOC,NO_MANIFEST,NO_VA_COPY"
 				MinimalRebuild="true"
 				RuntimeLibrary="1"
@@ -201,7 +201,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalOptions="/MACHINE:I386"
-				AdditionalDependencies="gdi32.lib user32.lib comctl32.lib shell32.lib advapi32.lib comdlg32.lib ole32.lib dxguid.lib dsound.lib ddraw.lib dinput8.lib strmiids.lib wsock32.lib winmm.lib setupapi.lib ws2_32.lib opengl32.lib glu32.lib fmodex_vc.lib $(NOINHERIT)"
+				AdditionalDependencies="gdi32.lib user32.lib comctl32.lib shell32.lib advapi32.lib comdlg32.lib ole32.lib dxguid.lib dsound.lib ddraw.lib dinput8.lib strmiids.lib wsock32.lib winmm.lib setupapi.lib ws2_32.lib opengl32.lib glu32.lib fmodex_vc.lib libeay32.lib ssleay32.lib $(NOINHERIT)"
 				OutputFile="..\$(ProjectName)-debug.exe"
 				LinkIncremental="2"
 				SuppressStartupBanner="true"
@@ -1655,10 +1655,6 @@
 						AdditionalOptions="&quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot;  &quot;  /I /fmod/api/inc&quot; "
 					/>
 				</FileConfiguration>
-			</File>
-			<File
-				RelativePath=".\src\huffman.cpp"
-				>
 			</File>
 			<File
 				RelativePath=".\src\i_net.cpp"
@@ -4197,6 +4193,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\src\za_database.cpp"
+				>
+			</File>
+			<File
 				RelativePath=".\src\zstrformat.cpp"
 				>
 			</File>
@@ -4545,10 +4545,6 @@
 			</File>
 			<File
 				RelativePath=".\src\hu_stuff.h"
-				>
-			</File>
-			<File
-				RelativePath=".\src\huffman.h"
 				>
 			</File>
 			<File
@@ -4909,6 +4905,10 @@
 			</File>
 			<File
 				RelativePath=".\src\x64inlines.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\za_database.h"
 				>
 			</File>
 			<File
@@ -11100,6 +11100,82 @@
 			</File>
 			<File
 				RelativePath=".\src\sfmt\SFMT.h"
+				>
+			</File>
+		</Filter>
+		<Filter
+			Name="Huffman"
+			>
+			<File
+				RelativePath=".\src\huffman\bitreader.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\bitreader.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\bitwriter.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\bitwriter.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\codec.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\huffcodec.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\huffcodec.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\huffman.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\huffman\huffman.h"
+				>
+			</File>
+		</Filter>
+		<Filter
+			Name="Network"
+			>
+			<File
+				RelativePath=".\src\network\cl_auth.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\network\cl_auth.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\network\srp.cpp"
+				>
+				<FileConfiguration
+					Name="Release|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						CallingConvention="0"
+					/>
+				</FileConfiguration>
+			</File>
+			<File
+				RelativePath=".\src\network\srp.h"
+				>
+			</File>
+			<File
+				RelativePath=".\src\network\sv_auth.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\network\sv_auth.h"
 				>
 			</File>
 		</Filter>

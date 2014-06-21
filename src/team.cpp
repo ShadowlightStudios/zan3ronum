@@ -78,6 +78,7 @@
 #include "v_text.h"
 #include "v_video.h"
 #include "templates.h"
+#include "d_event.h"
 
 //*****************************************************************************
 //	MISC CRAP THAT SHOULDN'T BE HERE BUT HAS TO BE BECAUSE OF SLOPPY CODING
@@ -98,6 +99,11 @@ static	bool	g_bSpawningTemporaryFlag = false;
 static FRandom	g_JoinTeamSeed( "JoinTeamSeed" );
 
 //*****************************************************************************
+//	CONSOLE VARIABLES
+
+CVAR( Bool, sv_forcerandomclass, false, CVAR_ARCHIVE )
+
+//*****************************************************************************
 //	FUNCTIONS
 
 void TEAM_Construct( void )
@@ -114,9 +120,9 @@ void TEAM_Construct( void )
 		TEAM_SetAnnouncedLeadState( i, false );
 		TEAM_SetAssistPlayer( i, MAXPLAYERS );
 
-		teams[i].g_Origin.x = NULL;
-		teams[i].g_Origin.y = NULL;
-		teams[i].g_Origin.z = NULL;
+		teams[i].g_Origin.x = 0;
+		teams[i].g_Origin.y = 0;
+		teams[i].g_Origin.z = 0;
 
 		switch ( i )
 		{
@@ -178,9 +184,9 @@ void TEAM_Reset( void )
 		TEAM_SetAnnouncedLeadState( i, false );
 		TEAM_SetAssistPlayer( i, MAXPLAYERS );
 
-		teams[i].g_Origin.x = NULL;
-		teams[i].g_Origin.y = NULL;
-		teams[i].g_Origin.z = NULL;
+		teams[i].g_Origin.x = 0;
+		teams[i].g_Origin.y = 0;
+		teams[i].g_Origin.z = 0;
 
 		switch ( i )
 		{
@@ -493,9 +499,9 @@ void TEAM_ScoreSkulltagPoint( player_t *pPlayer, ULONG ulNumPoints, AActor *pPil
 
 	// Create the console message.
 	if( ( bAssisted ) && ( ! bSelfAssisted ) )
-		sprintf(szString, "%s \\c-and %s\\c- scored for the %s team!\n", pPlayer->userinfo.netname, players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.netname, TEAM_GetName( pPlayer->ulTeam ));
+		sprintf(szString, "%s \\c-and %s\\c- scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.netname, players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
 	else
-		sprintf(szString, "%s \\c-scored for the %s team!\n", pPlayer->userinfo.netname, TEAM_GetName( pPlayer->ulTeam ) );
+		sprintf(szString, "%s \\c-scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
 
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_Print( szString, PRINT_HIGH );
@@ -719,6 +725,7 @@ void TEAM_FlagDropped( player_t *pPlayer, ULONG ulTeamIdx )
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
 		SERVERCOMMANDS_TeamFlagDropped( ULONG( pPlayer - players ), ulTeamIdx );
+		SERVER_Printf( PRINT_MEDIUM, "%s \\c-lost the \\c%c%s \\c-%s.\n", pPlayer->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( ulTeamIdx)), TEAM_GetName( ulTeamIdx), ( skulltag ) ? "skull" : "flag" );
 		return;
 	}
 
@@ -932,7 +939,7 @@ int TEAM_GetColor( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lPlayerColor );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -991,7 +998,7 @@ LONG TEAM_GetRailgunColor( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lRailColor );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1009,7 +1016,7 @@ LONG TEAM_GetScore( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lScore );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1053,7 +1060,7 @@ void TEAM_SetScore( ULONG ulTeamIdx, LONG lScore, bool bAnnouncer )
 	if ( TEAM_GetScore( ulTeamIdx ) >= (LONG)pointlimit )
 	{
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_Printf( PRINT_HIGH, "%s has won the game!\n", TEAM_GetName( ulTeamIdx ));
+			SERVER_Printf( PRINT_HIGH, "\\c%c%s \\c-has won the game!\n", V_GetColorChar( TEAM_GetTextColor( ulTeamIdx )), TEAM_GetName( ulTeamIdx ));
 		else
 			Printf( "%s has won the game!\n", TEAM_GetName( ulTeamIdx ));
 
@@ -1251,7 +1258,7 @@ ULONG TEAM_GetReturnTicks( ULONG ulTeamIdx )
 	else if ( ulTeamIdx == teams.Size( ) )
 		return ( g_ulWhiteFlagReturnTicks );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1275,7 +1282,7 @@ LONG TEAM_GetFragCount( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lFragCount );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1314,7 +1321,7 @@ LONG TEAM_GetDeathCount( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lDeathCount );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1335,7 +1342,7 @@ LONG TEAM_GetWinCount( ULONG ulTeamIdx )
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 		return ( teams[ulTeamIdx].lWinCount );
 	else
-		return ( NULL );
+		return ( 0 );
 }
 
 //*****************************************************************************
@@ -1844,12 +1851,15 @@ void TEAM_EnsurePlayerHasValidClass( player_t *pPlayer )
 	if ( pPlayer->userinfo.PlayerClass == -1 )
 		return;
 
+	// [BB] The additional checks prevent this from being done while the map is loaded.
+	const bool forcerandom = ( sv_forcerandomclass && ( gameaction == ga_nothing ) && PLAYER_IsValidPlayer ( static_cast<ULONG> ( pPlayer - players ) ) );
+
 	// [BB] The class is valid, nothing to do.
-	if ( TEAM_IsClassAllowedForPlayer ( pPlayer->userinfo.PlayerClass, pPlayer ) )
+	if ( TEAM_IsClassAllowedForPlayer ( pPlayer->userinfo.PlayerClass, pPlayer ) && ( ( forcerandom == false ) || ( pPlayer->userinfo.PlayerClass == -1 ) ) )
 		return;
 
 	// [BB] The current class is invalid, select a valid one.
-	pPlayer->userinfo.PlayerClass = TEAM_FindValidClassForPlayer ( pPlayer );
+	pPlayer->userinfo.PlayerClass = forcerandom ? -1 : TEAM_FindValidClassForPlayer ( pPlayer );
 	// [BB] This should respawn the player at the appropriate spot. Set the player state to
 	// PST_REBORNNOINVENTORY so everything (weapons, etc.) is cleared.
 	pPlayer->playerstate = PST_REBORNNOINVENTORY;

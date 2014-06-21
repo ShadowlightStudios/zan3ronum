@@ -63,6 +63,11 @@
 // to go into a separate header for technical reasons.
 #include "gamemode_enums.h"
 
+// [CK] Event defines
+#define GAMEEVENT_CAPTURE_NOASSIST -1	// The third arg meaning no player assisted
+#define GAMEEVENT_RETURN_TIMEOUTRETURN 0
+#define GAMEEVENT_RETURN_PLAYERRETURN 1
+
 //*****************************************************************************
 //  EXTERNAL CONSOLE VARIABLES
 
@@ -78,6 +83,29 @@ typedef enum
 	NUM_MODIFIERS
 
 } MODIFIER_e;
+
+//*****************************************************************************
+typedef enum
+{
+	GAMESTATE_UNSPECIFIED = -1,
+	GAMESTATE_WAITFORPLAYERS = 0,
+	GAMESTATE_COUNTDOWN,
+	GAMESTATE_INPROGRESS,
+	GAMESTATE_INRESULTSEQUENCE
+} GAMESTATE_e;
+
+//*****************************************************************************
+typedef enum
+{
+	GAMEEVENT_PLAYERFRAGS = 0,
+	GAMEEVENT_MEDALS,
+	GAMEEVENT_CAPTURES,
+	GAMEEVENT_TOUCHES,	// When the player touches a flag (or skull)
+	GAMEEVENT_RETURNS,	// When the flag returns to it's stand (or skull)
+	GAMEEVENT_ROUND_STARTS,
+	GAMEEVENT_ROUND_ENDS,
+	GAMEEVENT_ROUND_ABORTED,
+} GAMEEVENT_e;
 
 //*****************************************************************************
 //	STRUCTURES
@@ -103,6 +131,7 @@ typedef struct
 //	PROTOTYPES
 
 void		GAMEMODE_Construct( void );
+void		GAMEMODE_Tick( void );
 void		GAMEMODE_ParseGamemodeInfoLump ( FScanner &sc, const GAMEMODE_e GameMode );
 void		GAMEMODE_ParseGamemodeInfo( void );
 ULONG		GAMEMODE_GetFlags( GAMEMODE_e GameMode );
@@ -111,6 +140,7 @@ char		*GAMEMODE_GetShortName( GAMEMODE_e GameMode );
 char		*GAMEMODE_GetName( GAMEMODE_e GameMode );
 char		*GAMEMODE_GetF1Texture( GAMEMODE_e GameMode );
 void		GAMEMODE_DetermineGameMode( void );
+bool		GAMEMODE_IsGameInCountdown( void );
 bool		GAMEMODE_IsGameInProgress( void );
 bool		GAMEMODE_IsGameInResultSequence( void );
 bool		GAMEMODE_IsGameInProgressOrResultSequence( void );
@@ -129,6 +159,8 @@ void		GAMEMODE_AdjustActorSpawnFlags ( AActor *pActor );
 void		GAMEMODE_SpawnSpecialGamemodeThings ( void );
 void		GAMEMODE_ResetSpecalGamemodeStates ( void );
 bool		GAMEMODE_IsSpectatorAllowedSpecial ( const int Special );
+GAMESTATE_e	GAMEMODE_GetState ( void );
+void		GAMEMODE_HandleEvent ( const GAMEEVENT_e Event, AActor *pActivator = NULL, const int DataOne = 0, const int DataTwo = 0 );
 
 // [BB] This function doesn't really belong here. Find a better place for it.
 void		GAMEMODE_DisplayStandardMessage( const char *pszMessage, const bool bInformClients = false );

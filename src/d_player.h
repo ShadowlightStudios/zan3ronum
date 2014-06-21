@@ -560,6 +560,7 @@ public:
 	fixed_t		restoreZ;
 
 	fixed_t		restoreFloorZ;
+	fixed_t		restoreCeilingZ;
 
 	// [BC] End of ST additions.
 
@@ -623,6 +624,7 @@ void	PLAYER_SetLivesLeft( player_t *pPlayer, ULONG ulLivesLeft );
 bool	PLAYER_IsAliveOrCanRespawn( player_t *pPlayer );
 void	PLAYER_RemoveFriends( const ULONG ulPlayer );
 void	PLAYER_LeavesGame( const ULONG ulPlayer );
+void	PLAYER_ClearEnemySoundFields( const ULONG ulPlayer );
 
 void P_CheckPlayerSprites();
 

@@ -50,6 +50,7 @@
 #include "announcer.h"
 #include "team.h"
 #include "gamemode.h"
+#include "cl_commands.h"
 
 // [RH] Actually handle the cheat. The cheat code in st_stuff.c now just
 // writes some bytes to the network data stream, and the network code
@@ -441,10 +442,11 @@ void cht_DoCheat (player_t *player, int cheat)
 		{
 			Printf ("What do you want to kill outside of a game?\n");
 		}
-		else if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+		// else if (!deathmatch)
 		{
 			// Don't allow this in deathmatch even with cheats enabled, because it's
 			// a very very cheap kill.
+			// [Dusk] <jino> and summoning 5000 bfg balls isn't?
 			P_LineAttack (player->mo, player->mo->angle, PLAYERMISSILERANGE,
 				P_AimLineAttack (player->mo, player->mo->angle, PLAYERMISSILERANGE), 1000000,
 				NAME_None, NAME_BulletPuff);
@@ -515,10 +517,6 @@ void cht_DoCheat (player_t *player, int cheat)
 	}
 
 	if (!*msg)              // [SO] Don't print blank lines!
-		return;
-
-	// [BB] Spectators may use noclip, so the server shouldn't print the "cheater" message.
-	if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( cheat == CHT_NOCLIP ) && player->bSpectating )
 		return;
 
 	if( ( cheat != CHT_CHASECAM )
@@ -1146,6 +1144,13 @@ CCMD (mdk)
 {
 	if (CheckCheatmode ())
 		return;
+
+	// [Dusk] Online handling for mdk
+	if ( NETWORK_GetState() == NETSTATE_CLIENT )
+	{
+		CLIENTCOMMANDS_GenericCheat( CHT_MDK );
+		return;
+	}
 
 	Net_WriteByte (DEM_GENERICCHEAT);
 	Net_WriteByte (CHT_MDK);

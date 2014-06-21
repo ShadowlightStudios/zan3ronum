@@ -82,6 +82,7 @@
 #include "invasion.h"
 #include "sv_commands.h"
 #include "network/nettraffic.h"
+#include "za_database.h"
 
 #include "g_shared/a_pickups.h"
 
@@ -177,6 +178,16 @@ TArray<FString>
 
 #define STRINGBUILDER_START(Builder) if (*Builder.GetChars() || ACS_StringBuilderStack.Size()) { ACS_StringBuilderStack.Push(Builder); Builder = ""; }
 #define STRINGBUILDER_FINISH(Builder) if (!ACS_StringBuilderStack.Pop(Builder)) Builder = "";
+
+// [BB] Extracted from PCD_SAVESTRING.
+int ACS_PushAndReturnDynamicString ( const FString &Work )
+{
+	unsigned int str_otf = ACS_StringsOnTheFly.Push(strbin1(Work));
+	if (str_otf > 0xffff)
+		return (-1);
+	else
+		return ((SDWORD)str_otf|ACSSTRING_OR_ONTHEFLY);
+}
 
 //============================================================================
 //
@@ -537,7 +548,7 @@ static void ClearInventory (AActor *activator)
 		SERVERCOMMANDS_GiveInventory( actor->player - players, item );
 		// [BB] The armor display amount has to be updated separately.
 		if( item->GetClass()->IsDescendantOf (RUNTIME_CLASS(AArmor)))
-		  SERVERCOMMANDS_SetPlayerArmor( actor->player - players );
+			SERVERCOMMANDS_SetPlayerArmor( actor->player - players );
 	}
 
 	// [BB]
@@ -600,10 +611,14 @@ static void DoTakeInv (AActor *actor, const PClass *info, int amount)
 	AInventory *item = actor->FindInventory (info);
 	if (item != NULL)
 	{
+		// [BB] Save the original amount.
+		const int oldAmount = item->Amount;
+
 		item->Amount -= amount;
 		// [BC] If we're the server, tell clients to take the item away.
 		// [BB] We may not pass a negative amount to SERVERCOMMANDS_TakeInventory.
-		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( actor->player ))
+		// [BB] Also only inform the client if it had actually had something that could be taken.
+		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( actor->player ) && ( ( oldAmount > 0 ) || ( amount < 0 ) ) )
 			SERVERCOMMANDS_TakeInventory( actor->player - players, item->GetClass( )->TypeName.GetChars( ), MAX ( 0, item->Amount ) );
 		if (item->Amount <= 0)
 		{
@@ -1954,16 +1969,16 @@ const char *FBehavior::LookupString (DWORD index) const
 	}
 }
 
-void FBehavior::StaticStartTypedScripts (WORD type, AActor *activator, bool always, int arg1, bool runNow, bool onlyClientSideScripts)
+void FBehavior::StaticStartTypedScripts (WORD type, AActor *activator, bool always, int arg1, bool runNow, bool onlyClientSideScripts, int arg2, int arg3) // [BB] Added arg2+arg3
 {
 	DPrintf("Starting all scripts of type %d\n", type);
 	for (unsigned int i = 0; i < StaticModules.Size(); ++i)
 	{
-		StaticModules[i]->StartTypedScripts (type, activator, always, arg1, runNow, onlyClientSideScripts);
+		StaticModules[i]->StartTypedScripts (type, activator, always, arg1, runNow, onlyClientSideScripts, arg2, arg3); // [BB] Added arg2+arg3
 	}
 }
 
-void FBehavior::StartTypedScripts (WORD type, AActor *activator, bool always, int arg1, bool runNow, bool onlyClientSideScripts)
+void FBehavior::StartTypedScripts (WORD type, AActor *activator, bool always, int arg1, bool runNow, bool onlyClientSideScripts, int arg2, int arg3) // [BB] Added arg2+arg3
 {
 	const ScriptPtr *ptr;
 	int i;
@@ -1983,12 +1998,12 @@ void FBehavior::StartTypedScripts (WORD type, AActor *activator, bool always, in
 			if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
 				ACS_IsScriptClientSide( ptr ))
 			{
-				SERVERCOMMANDS_ACSScriptExecute( ptr->Number, activator, NULL, level.mapname, 0, arg1, 0, 0, always );
+				SERVERCOMMANDS_ACSScriptExecute( ptr->Number, activator, 0, level.mapname, 0, arg1, arg2, arg3, always );
 				continue;
 			}
 
 			DLevelScript *runningScript = P_GetScriptGoing (activator, NULL, ptr->Number,
-				ptr, this, 0, arg1, 0, 0, always);
+				ptr, this, 0, arg1, arg2, arg3, always); // [BB] Added arg2+arg3
 			if (runNow)
 			{
 				runningScript->RunScript ();
@@ -2860,6 +2875,9 @@ void DLevelScript::DoSetActorProperty (AActor *actor, int property, int value)
 	if ( actor->player && actor->player->bSpectating )
 		return;
 
+	// [BB]
+	int oldValue = 0;
+
 	switch (property)
 	{
 	case APROP_Health:
@@ -2878,10 +2896,14 @@ void DLevelScript::DoSetActorProperty (AActor *actor, int property, int value)
 		break;
 
 	case APROP_Speed:
+		// [BB] Save the original value.
+		oldValue = actor->Speed;
+
 		actor->Speed = value;
 
 		// [BC] If we're the server, tell clients to update this actor property.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		// [BB] Only bother the clients if the speed has actually changed.
+		if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( oldValue != actor->Speed ) )
 			SERVERCOMMANDS_SetThingProperty( actor, APROP_Speed );
 		break;
 
@@ -2978,10 +3000,14 @@ void DLevelScript::DoSetActorProperty (AActor *actor, int property, int value)
 		break;
 
 	case APROP_Gravity:
+		// [BB] Save the original value.
+		oldValue = actor->gravity;
+
 		actor->gravity = value;
 
 		// [BB] If we're the server, tell clients to update this actor's gravity.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		// [BB] Only bother the clients if the gravity has actually changed.
+		if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( oldValue != actor->gravity ) )
 			SERVERCOMMANDS_SetThingGravity( actor );
 		break;
 
@@ -3406,6 +3432,14 @@ enum EACSFunctions
 	ACSF_GetPlayerLivesLeft,
 	ACSF_SetPlayerLivesLeft,
 	ACSF_KickFromGame,
+	ACSF_GetGamemodeState,
+	ACSF_SetDBEntryInt,
+	ACSF_GetDBEntryInt,
+	ACSF_SetDBEntryString,
+	ACSF_GetDBEntryString,
+	ACSF_IncrementDBEntryInt,
+	ACSF_PlayerIsLoggedIn,
+	ACSF_GetPlayerAccountName,
 	// ZDaemon
 	ACSF_GetTeamScore = 19620,
 };
@@ -3707,12 +3741,85 @@ int DLevelScript::CallFunction(int argCount, int funcIndex, SDWORD *args)
 					return 0;
 			}
 
+		// [BB]
+		case ACSF_GetGamemodeState:
+			{
+				return GAMEMODE_GetState();
+			}
+
+		// [BB]
+		case ACSF_SetDBEntryInt:
+			{
+				DATABASE_SaveSetEntryInt ( FBehavior::StaticLookupString(args[0]), FBehavior::StaticLookupString(args[1]), args[2] );
+				return 1;
+			}
+
+		// [BB]
+		case ACSF_GetDBEntryInt:
+			{
+				return DATABASE_SaveGetEntry ( FBehavior::StaticLookupString(args[0]), FBehavior::StaticLookupString(args[1]) ).ToLong();
+			}
+
+		// [BB]
+		case ACSF_SetDBEntryString:
+			{
+				DATABASE_SaveSetEntry ( FBehavior::StaticLookupString(args[0]), FBehavior::StaticLookupString(args[1]), FBehavior::StaticLookupString(args[2]) );
+				return 1;
+			}
+
+		// [BB]
+		case ACSF_GetDBEntryString:
+			{
+				return ACS_PushAndReturnDynamicString ( DATABASE_SaveGetEntry ( FBehavior::StaticLookupString(args[0]), FBehavior::StaticLookupString(args[1]) ) );
+			}
+
+		// [BB]
+		case ACSF_IncrementDBEntryInt:
+			{
+				DATABASE_SaveIncrementEntryInt ( FBehavior::StaticLookupString(args[0]), FBehavior::StaticLookupString(args[1]), args[2] );
+				return 1;
+			}
+
+		// [BB]
+		case ACSF_PlayerIsLoggedIn:
+			{
+				const ULONG ulPlayer = static_cast<ULONG> ( args[0] );
+				if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && SERVER_IsValidClient ( ulPlayer ) )
+					return SERVER_GetClient ( ulPlayer )->loggedIn;
+				else
+					return false;
+			}
+
+		// [BB]
+		case ACSF_GetPlayerAccountName:
+			{
+				FString work;
+				const ULONG ulPlayer = static_cast<ULONG> ( args[0] );
+				// [BB] If the sanity checks fail, we'll return an empty string.
+				if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && SERVER_IsValidClient ( ulPlayer ) )
+				{
+					if ( SERVER_GetClient ( ulPlayer )->loggedIn )
+						work = SERVER_GetClient ( ulPlayer )->username;
+					// Anonymous players get an account name based on their player slot.
+					else
+						work.AppendFormat ( "%d@localhost", ulPlayer );
+				}
+				return ACS_PushAndReturnDynamicString ( work );
+			}
+
 		default:
 			break;
 	}
 
 	return 0;
 }
+
+enum
+{
+	PRINTNAME_LEVELNAME		= -1,
+	PRINTNAME_LEVEL			= -2,
+	PRINTNAME_SKILL			= -3,
+};
 
 
 #define NEXTWORD	(LittleLong(*pc++))
@@ -5175,7 +5282,27 @@ int DLevelScript::RunScript ()
 			{
 				player_t *player = NULL;
 
-				if (STACK(1) == 0 || (unsigned)STACK(1) > MAXPLAYERS)
+				if (STACK(1) < 0)
+				{
+					switch (STACK(1))
+					{
+					case PRINTNAME_LEVELNAME:
+						work += level.LevelName;
+						break;
+
+					case PRINTNAME_LEVEL:
+						work += level.mapname;
+						break;
+
+					default:
+						work += ' ';
+						break;
+					}
+					sp--;
+					break;
+
+				}
+				else if (STACK(1) == 0 || (unsigned)STACK(1) > MAXPLAYERS)
 				{
 					if (activator)
 					{
@@ -6149,6 +6276,10 @@ int DLevelScript::RunScript ()
 				if (type != NULL && type->ParentClass == RUNTIME_CLASS(AAmmo))
 				{
 					item = activator->FindInventory (type);
+
+					// [BB] Save the original value.
+					const int oldMaxAmount = item ? item->MaxAmount : -1;
+
 					if (item != NULL)
 					{
 						item->MaxAmount = STACK(1);
@@ -6160,7 +6291,8 @@ int DLevelScript::RunScript ()
 						item->Amount = 0;
 					}
 					// [BB] If the activator is a player, tell the clients about the changed capacity.
-					if ( activator->player && NETWORK_GetState() == NETSTATE_SERVER )
+					// [BB] Only bother the clients if MaxAmount has actually changed.
+					if ( activator->player && NETWORK_GetState() == NETSTATE_SERVER && ( oldMaxAmount != item->MaxAmount ) )
 						SERVERCOMMANDS_SetPlayerAmmoCapacity( activator->player - players, item );
 				}
 			}

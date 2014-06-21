@@ -77,34 +77,34 @@
 
 static	MEDAL_t	g_Medals[NUM_MEDALS] =
 {	
-	{ "EXCLA0", S_EXCELLENT, "Excellent!", CR_GRAY, "Excellent", NUM_MEDALS, {NULL},	},
-	{ "INCRA0", S_INCREDIBLE, "Incredible!", CR_RED, "Incredible", MEDAL_EXCELLENT, {NULL}, },	
+	{ "EXCLA0", S_EXCELLENT, "Excellent!", CR_GRAY, "Excellent", NUM_MEDALS, "",	},
+	{ "INCRA0", S_INCREDIBLE, "Incredible!", CR_RED, "Incredible", MEDAL_EXCELLENT, "", },	
 
-	{ "IMPRA0", S_IMPRESSIVE, "Impressive!", CR_GRAY, "Impressive", NUM_MEDALS, {NULL}, },
-	{ "MIMPA0", S_MOST_IMPRESSIVE, "Most impressive!", CR_RED, "MostImpressive", MEDAL_IMPRESSIVE, {NULL}, },
+	{ "IMPRA0", S_IMPRESSIVE, "Impressive!", CR_GRAY, "Impressive", NUM_MEDALS, "", },
+	{ "MIMPA0", S_MOST_IMPRESSIVE, "Most impressive!", CR_RED, "MostImpressive", MEDAL_IMPRESSIVE, "", },
 	
-	{ "DOMNA0", S_DOMINATION, "Domination!", CR_GRAY, "Domination", NUM_MEDALS, {NULL}, },	
-	{ "TDOMA0", S_TOTAL_DOMINATION, "Total domination!", CR_RED, "TotalDomination", MEDAL_DOMINATION, {NULL}, },	
+	{ "DOMNA0", S_DOMINATION, "Domination!", CR_GRAY, "Domination", NUM_MEDALS, "", },	
+	{ "TDOMA0", S_TOTAL_DOMINATION, "Total domination!", CR_RED, "TotalDomination", MEDAL_DOMINATION, "", },	
 	
-	{ "ACCUA0", S_ACCURACY, "Accuracy!", CR_GRAY, "Accuracy", NUM_MEDALS, {NULL}, },
-	{ "PRECA0", S_PRECISION, "Precision!", CR_RED, "Precision", MEDAL_ACCURACY, {NULL}, },
+	{ "ACCUA0", S_ACCURACY, "Accuracy!", CR_GRAY, "Accuracy", NUM_MEDALS, "", },
+	{ "PRECA0", S_PRECISION, "Precision!", CR_RED, "Precision", MEDAL_ACCURACY, "", },
 
-	{ "FAILA0", S_YOUFAILIT, "You fail it!", CR_GREEN, "YouFailIt", NUM_MEDALS, {NULL}, },	
-	{ "SKILA0", S_YOURSKILLISNOTENOUGH, "Your skill is not enough!", CR_ORANGE, "YourSkillIsNotEnough", MEDAL_YOUFAILIT, {NULL}, },
+	{ "FAILA0", S_YOUFAILIT, "You fail it!", CR_GREEN, "YouFailIt", NUM_MEDALS, "", },	
+	{ "SKILA0", S_YOURSKILLISNOTENOUGH, "Your skill is not enough!", CR_ORANGE, "YourSkillIsNotEnough", MEDAL_YOUFAILIT, "", },
 
 	{ "LLAMA0", S_LLAMA, "Llama!", CR_GREEN, "Llama", NUM_MEDALS, "misc/llama", },
 	{ "SPAMA0", S_SPAM, "Spam!", CR_GREEN, "Spam", MEDAL_LLAMA, "misc/spam", },	
 
-	{ "VICTA0", S_VICTORY, "Victory!", CR_GRAY, "Victory", NUM_MEDALS, {NULL}, },
-	{ "PFCTA0", S_PERFECT, "Perfect!", CR_RED, "Perfect", MEDAL_VICTORY, {NULL}, },	
+	{ "VICTA0", S_VICTORY, "Victory!", CR_GRAY, "Victory", NUM_MEDALS, "", },
+	{ "PFCTA0", S_PERFECT, "Perfect!", CR_RED, "Perfect", MEDAL_VICTORY, "", },	
 
-	{ "TRMAA0", S_TERMINATION, "Termination!", CR_GRAY, "Termination", NUM_MEDALS, {NULL}, },	
-	{ "FFRGA0", S_FIRSTFRAG, "First frag!", CR_GRAY, "FirstFrag", NUM_MEDALS, {NULL}, },	
-	{ "CAPTA0", S_CAPTURE, "Capture!", CR_GRAY, "Capture", NUM_MEDALS, {NULL}, },	
-	{ "STAGA0", S_TAG, "Tag!", CR_GRAY, "Tag", NUM_MEDALS, {NULL}, },	
-	{ "ASSTA0", S_ASSIST, "Assist!", CR_GRAY, "Assist", NUM_MEDALS, {NULL}, },	
-	{ "DFNSA0", S_DEFENSE, "Defense!", CR_GRAY, "Defense", NUM_MEDALS, {NULL}, },	
-	{ "FISTA0", S_FISTING, "Fisting!", CR_GRAY, "Fisting", NUM_MEDALS, {NULL}, },
+	{ "TRMAA0", S_TERMINATION, "Termination!", CR_GRAY, "Termination", NUM_MEDALS, "", },	
+	{ "FFRGA0", S_FIRSTFRAG, "First frag!", CR_GRAY, "FirstFrag", NUM_MEDALS, "", },	
+	{ "CAPTA0", S_CAPTURE, "Capture!", CR_GRAY, "Capture", NUM_MEDALS, "", },	
+	{ "STAGA0", S_TAG, "Tag!", CR_GRAY, "Tag", NUM_MEDALS, "", },	
+	{ "ASSTA0", S_ASSIST, "Assist!", CR_GRAY, "Assist", NUM_MEDALS, "", },	
+	{ "DFNSA0", S_DEFENSE, "Defense!", CR_GRAY, "Defense", NUM_MEDALS, "", },	
+	{ "FISTA0", S_FISTING, "Fisting!", CR_GRAY, "Fisting", NUM_MEDALS, "", },
 };
 
 enum
@@ -326,6 +326,10 @@ void MEDAL_GiveMedal( ULONG ulPlayer, ULONG ulMedal )
 	player_t	*pPlayer;
 	ULONG		ulWhereToInsertMedal = static_cast<unsigned int> (-1);
 
+	// [CK] Do not award if it's a countdown sequence
+	if ( GAMEMODE_IsGameInCountdown() )
+		return;
+
 	// Make sure all inputs are valid first.
 	if (( ulPlayer >= MAXPLAYERS ) ||
 		(( deathmatch || teamgame ) == false ) ||
@@ -338,6 +342,9 @@ void MEDAL_GiveMedal( ULONG ulPlayer, ULONG ulMedal )
 	}
 	
 	pPlayer = &players[ulPlayer];
+
+	// [CK] Trigger events if a medal is received
+	GAMEMODE_HandleEvent ( GAMEEVENT_MEDALS, pPlayer->mo, static_cast<int> ( ulMedal ) );
 
 	// Increase the player's count of this type of medal.
 	pPlayer->ulMedalCount[ulMedal]++;	
@@ -653,15 +660,27 @@ void MEDAL_RenderAllMedalsFullscreen( player_t *pPlayer )
 		ulNumMedal++;
 	}
 
+	// [CK] Update the names as well
+	std::string medalStatusString = "";
+	bool isConsolePlayer = (pPlayer - &players[consoleplayer] == 0);
+
 	// The player has not earned any medals, so nothing was drawn.
 	if ( ulNumMedal == 0 )
 	{
+		if ( isConsolePlayer )
+			medalStatusString += "YOU HAVE NOT YET EARNED ANY MEDALS.";
+		else
+		{
+			medalStatusString += pPlayer->userinfo.netname;
+			medalStatusString += " HAS NOT YET EARNED ANY MEDALS.";
+		}
+
 		if ( bScale )
 		{
 			screen->DrawText( SmallFont, CR_WHITE,
-				(LONG)(( ValWidth.Int / 2 ) - ( SmallFont->StringWidth( "YOU HAVE NOT YET EARNED ANY MEDALS." ) / 2 )),
+				(LONG)(( ValWidth.Int / 2 ) - ( SmallFont->StringWidth( medalStatusString.c_str() ) / 2 )),
 				26,
-				"YOU HAVE NOT YET EARNED ANY MEDALS.",
+				medalStatusString.c_str(),
 				DTA_VirtualWidth, ValWidth.Int,
 				DTA_VirtualHeight, ValHeight.Int,
 				TAG_DONE );
@@ -669,20 +688,28 @@ void MEDAL_RenderAllMedalsFullscreen( player_t *pPlayer )
 		else
 		{
 			screen->DrawText( SmallFont, CR_WHITE,
-				( SCREENWIDTH / 2 ) - ( SmallFont->StringWidth( "YOU HAVE NOT YET EARNED ANY MEDALS." ) / 2 ),
+				( SCREENWIDTH / 2 ) - ( SmallFont->StringWidth( medalStatusString.c_str() ) / 2 ),
 				26,
-				"YOU HAVE NOT YET EARNED ANY MEDALS.",
+				medalStatusString.c_str(),
 				TAG_DONE );
 		}
 	}
 	else
 	{
+		if ( isConsolePlayer )
+			medalStatusString += "YOU HAVE EARNED THE FOLLOWING MEDALS:";
+		else
+		{
+			medalStatusString += pPlayer->userinfo.netname;
+			medalStatusString += " HAS EARNED THE FOLLOWING MEDALS:";
+		}
+
 		if ( bScale )
 		{
 			screen->DrawText( SmallFont, CR_WHITE,
-				(LONG)(( ValWidth.Int / 2 ) - ( SmallFont->StringWidth( "YOU HAVE EARNED THE FOLLOWING MEDALS:" ) / 2 )),
+				(LONG)(( ValWidth.Int / 2 ) - ( SmallFont->StringWidth( medalStatusString.c_str() ) / 2 )),
 				26,
-				"YOU HAVE EARNED THE FOLLOWING MEDALS:",
+				medalStatusString.c_str(),
 				DTA_VirtualWidth, ValWidth.Int,
 				DTA_VirtualHeight, ValHeight.Int,
 				TAG_DONE );
@@ -690,9 +717,9 @@ void MEDAL_RenderAllMedalsFullscreen( player_t *pPlayer )
 		else
 		{
 			screen->DrawText( SmallFont, CR_WHITE,
-				( SCREENWIDTH / 2 ) - ( SmallFont->StringWidth( "YOU HAVE EARNED THE FOLLOWING MEDALS:" ) / 2 ),
+				( SCREENWIDTH / 2 ) - ( SmallFont->StringWidth( medalStatusString.c_str() ) / 2 ),
 				26,
-				"YOU HAVE EARNED THE FOLLOWING MEDALS:",
+				medalStatusString.c_str(),
 				TAG_DONE );
 		}
 	}
@@ -1301,6 +1328,10 @@ void medal_SelectIcon( ULONG ulPlayer )
 //
 void medal_GiveMedal( ULONG ulPlayer, ULONG ulMedal )
 {
+	// [CK] Clients do not need to know if they got a medal during countdown
+	if ( GAMEMODE_IsGameInCountdown() )
+		return;
+
 	// Give the player the medal, and if we're the server, tell clients.
 	MEDAL_GiveMedal( ulPlayer, ulMedal );
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1350,6 +1381,10 @@ void medal_CheckForDomination( ULONG ulPlayer )
 void medal_CheckForFisting( ULONG ulPlayer )
 {
 	if ( players[ulPlayer].ReadyWeapon == NULL )
+		return;
+
+	// [BB/K6] Neither Fist nor BFG9000 will cause this MeansOfDeath.
+	if ( MeansOfDeath == NAME_Telefrag )
 		return;
 
 	// If the player killed him with this fist, award him a "Fisting!" medal.

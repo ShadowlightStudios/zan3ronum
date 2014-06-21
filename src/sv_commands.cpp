@@ -632,25 +632,20 @@ void SERVERCOMMANDS_DamagePlayer( ULONG ulPlayer )
 		if ( SERVER_IsValidClient( ulIdx ) == false )
 			continue;
 
+		// [EP] Send the updated health and armor of the player who's being damaged to this client
+		// only if this client is allowed to know (still, don't forget the pain state!).
+		if ( SERVER_IsPlayerAllowedToKnowHealth( ulIdx, ulPlayer ) == false ) {
+			SERVERCOMMANDS_SetThingState( players[ulPlayer].mo, STATE_PAIN, ulIdx, SVCF_ONLYTHISCLIENT );
+			continue;
+		}
+
 		SERVER_CheckClientBuffer( ulIdx, 8, true );
+
 		NETWORK_WriteHeader( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, SVC_DAMAGEPLAYER );
 		NETWORK_WriteByte( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, ulPlayer );
-
-		// Only send the player who's being damaged to this player if this player is
-		// allowed to know what his health is. Otherwise, just tell them it's 100/100
-		// (WHICH IS A LIE!!!!!!).
-		if ( SERVER_IsPlayerAllowedToKnowHealth( ulIdx, ulPlayer ))
-		{
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, players[ulPlayer].health );
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, ulArmorPoints );
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, players[ulPlayer].attacker ? players[ulPlayer].attacker->lNetID : -1 );
-		}
-		else
-		{
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, 100 );
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, 100 );
-			NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, -1 );
-		}
+		NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, players[ulPlayer].health );
+		NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, ulArmorPoints );
+		NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, players[ulPlayer].attacker ? players[ulPlayer].attacker->lNetID : -1 );
 	}
 }
 
@@ -2129,23 +2124,18 @@ void SERVERCOMMANDS_KillThing( AActor *pActor, AActor *pSource, AActor *pInflict
 
 //*****************************************************************************
 //
-void SERVERCOMMANDS_SetThingState( AActor *pActor, ULONG ulState )
+void SERVERCOMMANDS_SetThingState( AActor *pActor, ULONG ulState, ULONG ulPlayerExtra, ULONG ulFlags )
 {
 	ULONG	ulIdx;
 
 	if ( !EnsureActorHasNetID (pActor) )
 		return;
 
-	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
-	{
-		if ( SERVER_IsValidClient( ulIdx ) == false )
-			continue;
+	NetCommand command( SVC_SETTHINGSTATE );
+	command.addShort( pActor->lNetID );
+	command.addByte( ulState );
+	command.sendCommandToClients( ulPlayerExtra, ulFlags );
 
-		SERVER_CheckClientBuffer( ulIdx, 4, true );
-		NETWORK_WriteByte( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, SVC_SETTHINGSTATE );
-		NETWORK_WriteShort( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, pActor->lNetID );
-		NETWORK_WriteByte( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, ulState );
-	}
 }
 
 //*****************************************************************************
@@ -3369,30 +3359,13 @@ void SERVERCOMMANDS_SetGameSkill( ULONG ulPlayerExtra, ULONG ulFlags )
 //
 void SERVERCOMMANDS_SetGameDMFlags( ULONG ulPlayerExtra, ULONG ulFlags )
 {
-	ULONG	ulIdx;
-	LONG	lDMFlags;
-
-	lDMFlags = dmflags;
-
-	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
-	{
-		if ( SERVER_IsValidClient( ulIdx ) == false )
-			continue;
-
-		if ((( ulFlags & SVCF_SKIPTHISCLIENT ) && ( ulPlayerExtra == ulIdx )) ||
-			(( ulFlags & SVCF_ONLYTHISCLIENT ) && ( ulPlayerExtra != ulIdx )))
-		{
-			continue;
-		}
-
-		SERVER_CheckClientBuffer( ulIdx, 13, true );
-		NETWORK_WriteHeader( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, SVC_SETGAMEDMFLAGS );
-		NETWORK_WriteLong( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, lDMFlags );
-		NETWORK_WriteLong( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, dmflags2 );
-		NETWORK_WriteLong( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, compatflags );
-		NETWORK_WriteLong( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, compatflags2 );
-		NETWORK_WriteLong( &SERVER_GetClient( ulIdx )->PacketBuffer.ByteStream, dmflags3 );
-	}
+	NetCommand command ( SVC_SETGAMEDMFLAGS );
+	command.addLong ( dmflags );
+	command.addLong ( dmflags2 );
+	command.addLong ( compatflags );
+	command.addLong ( compatflags2 );
+	command.addLong ( dmflags3 );
+	command.sendCommandToClients( ulPlayerExtra, ulFlags );
 }
 
 //*****************************************************************************
@@ -5997,6 +5970,25 @@ void SERVERCOMMANDS_SetFastChaseStrafeCount( AActor *mobj, ULONG ulPlayerExtra, 
 
 //*****************************************************************************
 //
+// [Dusk] This function is called to set an actor's health directly on the
+// client. I don't expect many things to call it (it was created for the sake
+// of syncing hellstaff rain health fields) so it's an extended command for now
+// instead of a regular one, despite its genericness.
+//
+void SERVERCOMMANDS_SetThingHealth( AActor* mobj, ULONG ulPlayerExtra, ULONG ulFlags )
+{
+	if ( !EnsureActorHasNetID (mobj) )
+		return;
+
+	NetCommand command( SVC_EXTENDEDCOMMAND );
+	command.addByte( SVC2_SETTHINGHEALTH );
+	command.addShort( mobj->lNetID );
+	command.addByte( mobj->health );
+	command.sendCommandToClients( ulPlayerExtra, ulFlags );
+}
+
+//*****************************************************************************
+//
 void SERVERCOMMANDS_FullUpdateCompleted( ULONG ulClient )
 {
 	SERVER_CheckClientBuffer( ulClient, 2, true );
@@ -7533,6 +7525,39 @@ void SERVERCOMMANDS_SetPlayerLogNumber ( const ULONG ulPlayer, const int Arg0, U
 	command.addByte ( ulPlayer );
 	command.addShort ( Arg0 );
 	command.sendCommandToClients ( ulPlayerExtra, ulFlags );
+}
+
+//*****************************************************************************
+void SERVERCOMMANDS_SRPUserProcessChallenge ( const ULONG ulClient )
+{
+	if ( SERVER_IsValidClient( ulClient ) == false )
+		return;
+
+	CLIENT_s *pClient = SERVER_GetClient ( ulClient );
+	NetCommand command ( SVC_EXTENDEDCOMMAND );
+	command.addByte ( SVC2_SRP_USER_PROCESS_CHALLENGE );
+	command.addByte ( pClient->salt.Size() );
+	for ( unsigned int i = 0; i < pClient->salt.Size(); ++i )
+		command.addByte ( pClient->salt[i] );
+	command.addLong ( pClient->bytesB.Size() );
+	for ( unsigned int i = 0; i < pClient->bytesB.Size(); ++i )
+		command.addByte ( pClient->bytesB[i] );
+	command.sendCommandToClients ( ulClient, SVCF_ONLYTHISCLIENT );
+}
+
+//*****************************************************************************
+void SERVERCOMMANDS_SRPUserVerifySession ( const ULONG ulClient )
+{
+	if ( SERVER_IsValidClient( ulClient ) == false )
+		return;
+
+	CLIENT_s *pClient = SERVER_GetClient ( ulClient );
+	NetCommand command ( SVC_EXTENDEDCOMMAND );
+	command.addByte ( SVC2_SRP_USER_VERIFY_SESSION );
+	command.addLong ( pClient->bytesHAMK.Size() );
+	for ( unsigned int i = 0; i < pClient->bytesHAMK.Size(); ++i )
+		command.addByte ( pClient->bytesHAMK[i] );
+	command.sendCommandToClients ( ulClient, SVCF_ONLYTHISCLIENT );
 }
 
 //*****************************************************************************

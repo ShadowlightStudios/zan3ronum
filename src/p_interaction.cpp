@@ -557,6 +557,9 @@ void AActor::Die (AActor *source, AActor *inflictor)
 			}
 			else
 			{
+				// [BB] A player just fragged another player.
+				GAMEMODE_HandleEvent ( GAMEEVENT_PLAYERFRAGS, source->player->mo, static_cast<int> ( player - players ) );
+
 				// [BC] Frags are server side.
 				// [BC] Player receives 10 frags for killing the terminator!
 				if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
@@ -2270,6 +2273,10 @@ void PLAYER_SetTeam( player_t *pPlayer, ULONG ulTeam, bool bNoBroadcast )
 
 		P_BringUpWeapon(pPlayer);
 	}
+
+	// [Dusk] Update player translations if we override the colors, odds are they're very different now.
+	if (( NETWORK_GetState() != NETSTATE_SERVER ) && ( cl_overrideplayercolors ))
+		R_BuildAllPlayerTranslations();
 }
 
 //*****************************************************************************
@@ -2451,6 +2458,10 @@ void PLAYER_SetSpectator( player_t *pPlayer, bool bBroadcast, bool bDeadSpectato
 	// Update this player's info on the scoreboard.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCONSOLE_UpdatePlayerInfo( pPlayer - players, UDF_FRAGS );
+
+	// [Dusk] If we left the game, we need to rebuild player translations if we overrid them.
+	if (( NETWORK_GetState() != NETSTATE_SERVER ) && ( cl_overrideplayercolors ) && ( pPlayer - players == consoleplayer ))
+		R_BuildAllPlayerTranslations();
 }
 
 //*****************************************************************************
@@ -2514,6 +2525,11 @@ void PLAYER_SetDefaultSpectatorValues( player_t *pPlayer )
 			}
 		}
 	}
+
+	// [BB] Remove all dynamic lights associated to the player's body.
+	for ( unsigned int i = 0; i < pPlayer->mo->dynamiclights.Size(); ++i )
+		pPlayer->mo->dynamiclights[i]->Destroy();
+	pPlayer->mo->dynamiclights.Clear();
 }
 
 //*****************************************************************************
@@ -2540,7 +2556,7 @@ void PLAYER_SpectatorJoinsGame( player_t *pPlayer )
 
 	// [BB] If the spectator used the chasecam or noclip cheat (which is always allowed for spectators)
 	// remove it now that he joins the game.
-	if ( pPlayer->cheats & CF_CHASECAM|CF_NOCLIP )
+	if ( pPlayer->cheats & ( CF_CHASECAM|CF_NOCLIP ))
 	{
 		pPlayer->cheats &= ~(CF_CHASECAM|CF_NOCLIP);
 		if ( NETWORK_GetState() == NETSTATE_SERVER  )
@@ -2719,6 +2735,14 @@ bool PLAYER_ShouldSpawnAsSpectator( player_t *pPlayer )
 
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
+		// [BB] Possibly check if the player is authenticated.
+		if ( sv_forcelogintojoin )
+		{
+			const ULONG ulPlayer = static_cast<ULONG> ( pPlayer - players );
+			if ( SERVER_IsValidClient ( ulPlayer ) && SERVER_GetClient ( ulPlayer )->loggedIn == false )
+				return true;
+		}
+
 		// If there's a join password, the player should start as a spectator.
 		Val = sv_joinpassword.GetGenericRep( CVAR_String );
 		if (( sv_forcejoinpassword ) && ( strlen( Val.String )))
@@ -2881,7 +2905,7 @@ void PLAYER_SetWeapon( player_t *pPlayer, AWeapon *pWeapon, bool bClearWeaponFor
 
 	// Set the ready and pending weapon.
 	// [BB] When playing a client side demo, the weapon for the consoleplayer will
-	// be selected by a recorded CLD_INVUSE command.
+	// be selected by a recorded CLD_LCMD_INVUSE command.
 	if ( ( CLIENTDEMO_IsPlaying() == false ) || ( pPlayer - players ) != consoleplayer )
 		pPlayer->ReadyWeapon = pPlayer->PendingWeapon = pWeapon;
 
@@ -2893,7 +2917,7 @@ void PLAYER_SetWeapon( player_t *pPlayer, AWeapon *pWeapon, bool bClearWeaponFor
 		CLIENTCOMMANDS_WeaponSelect( pWeapon->GetClass( ));
 
 		if ( CLIENTDEMO_IsRecording( ))
-			CLIENTDEMO_WriteLocalCommand( CLD_INVUSE, pWeapon->GetClass( )->TypeName.GetChars( ) );
+			CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, pWeapon->GetClass( )->TypeName.GetChars( ) );
 	}
 	// [BB] Make sure to inform clients of bot weapon changes.
 	else if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( pPlayer->bIsBot == true ) )
@@ -2987,11 +3011,37 @@ void PLAYER_LeavesGame( const ULONG ulPlayer )
 	{
 		FBehavior::StaticStartTypedScripts( SCRIPT_Disconnect, NULL, true, ulPlayer );
 		PLAYER_RemoveFriends ( ulPlayer );
+		PLAYER_ClearEnemySoundFields( ulPlayer );
 	}
 
 	// [BB] Clear the players medals and the medal related counters. The former is something also clients need to do.
 	memset( players[ulPlayer].ulMedalCount, 0, sizeof( ULONG ) * NUM_MEDALS );
 	PLAYER_ResetSpecialCounters ( &players[ulPlayer] );
+}
+
+//*****************************************************************************
+//
+// [Dusk] Remove sound targets from the given player
+//
+void PLAYER_ClearEnemySoundFields( const ULONG ulPlayer )
+{
+	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
+		return;
+
+	TThinkerIterator<AActor> it;
+	AActor* mo;
+
+	while (( mo = it.Next() ) != NULL )
+	{
+		if ( mo->LastHeard != NULL && mo->LastHeard->player == &players[ulPlayer] )
+			mo->LastHeard = NULL;
+	}
+
+	for ( int i = 0; i < numsectors; ++i )
+	{
+		if ( sectors[i].SoundTarget != NULL && sectors[i].SoundTarget->player == &players[ulPlayer] )
+			sectors[i].SoundTarget = NULL;
+	}
 }
 
 CCMD (kill)
@@ -3078,6 +3128,6 @@ CCMD( taunt )
 			CLIENTCOMMANDS_Taunt( );
 
 		if ( CLIENTDEMO_IsRecording( ))
-			CLIENTDEMO_WriteLocalCommand( CLD_TAUNT, NULL );
+			CLIENTDEMO_WriteLocalCommand( CLD_LCMD_TAUNT, NULL );
 	}
 }

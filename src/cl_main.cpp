@@ -109,6 +109,7 @@
 #include "p_3dmidtex.h"
 #include "a_lightning.h"
 #include "a_movingcamera.h"
+#include "network/cl_auth.h"
 
 //*****************************************************************************
 //	MISC CRAP THAT SHOULDN'T BE HERE BUT HAS TO BE BECAUSE OF SLOPPY CODING
@@ -1479,7 +1480,7 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 					Printf ( "The server reports %d pwad(s):\n", numServerPWADs );
 					for( std::list<std::pair<FString, FString> >::iterator i = serverPWADs.begin( ); i != serverPWADs.end( ); ++i )
 						Printf( "PWAD: %s - %s\n", i->first.GetChars(), i->second.GetChars() );
-					Printf ( "You have loaded %d pwad(s):\n", NETWORK_GetPWADList( )->size() );
+					Printf ( "You have loaded %d pwad(s):\n", static_cast<int>( NETWORK_GetPWADList( )->size() ));
 					for( std::list<std::pair<FString, FString> >::iterator i = NETWORK_GetPWADList( )->begin( ); i != NETWORK_GetPWADList( )->end( ); ++i )
 						Printf( "PWAD: %s - %s\n", i->first.GetChars(), i->second.GetChars() );
 
@@ -2740,6 +2741,29 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				}
 				break;
 
+			case SVC2_SRP_USER_PROCESS_CHALLENGE:
+			case SVC2_SRP_USER_VERIFY_SESSION:
+				CLIENT_ProcessSRPServerCommand ( lExtCommand, pByteStream );
+				break;
+
+			case SVC2_SETTHINGHEALTH:
+				{
+					const LONG lID = NETWORK_ReadShort( pByteStream );
+					const int health = NETWORK_ReadByte( pByteStream );
+					AActor* mo = CLIENT_FindThingByNetID( lID );
+
+					if ( mo == NULL )
+					{
+#ifdef CLIENT_WARNING_MESSAGES
+						Printf( "SVC2_SETTHINGSPECIAL: Couldn't find thing: %d\n", lID );
+#endif
+						break;
+					}
+
+					mo->health = health;
+				}
+				break;
+
 			default:
 				sprintf( szString, "CLIENT_ParsePacket: Illegible server message: %d\nLast command: %d\n", static_cast<int> (lExtCommand), static_cast<int> (g_lLastCmd) );
 				CLIENT_QuitNetworkGame( szString );
@@ -3004,7 +3028,7 @@ AActor *CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z,
 #ifdef	_DEBUG
 		if ( pActor == players[consoleplayer].mo )
 		{
-			Printf( "CLIENT_SpawnThing: WARNING! Tried to delete console player's body! lNetID = %d\n", lNetID );
+			Printf( "CLIENT_SpawnThing: WARNING! Tried to delete console player's body! lNetID = %ld\n", lNetID );
 			return NULL;
 		}
 #endif
@@ -3588,7 +3612,7 @@ void CLIENT_UpdatePendingWeapon( const player_t *pPlayer )
 		CLIENTCOMMANDS_WeaponSelect( pPlayer->PendingWeapon->GetClass( ));
 
 		if ( CLIENTDEMO_IsRecording( ))
-			CLIENTDEMO_WriteLocalCommand( CLD_INVUSE, pPlayer->PendingWeapon->GetClass( )->TypeName.GetChars( ) );
+			CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, pPlayer->PendingWeapon->GetClass( )->TypeName.GetChars( ) );
 	}
 }
 
@@ -4127,10 +4151,26 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 			CLIENTCOMMANDS_WeaponSelect( pPlayer->ReadyWeapon->GetClass( ));
 
 			if ( CLIENTDEMO_IsRecording( ))
-				CLIENTDEMO_WriteLocalCommand( CLD_INVUSE, pPlayer->ReadyWeapon->GetClass( )->TypeName.GetChars( ) );
-			// [BB] When playing a demo, we will bring up what we recorded with CLD_INVUSE.
+				CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, pPlayer->ReadyWeapon->GetClass( )->TypeName.GetChars( ) );
+			// [BB] When playing a demo, we will bring up what we recorded with CLD_LCMD_INVUSE.
 			else if ( CLIENTDEMO_IsPlaying() )
 				PLAYER_ClearWeapon ( pPlayer );
+		}
+	}
+
+	// [Dusk] If we're overriding colors, rebuild translations now.
+	if ( cl_overrideplayercolors )
+	{
+		// [Dusk] If we just joined the game, rebuild all translations,
+		// otherwise recoloring the player in question is sufficient.
+		if (( ulPlayer == static_cast<ULONG>( consoleplayer )) &&
+			( lPlayerState == PST_ENTER || lPlayerState == PST_ENTERNOINVENTORY ))
+		{
+			R_BuildAllPlayerTranslations();
+		}
+		else
+		{
+			R_BuildPlayerTranslation( ulPlayer );
 		}
 	}
 
@@ -5006,6 +5046,9 @@ static void client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream )
 	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
 		return;
 
+	// [BB] Remember whether we already had this ammo.
+	const bool hadAmmo = ( players[ulPlayer].mo->FindInventory( NETWORK_GetClassFromIdentification( usActorNetworkIndex ) ) != NULL );
+
 	pAmmo = CLIENT_FindPlayerInventory( ulPlayer, NETWORK_GetClassFromIdentification( usActorNetworkIndex ));
 
 	if ( pAmmo == NULL )
@@ -5013,6 +5056,11 @@ static void client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream )
 
 	if ( !(pAmmo->GetClass()->IsDescendantOf (RUNTIME_CLASS(AAmmo))) )
 		return;
+
+	// [BB] If we didn't have this kind of ammo yet, CLIENT_FindPlayerInventory gave it to us.
+	// In this case make sure that the amount is zero.
+	if ( hadAmmo == false )
+		pAmmo->Amount = 0;
 
 	// Set the new maximum amount of the inventory object.
 	pAmmo->MaxAmount = lMaxAmount;

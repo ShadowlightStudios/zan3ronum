@@ -31,8 +31,11 @@
 #include "gamemode.h"
 #include "cooperative.h"
 #include "p_acs.h"
+#include "a_keys.h"
 
 static FRandom pr_restore ("RestorePos");
+
+TArray<unsigned short> g_keysFound;
 
 IMPLEMENT_CLASS (AAmmo)
 
@@ -1149,6 +1152,54 @@ void AInventory::Touch (AActor *toucher)
 	// [BC] Finally, refresh the HUD.
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 		SCOREBOARD_RefreshHUD( );
+
+	// [Dusk] If it's a key, share it to others if sv_sharekeys is on. Note:
+	// we store the key as having been found even if shared keys is off. This
+	// way the server still remembers what keys were found and begins sharing
+	// them when sv_sharekeys is toggled on.
+	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
+		( IsKindOf( RUNTIME_CLASS( AKey ))) &&
+		( toucher->player != NULL ))
+	{
+		// [Dusk] Check if the key has not been picked up yet.
+		bool pickedup = false;
+
+		for ( unsigned int i = 0; i < g_keysFound.Size(); ++i )
+		{
+			if ( g_keysFound[i] == GetClass()->getActorNetworkIndex() )
+			{
+				pickedup = true;
+				break;
+			}
+		}
+
+		if ( pickedup == false )
+		{
+			// [Dusk] Store this key as having been found. For some reason
+			// storing the raw PClass pointer crashes Zandronum when sharing
+			// the keys later on so we store the actor network index instead.
+			g_keysFound.Push( GetClass()->getActorNetworkIndex() );
+
+			if ( dmflags3 & DF3_SHARE_KEYS )
+			{
+				// [Dusk] Announcement message
+				SERVER_Printf( PRINT_HIGH, TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL " has found the " TEXTCOLOR_GOLD "%s!\n",
+					toucher->player->userinfo.netname, GetClass()->GetPrettyName().GetChars() );
+
+				// [Dusk] Audio cue - skip the player picking the key because he
+				// hears the pickup sound from the original key. The little *bloop*
+				// might not matter much in Doom but the *clink* in Heretic is quite
+				// indicative. :)
+				if ( S_FindSound( "misc/k_pkup" ))
+				{
+					SERVERCOMMANDS_Sound( CHAN_AUTO, "misc/k_pkup", 1.0, ATTN_NONE,
+						toucher->player - players, SVCF_SKIPTHISCLIENT );
+				}
+
+				SERVER_SyncSharedKeys( MAXPLAYERS, false );
+			}
+		}
+	}
 }
 
 //===========================================================================

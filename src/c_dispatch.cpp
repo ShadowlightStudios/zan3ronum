@@ -56,6 +56,7 @@
 #include "p_local.h"
 #include "g_level.h"
 #include "p_acs.h"
+#include "cl_demo.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -518,7 +519,8 @@ void ResetButtonStates ()
 	{
 		FButtonStatus *button = ActionMaps[i].Button;
 
-		if (button != &Button_Mlook && button != &Button_Klook)
+		//[jam] Also don't reset the Button_Crouch state, to prevent possible toggle crouch to reset.
+		if (button != &Button_Mlook && button != &Button_Klook && button != &Button_Crouch)
 		{
 			button->ReleaseKey (0);
 		}
@@ -594,6 +596,10 @@ void C_DoCommand (const char *cmd, int keynum)
 					{
 						if ( players[consoleplayer].mo )
 							players[consoleplayer].mo->pitch = 0;
+
+						// [BB] We need to record this for the demo.
+						if ( CLIENTDEMO_IsRecording( ))
+							CLIENTDEMO_WriteLocalCommand( CLD_LCMD_CENTERVIEW, NULL );
 					}
 				}
 			}

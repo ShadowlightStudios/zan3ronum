@@ -11,10 +11,83 @@
 =
 ===============================================================================================================
 
+
+1.3
+---
+
+*+	- Added persistent storage based on an SQLite3 database. The new CVAR databasefile controls where the database is saved (defaults to ":memory:", i.e. volatile in-memory database). The new ACS functions
+        void SetDBEntryInt ( string Namespace, string EntryName, int EntryValue )
+        int GetDBEntryInt ( string Namespace, string EntryName ),
+        void SetDBEntryString ( string Namespace, string EntryName, string EntryValue )
+        string GetDBEntryString (string Namespace, string EntryName )
+        void IncrementDBEntryInt ( string Namespace, string EntryName, int Increment )
+      allow mods to access the underlying database. [Torr Samaho]
+*+	- Added the Zandronum side of an optional account system based on authentication with the Secure Remote Password (SRP) protocol, AlexMax is working on the login server (https://github.com/AlexMax/charonauth).
+		- The login server hostname can be specified with the new CVAR authhostname (masterhostname analog, port can be specified with ":port").
+		- The new CCMD login allows a client to authenticate with the auth server the server has selected with its authhostname setting.
+		- The new CVAR sv_forcelogintojoin (default false) can prevent unauthenticated players from joining the game (they can still connect as spectators).
+		- The new ACS functions "int PlayerIsLoggedIn( int Player )" and "string GetPlayerAccountName ( int Player )" allow mods to obtain information about the account of a player.
+	[Torr Samaho]
++	- Added new dmflag sv_sharekeys. When enabled, any keys picked are shared between players. Also, players joining the game get the keys others have as well. [Dusk]
++	- The ACS commands TakeInventory, SetActorProperty (only for speed and gravity) and SetAmmoCapacity don't cause network traffic unless they actually make a change to the affected actor. [Torr Samaho]
++	- The text scaling scaling mechanism (controlled by con_scaletext, con_virtualwidth and con_virtualheight) now can use the aspect ratio of the screen instead of 4:3. The new behavior can be activated using a new option in the text scaling menu or with the new CVAR con_scaletext_usescreenratio. [Torr Samaho]
++	- The authentication mechanism for non-map related lumps now allows Freedoom 0.8/Doom clients to join Doom/Freedoom 0.8 servers. [Torr Samaho] 
++	- Added a client movement buffer. Instead of processing all movement commands of a client immediately, they are stored in this buffer now. Each tic per client up to two commands in this buffer are processed. This way, players with an instable connection shouldn't appear as teleporting instead of moving to players with a stable connection. Note: This only changes how a player perceives the movement of other players. It has not effect on how a player perceives his own movement. [Torr Samaho] 
++	- The mdk cheat command can now be used online in cheat servers. Unlike in ZDoom, it is also allowed in deathmatch modes. [Dusk]
++	- The noclip command for spectators is now client-sided for increased responsivity. [Dusk]
++	- Added new ACS command GetGamemodeState. The return values are GAMESTATE_UNSPECIFIED = -1, GAMESTATE_WAITFORPLAYERS = 0, GAMESTATE_COUNTDOWN = 1, GAMESTATE_INPROGRESS = 2 and GAMESTATE_INRESULTSEQUENCE = 3. [Torr Samaho]
++	- Added new CVAR sv_forcerandomclass. If this is true, all players use the random player class regardless of the class they selected. [Torr Samaho] 
++	- Colored team names in exiting console messages and added extra console messages for CTF and Skulltag (scores, pickups, drops, etc.) (ported from Konar6's kpatch). [Torr Samaho]
++	- Added clientside CVAR cl_overrideplayercolors that overrides players' color translations. Allies will take the color of cl_allycolor and enemies the color of cl_enemycolor. These CVARs are white and black by default, respectively. cl_enemycolor is no-op when there are more than 2 teams, though cl_allycolor will still apply. [Dusk]
++	- Added new script type EVENT. By calling EVENT scripts the engine notifies a mod that a noteworthy event happened and also provides some information about the event using 'arg1' and 'arg2'. So far the following events are supported:
+		GAMEEVENT_PLAYERFRAGS (player frags another player)
+		GAMEEVENT_MEDALS (player receives a medal)
+		GAMEEVENT_CAPTURES (player captures the flag/skull)
+		GAMEEVENT_TOUCHES (player touches the flag/skull)
+		GAMEEVENT_RETURNS (the flag/skull is returned)
+		GAMEEVENT_ROUND_STARTS
+		GAMEEVENT_ROUND_ENDS (the current round ends and the win sequence starts, e.g. when the fraglimit is hit)
+		GAMEEVENT_ROUND_ABORTED  (the current round is ended prematurely, e.g. if all players leave the game)
+	[Torr Samaho, Water] 
+-	- Added settings to fine tune the PWO behavior (CVARs pwo_switchonsameweight and pwo_switchonunknown). [Circunei Z]
+-	- Extended the vote kick protection for admins to include players logged into RCON (ported from Konar6's kpatch). [Torr Samaho]
+-	- Fixed: The server didn't report when the master server notified the server that it's banned (ported from Konar6's kpatch). [Torr Samaho]
+-	- Fixed: Blood actors (or anything else which do not use net IDs) within save games would crash the game upon loading. [Dusk]
+-	- Fixed: Clients were not properly informed about the reset of moving non-door polyobjects during map resets. [Torr Samaho]
+-	- Fixed: Using SetAmmoCapacity on an ammo type a player didn't have online caused the clients to assume that the player now has a small amount of this ammo type. [Torr Samaho]
+-	- Fixed: The view was not centered in demos when the recording player released the mouse look button and lookspring was true. [Torr Samaho]
+-	- Fixed: Players sometimes could jump up through solid 3D floors online when unlagged was on. [Torr Samaho]
+-	- Fixed: A_CrusaderRefire did not work properly online, causing the Crusader to desync. [Dusk]
+-	- Fixed: Strife's Flamethrower did not shake the player's view online. [Dusk]
+-	- Fixed: The server would crash with join passwords longer than 64 characters. [Dusk]
+-	- Fixed: Skins defined with SKININFO didn't work properly if the sprite entry was not set explicitly. [Torr Samaho]
+- 	- Fixed: Tampered clients could insert ASCII control characters into chat messages (e.g. line breaks) (ported from Konar6's kpatch). [Torr Samaho]
+-	- Fixed: Strife's crossbow did not appear to use ammo on clients online. [Dusk]
+-	- Fixed: Clients using endgame while attempting to connect would not terminate the connection attempt. [Dusk]
+-	- Fixed: Telefregging shouldn't count towards awarding the Fisting and Spam medals (ported from Konar6's kpatch). [Torr Samaho]
+-	- Fixed: Toggle crouch shouldn't reset when menu is activated during a netgame. [Jam]
+-	- Fixed: Monsters would become "blind" if the player who awoke them by sound became a spectator. [Dusk]
+-	- Fixed: When spawning more than 2 hellstaff rains in Heretic, the old ones would linger around on the client instead of disappearing. [Dusk]
+-	- Fixed: The linetarget cheat now prints the actor's actual health value. [Dusk]
+-	- Fixed: When a player turned into spectator the dynamic lights associated to the player's body were not removed. [Torr Samaho]
+-	- Fixed: A_PoisonBagInit desyncs between the client and server. [Water]
+-	- Fixed: Medals now show for who you are spectating instead of always your own. [Water]
+-	- Fixed: The server possibly announced player disconnects for players that didn't fully connect. [Torr Samaho]
+-	- Fixed: When a player is damaged, don't send useless inconsistent values of HP and Armor (100/100) to the clients if they're not allowed to see the real HP/Armor. [Edward-san]
+-	- Fixed: Line_SetBlocking didn't work properly online. [Dusk]
+-	- Fixed: A_GiveInventory and A_GiveToTarget didn't work on CLIENTSIDEONLY actors. [Torr Samaho]
+!	- Changed huffman code from Hexen II's to that provided by Vortex Cortex. [Blzut3, Vortex Cortex]
+!	- Changed the Offline Skirmish frag slider bar to go in intervals of 1 instead of 5. [Water]
+!	- The CCMD playerinfo now distinguishes true spectators from in game players (ported from Konar6's kpatch). [Torr Samaho]
+!	- Botscript rand() renamed to random() and now returns a value between min and max inclusive instead of leaving max out of the possibilities. Now is actually random and now swaps min and max if min is greater than max instead of throwing a runtime error. [Dusk]
+!	- Medals are only awarded when the game has started (is not in countdown). [Water]
+
+
 1.2.2
 -----
 
 -	- Fixed: The server reported to be using a testing build instead of a stable one. [Torr Samaho]
+
 
 1.2.1
 -----
@@ -28,6 +101,7 @@
 -	- Fixed an exploit that allowed malicious clients to create additional bodies. Kudos to kgsws for finding and reporting this exploit. [Torr Samaho] 
 -	- Fixed: A malformed packet could crash the server. Thanks to AgentME for reporting the vulnerability and submitting a preliminary patch. [Torr Samaho] 
 !	- The linux binaries are not compiled with -fno-stack-protector anymore. This was originally intended to increase compatibility with distros using older glibc versions but is not necessary anymore since the source is open. Thanks to AgentME for pointing this out. [Torr Samaho]
+
 
 1.2
 ---

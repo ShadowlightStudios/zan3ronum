@@ -480,6 +480,11 @@ else ( NOT NO_SOUND )
 	include_directories( "${ZLIB_INCLUDE_DIR}" "${JPEG_INCLUDE_DIR}" "${BZIP2_INCLUDE_DIR}" "${LZMA_INCLUDE_DIR}" )
 endif ( NOT NO_SOUND )
 
+# [BB] We need OpenSSL for csrp.
+FIND_PACKAGE ( OpenSSL REQUIRED )
+include_directories( ${OPENSSL_INCLUDE_DIR} )
+set ( ZDOOM_LIBS ${ZDOOM_LIBS} ${OPENSSL_LIBRARIES} )
+
 # [AL/BB] OpenGL on OS X: GLEW include directory
 if( APPLE )
 	include_directories( "${GLEW_INCLUDE_DIR}" )
@@ -712,7 +717,6 @@ add_executable( zdoom WIN32
 	gamemode.cpp #ST
 	gi.cpp
 	#hu_scores.cpp
-	huffman.cpp #ST
 	i_net.cpp
 	info.cpp
 	invasion.cpp #ST
@@ -736,7 +740,10 @@ add_executable( zdoom WIN32
 	name.cpp
 	network.cpp #ST
 	networkshared.cpp #ST
+	network/cl_auth.cpp #ZA
 	network/nettraffic.cpp #ST
+	network/srp.cpp #ZA
+	network/sv_auth.cpp #ZA
 	nodebuild.cpp
 	nodebuild_classify_nosse2.cpp
 	nodebuild_events.cpp
@@ -831,9 +838,15 @@ add_executable( zdoom WIN32
 	v_video.cpp
 	w_wad.cpp
 	wi_stuff.cpp
+	za_database.cpp #ZA
 	zstrformat.cpp
 	zstring.cpp
 	cooperative.cpp #ST [BB] This needs to be linked after deathmatch.cpp and team.cpp (see above).
+	# [BL] Huffman is ZAN
+	huffman/bitreader.cpp
+	huffman/bitwriter.cpp
+	huffman/huffcodec.cpp
+	huffman/huffman.cpp
 	g_doom/a_doomartifacts.cpp #ST
 	g_doom/a_doommisc.cpp
 	g_doom/doom_sbar.cpp #ST doesn't use the SBARINFO version of the Doom status bar yet.
@@ -971,8 +984,8 @@ if( NOT NO_SOUND )
 	set( ZDOOM_LIBS ${ZDOOM_LIBS} snes_spc )
 endif( NOT NO_SOUND )
 
-# [BB] Added GeoIP
-target_link_libraries( zdoom ${ZDOOM_LIBS} gdtoa dumb bzip2 lzma GeoIP )
+# [BB] Added GeoIP, huffman & sqlite
+target_link_libraries( zdoom ${ZDOOM_LIBS} gdtoa dumb bzip2 lzma GeoIP sqlite3 )
 include_directories( .
 	g_doom
 	g_heretic
@@ -981,6 +994,7 @@ include_directories( .
 	g_strife
 	g_shared
 	fragglescript
+	huffman #ZAN
 	Linux
 	oplsynth
 	sound
@@ -991,6 +1005,7 @@ include_directories( .
 	../snes_spc/snes_spc
 	../gdtoa
 	../dumb/include
+        ../sqlite/ #ZA
 	../upnpnat/ #ST
 	${CMAKE_BINARY_DIR}/gdtoa
 	${SYSTEM_SOURCES_DIR} )

@@ -121,6 +121,7 @@
 #include "gamemode.h"
 #include "sectinfo.h"
 #include "md5.h"
+#include "za_database.h"
 
 #include "st_start.h"
 #include "templates.h"
@@ -501,6 +502,10 @@ CVAR (Flag, sv_keepteams,			dmflags2, DF2_YES_KEEP_TEAMS);
 
 CUSTOM_CVAR (Int, dmflags3, 0, CVAR_SERVERINFO)
 {
+	// [Dusk] If we just turned sv_sharedkeys on, share keys now.
+	if ((( self ^ self.GetPastValue() ) & DF3_SHARE_KEYS ) & ( self & DF3_SHARE_KEYS ))
+		SERVER_SyncSharedKeys( MAXPLAYERS, true );
+
 	// [BB] If we're the server, tell clients that the dmflags changed.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
@@ -514,6 +519,7 @@ CVAR (Flag, sv_applylmsspectatorsettings,	dmflags3, DF3_ALWAYS_APPLY_LMS_SPECTAT
 CVAR (Flag, sv_nocoopinfo,			dmflags3, DF3_NO_COOP_INFO);
 CVAR (Flag, sv_unblockplayers,			dmflags3, DF3_UNBLOCK_PLAYERS);
 CVAR (Flag, sv_nomedals,			dmflags3, DF3_NO_MEDALS);
+CVAR (Flag, sv_sharekeys,			dmflags3, DF3_SHARE_KEYS);
 
 //==========================================================================
 //
@@ -839,7 +845,7 @@ void D_Display ()
 				if ( Button_ShowMedals.bDown )
 				{
 					if (( players[consoleplayer].camera != NULL ) && ( players[consoleplayer].camera->player != NULL ))
-						MEDAL_RenderAllMedalsFullscreen( players[consoleplayer].mo->player );
+						MEDAL_RenderAllMedalsFullscreen( players[consoleplayer].camera->player ); // [CK] Fixed 'mo' to 'camera' (which was probably intended)
 					else
 						MEDAL_RenderAllMedalsFullscreen( &players[consoleplayer] );
 				}
@@ -1480,6 +1486,14 @@ void D_StartTitle (void)
 
 CCMD (endgame)
 {
+	// [Dusk] If we're a client, ending the game involves disconnecting.
+	// Therefore this should do whatever disconnect does so I'll just call that.
+	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
+	{
+		C_DoCommand( "disconnect" );
+		return;
+	}
+
 	if ( NETWORK_GetState( ) == NETSTATE_SINGLE )
 	{
 		gameaction = ga_fullconsole;
@@ -2471,6 +2485,9 @@ void D_DoomMain (void)
 		CLIENT_PREDICT_Construct( );
 		CLIENTSTATISTICS_Construct( );
 	}
+
+	// [BB]
+	DATABASE_Construct( );
 
 	// [BC] Initialize the browser module.
 	BROWSER_Construct( );
