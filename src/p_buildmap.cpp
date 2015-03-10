@@ -109,6 +109,21 @@ struct spritetype
 	SWORD lotag, hitag, extra;
 };
 
+// I used to have all the Xobjects mapped out. Not anymore.
+// (Thanks for the great firmware, Seagate!)
+struct Xsprite
+{
+	BYTE NotReallyPadding[16];
+	WORD Data1;
+	WORD Data2;
+	WORD Data3;
+	WORD ThisIsntPaddingEither;
+	DWORD NorThis:2;
+	DWORD Data4:16;
+	DWORD WhatIsThisIDontEven:14;
+	BYTE ThisNeedsToBe56Bytes[28];
+};
+
 struct SlopeWork
 {
 	walltype *wal;
@@ -128,7 +143,7 @@ void P_AdjustLine (line_t *line);
 static bool P_LoadBloodMap (BYTE *data, size_t len, FMapThing **sprites, int *numsprites);
 static void LoadSectors (sectortype *bsectors);
 static void LoadWalls (walltype *walls, int numwalls, sectortype *bsectors);
-static int LoadSprites (spritetype *sprites, int numsprites, sectortype *bsectors, FMapThing *mapthings);
+static int LoadSprites (spritetype *sprites, Xsprite *xsprites, int numsprites, sectortype *bsectors, FMapThing *mapthings);
 static vertex_t *FindVertex (fixed_t x, fixed_t y);
 static void CreateStartSpot (fixed_t *pos, FMapThing *start);
 static void CalcPlane (SlopeWork &slope, secplane_t &plane);
@@ -145,8 +160,10 @@ static void Decrypt (void *to, const void *from, int len, int key);
 bool P_IsBuildMap(MapData *map)
 {
 	DWORD len = map->Size(ML_LABEL);
-	if (len < 4) return false;
-
+	if (len < 4)
+	{
+		return false;
+	}
 	BYTE *data = new BYTE[len];
 
 	map->Seek(ML_LABEL);
@@ -217,7 +234,7 @@ bool P_LoadBuildMap (BYTE *data, size_t len, FMapThing **sprites, int *numspr)
 	*sprites = new FMapThing[numsprites + 1];
 	CreateStartSpot ((fixed_t *)(data + 4), *sprites);
 	*numspr = 1 + LoadSprites ((spritetype *)(data + 26 + numsectors*sizeof(sectortype) + numwalls*sizeof(walltype)),
-		numsprites, (sectortype *)(data + 22), *sprites + 1);
+		NULL, numsprites, (sectortype *)(data + 22), *sprites + 1);
 
 	return true;
 }
@@ -253,11 +270,11 @@ static bool P_LoadBloodMap (BYTE *data, size_t len, FMapThing **mapthings, int *
 	{
 		memcpy (infoBlock, data + 6, 37);
 	}
-	numRevisions = *(DWORD *)(infoBlock + 27);
-	numsectors = *(WORD *)(infoBlock + 31);
-	numWalls = *(WORD *)(infoBlock + 33);
-	numsprites = *(WORD *)(infoBlock + 35);
-	skyLen = 2 << *(WORD *)(infoBlock + 16);
+	numRevisions = LittleLong(*(DWORD *)(infoBlock + 27));
+	numsectors = LittleShort(*(WORD *)(infoBlock + 31));
+	numWalls = LittleShort(*(WORD *)(infoBlock + 33));
+	numsprites = LittleShort(*(WORD *)(infoBlock + 35));
+	skyLen = 2 << LittleShort(*(WORD *)(infoBlock + 16));
 
 	if (mapver == 7)
 	{
@@ -277,6 +294,7 @@ static bool P_LoadBloodMap (BYTE *data, size_t len, FMapThing **mapthings, int *
 	sectortype *bsec = new sectortype[numsectors];
 	walltype *bwal = new walltype[numWalls];
 	spritetype *bspr = new spritetype[numsprites];
+	Xsprite *xspr = new Xsprite[numsprites];
 
 	// Read sectors
 	k = numRevisions * sizeof(sectortype);
@@ -329,9 +347,15 @@ static bool P_LoadBloodMap (BYTE *data, size_t len, FMapThing **mapthings, int *
 			memcpy (&bspr[i], data, sizeof(spritetype));
 		}
 		data += sizeof(spritetype);
-		if (bspr[i].extra > 0)	// skip Xsprite
+		if (bspr[i].extra > 0)	// copy Xsprite
 		{
-			data += 56;
+			assert(sizeof(Xsprite) == 56);
+			memcpy(&xspr[i], data, sizeof(Xsprite));
+			data += sizeof(Xsprite);
+		}
+		else
+		{
+			memset(&xspr[i], 0, sizeof(Xsprite));
 		}
 	}
 
@@ -341,11 +365,12 @@ static bool P_LoadBloodMap (BYTE *data, size_t len, FMapThing **mapthings, int *
 	LoadWalls (bwal, numWalls, bsec);
 	*mapthings = new FMapThing[numsprites + 1];
 	CreateStartSpot ((fixed_t *)infoBlock, *mapthings);
-	*numspr = 1 + LoadSprites (bspr, numsprites, bsec, *mapthings + 1);
+	*numspr = 1 + LoadSprites (bspr, xspr, numsprites, bsec, *mapthings + 1);
 
 	delete[] bsec;
 	delete[] bwal;
 	delete[] bspr;
+	delete[] xspr;
 
 	return true;
 }
@@ -365,6 +390,8 @@ static void LoadSectors (sectortype *bsec)
 	sec = sectors = new sector_t[numsectors];
 	memset (sectors, 0, sizeof(sector_t)*numsectors);
 
+	sectors[0].e = new extsector_t[numsectors];
+
 	for (int i = 0; i < numsectors; ++i, ++bsec, ++sec)
 	{
 		bsec->wallptr = WORD(bsec->wallptr);
@@ -372,6 +399,7 @@ static void LoadSectors (sectortype *bsec)
 		bsec->ceilingstat = WORD(bsec->ceilingstat);
 		bsec->floorstat = WORD(bsec->floorstat);
 
+		sec->e = &sectors[0].e[i];
 		sec->SetPlaneTexZ(sector_t::floor, -(LittleLong(bsec->floorz) << 8));
 		sec->floorplane.d = -sec->GetPlaneTexZ(sector_t::floor);
 		sec->floorplane.c = FRACUNIT;
@@ -383,7 +411,7 @@ static void LoadSectors (sectortype *bsec)
 		sec->SetXOffset(sector_t::floor, (bsec->floorxpanning << FRACBITS) + (32 << FRACBITS));
 		sec->SetYOffset(sector_t::floor, bsec->floorypanning << FRACBITS);
 		sec->SetPlaneLight(sector_t::floor, SHADE2LIGHT (bsec->floorshade));
-		sec->ChangeFlags(sector_t::floor, 0, SECF_ABSLIGHTING);
+		sec->ChangeFlags(sector_t::floor, 0, PLANEF_ABSLIGHTING);
 
 		sec->SetPlaneTexZ(sector_t::ceiling, -(LittleLong(bsec->ceilingz) << 8));
 		sec->ceilingplane.d = sec->GetPlaneTexZ(sector_t::ceiling);
@@ -401,11 +429,12 @@ static void LoadSectors (sectortype *bsec)
 		sec->SetXOffset(sector_t::ceiling, (bsec->ceilingxpanning << FRACBITS) + (32 << FRACBITS));
 		sec->SetYOffset(sector_t::ceiling, bsec->ceilingypanning << FRACBITS);
 		sec->SetPlaneLight(sector_t::ceiling, SHADE2LIGHT (bsec->ceilingshade));
-		sec->ChangeFlags(sector_t::ceiling, 0, SECF_ABSLIGHTING);
+		sec->ChangeFlags(sector_t::ceiling, 0, PLANEF_ABSLIGHTING);
 
 		sec->lightlevel = (sec->GetPlaneLight(sector_t::floor) + sec->GetPlaneLight(sector_t::ceiling)) / 2;
 
 		sec->seqType = -1;
+		sec->SeqName = NAME_None;
 		sec->nextsec = -1;
 		sec->prevsec = -1;
 		sec->gravity = 1.f;
@@ -514,6 +543,8 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 		}
 
 		sides[i].TexelLength = walls[i].xrepeat * 8;
+		sides[i].SetTextureYScale(walls[i].yrepeat << (FRACBITS - 3));
+		sides[i].SetTextureXScale(FRACUNIT);
 		sides[i].SetLight(SHADE2LIGHT(walls[i].shade));
 		sides[i].Flags = WALLF_ABSLIGHTING;
 		sides[i].RightSide = walls[i].point2;
@@ -521,11 +552,11 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 
 		if (walls[i].nextwall >= 0 && walls[i].nextwall <= i)
 		{
-			sides[i].linenum = sides[walls[i].nextwall].linenum;
+			sides[i].linedef = sides[walls[i].nextwall].linedef;
 		}
 		else
 		{
-			sides[i].linenum = numlines++;
+			sides[i].linedef = (line_t*)(intptr_t)(numlines++);
 		}
 	}
 
@@ -540,9 +571,9 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 			continue;
 		}
 
-		j = sides[i].linenum;
-		lines[j].sidenum[0] = i;
-		lines[j].sidenum[1] = walls[i].nextwall;
+		j = int(intptr_t(sides[i].linedef));
+		lines[j].sidedef[0] = (side_t*)(intptr_t)i;
+		lines[j].sidedef[1] = (side_t*)(intptr_t)walls[i].nextwall;
 		lines[j].v1 = FindVertex (walls[i].x, walls[i].y);
 		lines[j].v2 = FindVertex (walls[walls[i].point2].x, walls[walls[i].point2].y);
 		lines[j].frontsector = sides[i].sector;
@@ -622,16 +653,28 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 			slope.z[0] = slope.z[1] = slope.z[2] = -bsec->ceilingz;
 			CalcPlane (slope, sectors[i].ceilingplane);
 		}
+		int linenum = int(intptr_t(sides[bsec->wallptr].linedef));
+		int sidenum = int(intptr_t(lines[linenum].sidedef[1]));
 		if (bsec->floorstat & 64)
 		{ // floor is aligned to first wall
-			R_AlignFlat (sides[bsec->wallptr].linenum,
-				lines[sides[bsec->wallptr].linenum].sidenum[1] == (DWORD)bsec->wallptr, 0);
+			R_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
 		}
 		if (bsec->ceilingstat & 64)
 		{ // ceiling is aligned to first wall
-			R_AlignFlat (sides[bsec->wallptr].linenum,
-				lines[sides[bsec->wallptr].linenum].sidenum[1] == (DWORD)bsec->wallptr, 0);
+			R_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
 		}
+	}
+	for (i = 0; i < numlines; i++)
+	{
+		intptr_t front = intptr_t(lines[i].sidedef[0]);
+		intptr_t back = intptr_t(lines[i].sidedef[1]);
+		lines[i].sidedef[0] = front >= 0 ? &sides[front] : NULL;
+		lines[i].sidedef[1] = back >= 0 ? &sides[back] : NULL;
+	}
+	for (i = 0; i < numsides; i++)
+	{
+		assert(sides[i].sector != NULL);
+		sides[i].linedef = &lines[intptr_t(sides[i].linedef)];
 	}
 }
 
@@ -641,32 +684,46 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 //
 //==========================================================================
 
-static int LoadSprites (spritetype *sprites, int numsprites, sectortype *bsectors,
-						 FMapThing *mapthings)
+static int LoadSprites (spritetype *sprites, Xsprite *xsprites, int numsprites,
+	sectortype *bsectors, FMapThing *mapthings)
 {
 	int count = 0;
 
 	for (int i = 0; i < numsprites; ++i)
 	{
-		if (sprites[i].cstat & (16|32|32768)) continue;
-		if (sprites[i].xrepeat == 0 || sprites[i].yrepeat == 0) continue;
-
 		mapthings[count].thingid = 0;
 		mapthings[count].x = (sprites[i].x << 12);
 		mapthings[count].y = -(sprites[i].y << 12);
 		mapthings[count].z = (bsectors[sprites[i].sectnum].floorz - sprites[i].z) << 8;
 		mapthings[count].angle = (((2048-sprites[i].ang) & 2047) * 360) >> 11;
-		mapthings[count].type = 9988;
 		mapthings[count].ClassFilter = 0xffff;
 		mapthings[count].SkillFilter = 0xffff;
 		mapthings[count].flags = MTF_SINGLE|MTF_COOPERATIVE|MTF_DEATHMATCH;
 		mapthings[count].special = 0;
 
-		mapthings[count].args[0] = sprites[i].picnum & 255;
-		mapthings[count].args[1] = sprites[i].picnum >> 8;
-		mapthings[count].args[2] = sprites[i].xrepeat;
-		mapthings[count].args[3] = sprites[i].yrepeat;
-		mapthings[count].args[4] = (sprites[i].cstat & 14) | ((sprites[i].cstat >> 9) & 1);
+		if (xsprites != NULL && sprites[i].lotag == 710)
+		{ // Blood ambient sound
+			mapthings[count].args[0] = xsprites[i].Data3;
+			// I am totally guessing abount the volume level. 50 seems to be a pretty
+			// typical value for Blood's standard maps, so I assume it's 100-based.
+			mapthings[count].args[1] = xsprites[i].Data4;
+			mapthings[count].args[2] = xsprites[i].Data1;
+			mapthings[count].args[3] = xsprites[i].Data2;
+			mapthings[count].args[4] = 0;
+			mapthings[count].type = 14065;
+		}
+		else
+		{
+			if (sprites[i].cstat & (16|32|32768)) continue;
+			if (sprites[i].xrepeat == 0 || sprites[i].yrepeat == 0) continue;
+
+			mapthings[count].type = 9988;
+			mapthings[count].args[0] = sprites[i].picnum & 255;
+			mapthings[count].args[1] = sprites[i].picnum >> 8;
+			mapthings[count].args[2] = sprites[i].xrepeat;
+			mapthings[count].args[3] = sprites[i].yrepeat;
+			mapthings[count].args[4] = (sprites[i].cstat & 14) | ((sprites[i].cstat >> 9) & 1);
+		}
 		count++;
 	}
 	return count;

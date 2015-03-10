@@ -1206,9 +1206,9 @@ void RP_AddLine (seg_t *line)
 	}
 	else
 	{ // The seg is only part of the wall.
-		if (line->linedef->sidenum[0] != DWORD(line->sidedef - sides))
+		if (line->linedef->sidedef[0] != line->sidedef)
 		{
-			swap (v1, v2);
+			swapvalues (v1, v2);
 		}
 		tx1 = v1->x - viewx;
 		tx2 = v2->x - viewx;
@@ -1405,7 +1405,7 @@ void RP_Subsector (subsector_t *sub)
 
 	frontsector = sub->sector;
 	count = sub->numlines;
-	line = &segs[sub->firstline];
+	line = sub->firstline;
 
 	// killough 3/8/98, 4/4/98: Deep water / fake ceiling effect
 	frontsector = R_FakeFlat(frontsector, &tempsec, &floorlightlevel,
@@ -1475,6 +1475,7 @@ void RP_Subsector (subsector_t *sub)
 //		R_ProjectParticle (Particles + i, subsectors[sub-subsectors].sector, shade, FakeSide);
 //	}
 
+#if 0
 	if (sub->poly)
 	{ // Render the polyobj in the subsector first
 		int polyCount = sub->poly->numsegs;
@@ -1484,6 +1485,7 @@ void RP_Subsector (subsector_t *sub)
 			RP_AddLine (*polySeg++);
 		}
 	}
+#endif
 
 	while (count--)
 	{

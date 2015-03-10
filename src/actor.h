@@ -192,14 +192,6 @@ enum
 	MF2_SEEKERMISSILE	= 0x40000000,	// is a seeker (for reflection)
 	MF2_REFLECTIVE		= 0x80000000,	// reflects missiles
 
-	// The three types of bounciness are:
-	// HERETIC - Missile will only bounce off the floor once and then enter
-	//			 its death state. It does not bounce off walls at all.
-	// HEXEN -	 Missile bounces off of walls and floors indefinitely.
-	// DOOM -	 Like Hexen, but the bounce turns off if its vertical velocity
-	//			 is too low.
-
-
 // --- mobj.flags3 ---
 
 	MF3_FLOORHUGGER		= 0x00000001,	// Missile stays on floor
@@ -225,8 +217,8 @@ enum
 	MF3_NOBLOCKMONST	= 0x00100000,	// Can cross ML_BLOCKMONSTERS lines
 	MF3_CRASHED			= 0x00200000,	// Actor entered its crash state
 	MF3_FULLVOLDEATH	= 0x00400000,	// DeathSound is played full volume (for missiles)
-	MF3_CANBOUNCEWATER	= 0x00800000,	// Missile can bounce on water
-	MF3_NOWALLBOUNCESND = 0x01000000,	// Don't make noise when bouncing off a wall
+	MF3_AVOIDMELEE		= 0x00800000,	// Avoids melee attacks (same as MBF's monster_backing but must be explicitly set)
+	MF3_SCREENSEEKER    = 0x01000000,	// Fails the IsOkayToAttack test if potential target is outside player FOV
 	MF3_FOILINVUL		= 0x02000000,	// Actor can hurt MF2_INVULNERABLE things
 	MF3_NOTELEOTHER		= 0x04000000,	// Monster is unaffected by teleport other artifact
 	MF3_BLOODLESSIMPACT	= 0x08000000,	// Projectile does not leave blood
@@ -257,25 +249,27 @@ enum
 	MF4_LOOKALLAROUND	= 0x00010000,	// Monster has eyes in the back of its head
 	MF4_STANDSTILL		= 0x00020000,	// Monster should not chase targets unless attacked?
 	MF4_SPECTRAL		= 0x00040000,
-	MF4_SCROLLMOVE		= 0x00080000,	// momentum has been applied by a scroller
+	MF4_SCROLLMOVE		= 0x00080000,	// velocity has been applied by a scroller
 	MF4_NOSPLASHALERT	= 0x00100000,	// Splashes don't alert this monster
 	MF4_SYNCHRONIZED	= 0x00200000,	// For actors spawned at load-time only: Do not randomize tics
 	MF4_NOTARGETSWITCH	= 0x00400000,	// monster never switches target until current one is dead
 	MF4_VFRICTION		= 0x00800000,	// Internal flag used by A_PainAttack to push a monster down
-	MF4_DONTHURTSPECIES	= 0x01000000,	// Don't hurt one's own kind with explosions (hitscans, too?)
+	MF4_DONTHARMCLASS	= 0x01000000,	// Don't hurt one's own kind with explosions (hitscans, too?)
 	MF4_SHIELDREFLECT	= 0x02000000,
 	MF4_DEFLECT			= 0x04000000,	// different projectile reflection styles
 	MF4_ALLOWPARTICLES	= 0x08000000,	// this puff type can be replaced by particles
 	MF4_NOEXTREMEDEATH	= 0x10000000,	// this projectile or weapon never gibs its victim
 	MF4_EXTREMEDEATH	= 0x20000000,	// this projectile or weapon always gibs its victim
 	MF4_FRIGHTENED		= 0x40000000,	// Monster runs away from player
-	MF4_NOBOUNCESOUND	= 0x80000000,	// Strife's grenades don't make a bouncing sound. 
+	MF4_BOSSSPAWNED		= 0x80000000,	// Spawned by a boss spawn cube
 	
+// --- mobj.flags5 ---
+
 	MF5_FASTER			= 0x00000001,	// moves faster when DF_FAST_MONSTERS or nightmare is on.
 	MF5_FASTMELEE		= 0x00000002,	// has a faster melee attack when DF_FAST_MONSTERS or nightmare is on.
 	MF5_NODROPOFF		= 0x00000004,	// cannot drop off under any circumstances.
-	MF5_BOUNCEONACTORS	= 0x00000008,	// bouncing missile doesn't explode when it hits an actor 
-	MF5_EXPLODEONWATER	= 0x00000010,	// bouncing missile explodes when hitting a water surface
+	/*					= 0x00000008,	*/
+	/*					= 0x00000010,	*/
 	MF5_AVOIDINGDROPOFF = 0x00000020,	// Used to move monsters away from dropoffs
 	MF5_NODAMAGE		= 0x00000040,	// Actor can be shot and reacts to being shot but takes no damage
 	MF5_CHASEGOAL		= 0x00000080,	// Walks to goal instead of target if a valid goal is set.
@@ -305,9 +299,32 @@ enum
 	MF5_PAINLESS		= 0x40000000,	// Actor always inflicts painless damage.
 	MF5_MOVEWITHSECTOR	= 0x80000000,	// P_ChangeSector() will still process this actor if it has MF_NOBLOCKMAP
 
+// --- mobj.flags6 ---
+
 	MF6_NOBOSSRIP		= 0x00000001,	// For rippermissiles: Don't rip through bosses.
 	MF6_THRUSPECIES		= 0x00000002,	// Actors passes through other of the same species.
 	MF6_MTHRUSPECIES	= 0x00000004,	// Missile passes through actors of its shooter's species.
+	MF6_FORCEPAIN		= 0x00000008,	// forces target into painstate (unless it has the NOPAIN flag)
+	MF6_NOFEAR			= 0x00000010,	// Not scared of frightening players
+	MF6_BUMPSPECIAL		= 0x00000020,	// Actor executes its special when being collided (as the ST flag)
+	MF6_DONTHARMSPECIES = 0x00000040,	// Don't hurt one's own species with explosions (hitscans, too?)
+	MF6_STEPMISSILE		= 0x00000080,	// Missile can "walk" up steps
+	MF6_NOTELEFRAG		= 0x00000100,	// [HW] Actor can't be telefragged
+	MF6_TOUCHY			= 0x00000200,	// From MBF: killough 11/98: dies when solids touch it
+	MF6_CANJUMP			= 0x00000400,	// From MBF: a dedicated flag instead of the BOUNCES+FLOAT+sentient combo
+	MF6_JUMPDOWN		= 0x00000800,	// From MBF: generalization of dog behavior wrt. dropoffs.
+	MF6_VULNERABLE		= 0x00001000,	// Actor can be damaged (even if not shootable).
+	MF6_ARMED			= 0x00002000,	// From MBF: Object is armed (for MF6_TOUCHY objects)
+	MF6_FALLING			= 0x00004000,	// From MBF: Object is falling (for pseudotorque simulation)
+	MF6_LINEDONE		= 0x00008000,	// From MBF: Object has already run a line effect
+	MF6_NOTRIGGER		= 0x00010000,	// actor cannot trigger any line actions
+	MF6_SHATTERING		= 0x00020000,	// marks an ice corpse for forced shattering
+	MF6_KILLED			= 0x00040000,	// Something that was killed (but not necessarily a corpse)
+	MF6_BLOCKEDBYSOLIDACTORS = 0x00080000, // Blocked by solid actors, even if not solid itself
+	MF6_ADDITIVEPOISONDAMAGE	= 0x00100000,
+	MF6_ADDITIVEPOISONDURATION	= 0x00200000,
+
+	MF6_INTRYMOVE		= 0x10000000,	// Executing P_TryMove
 
 	// [BC] More object flags for Skulltag.
 
@@ -327,7 +344,7 @@ enum
 	//STFL_IMPALE			= 0x00000010,
 
 	// Execute this object's special when a players bumps into it.
-	STFL_BUMPSPECIAL	= 0x00000020,
+	//STFL_BUMPSPECIAL	= 0x00000020,
 
 	// *** THE FOLLOWING FLAGS ARE IDENTIFERS FOR BOTS ***
 	// ... eh, there's probably a better way to do this.
@@ -385,6 +402,9 @@ enum
 
 	// [CK] For making a player class not identifiable
 	STFL_DONTIDENTIFYTARGET		= 0x00400000,
+
+	// [BB] Hidden by HideOrDestroyIfSafe(), will be restored when the map is reset.
+	STFL_HIDDEN_INSTEAD_OF_DESTROYED		= 0x00800000,
 
 // More flags for Skulltag... these having to do with the network.
 
@@ -483,21 +503,75 @@ enum replace_t
 	ALLOW_REPLACE = 1
 };
 
-enum EBounceType
+enum EBounceFlags
 {
-	BOUNCE_None=0,
-	BOUNCE_Doom=1,
-	BOUNCE_Heretic=2,
-	BOUNCE_Hexen=3,
+	BOUNCE_Walls = 1<<0,		// bounces off of walls
+	BOUNCE_Floors = 1<<1,		// bounces off of floors
+	BOUNCE_Ceilings = 1<<2,		// bounces off of ceilings
+	BOUNCE_Actors = 1<<3,		// bounces off of some actors
+	BOUNCE_AllActors = 1<<4,	// bounces off of all actors (requires BOUNCE_Actors to be set, too)
+	BOUNCE_AutoOff = 1<<5,		// when bouncing off a floor, if the new Z velocity is below 3.0, disable further bouncing
+	BOUNCE_HereticType = 1<<6,	// goes into Death state when bouncing on floors or ceilings
 
-	BOUNCE_TypeMask = 3,
-	BOUNCE_UseSeeSound = 4,	// compatibility fallback. Thios will only be 
-							// set by the compatibility handlers for the old bounce flags.
+	BOUNCE_UseSeeSound = 1<<7,	// compatibility fallback. This will only be set by
+								// the compatibility handlers for the old bounce flags.
+	BOUNCE_NoWallSound = 1<<8,	// don't make noise when bouncing off a wall
+	BOUNCE_Quiet = 1<<9,		// Strife's grenades don't make a bouncing sound
+	BOUNCE_ExplodeOnWater = 1<<10,	// explodes when hitting a water surface
+	BOUNCE_CanBounceWater = 1<<11,	// can bounce on water
+	// MBF bouncing is a bit different from other modes as Killough coded many special behavioral cases
+	// for them that are not present in ZDoom, so it is necessary to identify it properly.
+	BOUNCE_MBF = 1<<12,			// This in itself is not a valid mode, but replaces MBF's MF_BOUNCE flag.
+
+	BOUNCE_TypeMask = BOUNCE_Walls | BOUNCE_Floors | BOUNCE_Ceilings | BOUNCE_Actors | BOUNCE_AutoOff | BOUNCE_HereticType | BOUNCE_MBF,
+
+	// The three "standard" types of bounciness are:
+	// HERETIC - Missile will only bounce off the floor once and then enter
+	//			 its death state. It does not bounce off walls at all.
+	// HEXEN -	 Missile bounces off of walls and floors indefinitely.
+	// DOOM -	 Like Hexen, but the bounce turns off if its vertical velocity
+	//			 is too low.
+	BOUNCE_None = 0,
+	BOUNCE_Heretic = BOUNCE_Floors | BOUNCE_Ceilings | BOUNCE_HereticType,
+	BOUNCE_Doom = BOUNCE_Walls | BOUNCE_Floors | BOUNCE_Ceilings | BOUNCE_Actors | BOUNCE_AutoOff,
+	BOUNCE_Hexen = BOUNCE_Walls | BOUNCE_Floors | BOUNCE_Ceilings | BOUNCE_Actors,
+	BOUNCE_Grenade = BOUNCE_MBF | BOUNCE_Doom,		// Bounces on walls and flats like ZDoom bounce.
+	BOUNCE_Classic = BOUNCE_MBF | BOUNCE_Floors | BOUNCE_Ceilings,	// Bounces on flats only, but 
+																	// does not die when bouncing.
 
 	// combined types
 	BOUNCE_DoomCompat = BOUNCE_Doom | BOUNCE_UseSeeSound,
 	BOUNCE_HereticCompat = BOUNCE_Heretic | BOUNCE_UseSeeSound,
-	BOUNCE_HexenCompat = BOUNCE_Hexen | BOUNCE_UseSeeSound,
+	BOUNCE_HexenCompat = BOUNCE_Hexen | BOUNCE_UseSeeSound
+
+	// The distinction between BOUNCE_Actors and BOUNCE_AllActors: A missile with
+	// BOUNCE_Actors set will bounce off of reflective and "non-sentient" actors.
+	// A missile that also has BOUNCE_AllActors set will bounce off of any actor.
+	// For compatibility reasons when BOUNCE_Actors was implied by the bounce type
+	// being "Doom" or "Hexen" and BOUNCE_AllActors was the separate
+	// MF5_BOUNCEONACTORS, you must set BOUNCE_Actors for BOUNCE_AllActors to have
+	// an effect.
+
+
+};
+
+// Used to affect the logic for thing activation through death, USESPECIAL and BUMPSPECIAL
+// "thing" refers to what has the flag and the special, "trigger" refers to what used or bumped it
+enum EThingSpecialActivationType
+{
+	THINGSPEC_Default			= 0,		// Normal behavior: a player must be the trigger, and is the activator
+	THINGSPEC_ThingActs			= 1,		// The thing itself is the activator of the special
+	THINGSPEC_ThingTargets		= 1<<1,		// The thing changes its target to the trigger
+	THINGSPEC_TriggerTargets	= 1<<2,		// The trigger changes its target to the thing
+	THINGSPEC_MonsterTrigger	= 1<<3,		// The thing can be triggered by a monster
+	THINGSPEC_MissileTrigger	= 1<<4,		// The thing can be triggered by a projectile
+	THINGSPEC_ClearSpecial		= 1<<5,		// Clears special after successful activation
+	THINGSPEC_NoDeathSpecial	= 1<<6,		// Don't activate special on death
+	THINGSPEC_TriggerActs		= 1<<7,		// The trigger is the activator of the special
+											// (overrides LEVEL_ACTOWNSPECIAL Hexen hack)
+	THINGSPEC_Activate			= 1<<8,		// The thing is activated when triggered
+	THINGSPEC_Deactivate		= 1<<9,		// The thing is deactivated when triggered
+	THINGSPEC_Switch			= 1<<10,	// The thing is alternatively activated and deactivated when triggered
 };
 
 // [RH] Like msecnode_t, but for the blockmap
@@ -556,7 +630,6 @@ enum
 	AMETA_BloodColor,		// colorized blood
 	AMETA_GibHealth,		// negative health below which this monster dies an extreme death
 	AMETA_WoundHealth,		// health needed to enter wound state
-	AMETA_PoisonDamage,		// Amount of poison damage
 	AMETA_FastSpeed,		// Speed in fast mode
 	AMETA_RDFactor,			// Radius damage factor
 	AMETA_CameraHeight,		// Height of camera when used as such
@@ -622,6 +695,7 @@ public:
 
 	// BeginPlay: Called just after the actor is created
 	virtual void BeginPlay ();
+	virtual void PostBeginPlay ();
 	// LevelSpawned: Called after BeginPlay if this actor was spawned by the world
 	virtual void LevelSpawned ();
 	// Translates SpawnFlags into in-game flags.
@@ -633,9 +707,6 @@ public:
 	virtual bool IsActive( void );
 
 	virtual void Tick ();
-
-	// Smallest yaw interval for a mapthing to be spawned with
-	virtual angle_t AngleIncrements ();
 
 	// Called when actor dies
 	virtual void Die (AActor *source, AActor *inflictor);
@@ -665,7 +736,7 @@ public:
 	virtual bool SpecialBlastHandling (AActor *source, fixed_t strength);
 
 	// Called by RoughBlockCheck
-	virtual bool IsOkayToAttack (AActor *target);
+	bool IsOkayToAttack (AActor *target);
 
 	// Plays the actor's ActiveSound if its voice isn't already making noise.
 	void PlayActiveSound ();
@@ -701,7 +772,7 @@ public:
 	bool CheckLocalView (int playernum) const;
 
 	// Finds the first item of a particular type.
-	AInventory *FindInventory (const PClass *type);
+	AInventory *FindInventory (const PClass *type, bool subclass = false);
 	AInventory *FindInventory (FName type);
 	template<class T> T *FindInventory ()
 	{
@@ -731,13 +802,16 @@ public:
 	void ConversationAnimation (int animnum);
 
 	// Make this actor hate the same things as another actor
-	void CopyFriendliness (AActor *other, bool changeTarget);
+	void CopyFriendliness (AActor *other, bool changeTarget, bool resetHealth=true);
 
 	// Moves the other actor's inventory to this one
 	void ObtainInventory (AActor *other);
 
 	// Die. Now.
 	virtual bool Massacre ();
+
+	// Transforms the actor into a finely-ground paste
+	bool Grind(bool items);
 
 	// Is the other actor on my team?
 	bool IsTeammate (AActor *other);
@@ -754,6 +828,14 @@ public:
 	// Enter the crash state
 	void Crash();
 
+	// Return starting health adjusted by skill level
+	int SpawnHealth();
+
+	inline bool isMissile(bool precise=true)
+	{
+		return (flags&MF_MISSILE) || (precise && GetDefault()->flags&MF_MISSILE);
+	}
+
 	// Check for monsters that count as kill but excludes all friendlies.
 	bool CountsAsKill() const
 	{
@@ -766,10 +848,39 @@ public:
 		return ( abs(x - other->x) < blockdist && abs(y - other->y) < blockdist);
 	}
 
+	PalEntry GetBloodColor() const
+	{
+		return (PalEntry)GetClass()->Meta.GetMetaInt(AMETA_BloodColor);
+	}
+
+	const PClass *GetBloodType(int type = 0) const
+	{
+		if (type == 0)
+		{
+			return PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType, NAME_Blood));
+		}
+		else if (type == 1)
+		{
+			return PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType2, NAME_BloodSplatter));
+		}
+		else if (type == 2)
+		{
+			return  PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType3, NAME_AxeBlood));
+		}
+		else return NULL;
+	}
+
 	// Calculate amount of missile damage
 	virtual int GetMissileDamage(int mask, int add);
 
 	bool CanSeek(AActor *target) const;
+
+	fixed_t GetGravity() const;
+	bool IsSentient() const;
+	const char *GetTag(const char *def = NULL) const;
+
+	// Triggers SECSPAC_Exit/SECSPAC_Enter and related events if oldsec != current sector
+	void CheckSectorTransition(sector_t *oldsec);
 
 // info for drawing
 // NOTE: The first member variable *must* be x.
@@ -799,7 +910,7 @@ public:
 	FTextureID		ceilingpic;			// contacted sec ceilingpic
 	fixed_t			radius, height;		// for movement checking
 	fixed_t			projectilepassheight;	// height for clipping projectile movement against this actor
-	fixed_t			momx, momy, momz;	// momentums
+	fixed_t			velx, vely, velz;	// velocity
 	SDWORD			tics;				// state tic counter
 	FState			*state;
 	SDWORD			Damage;			// For missiles and monster railgun
@@ -835,9 +946,10 @@ public:
 	BYTE			movedir;		// 0-7
 	SBYTE			visdir;
 	SWORD			movecount;		// when 0, select a new dir
+	SWORD			strafecount;	// for MF3_AVOIDMELEE
 	TObjPtr<AActor> target;			// thing being chased/attacked (or NULL)
 									// also the originator for missiles
-	TObjPtr<AActor>	lastenemy;		// Last known enemy -- killogh 2/15/98
+	TObjPtr<AActor>	lastenemy;		// Last known enemy -- killough 2/15/98
 	TObjPtr<AActor> LastHeard;		// [RH] Last actor this one heard
 	SDWORD			reactiontime;	// if non 0, don't attack yet; used by
 									// player to freeze a bit after teleporting
@@ -847,9 +959,11 @@ public:
 	TObjPtr<AActor>	LastLookActor;	// Actor last looked for (if TIDtoHate != 0)
 	fixed_t			SpawnPoint[3]; 	// For nightmare respawn
 	WORD			SpawnAngle;
+	BYTE			WeaveIndexXY;	// Separated from special2 because it's used by globally accessible functions.
+	BYTE			WeaveIndexZ;
 	int				skillrespawncount;
 	int				TIDtoHate;			// TID of things to hate (0 if none)
-	FNameNoInit		Species;
+	FNameNoInit		Species;		// For monster families
 	TObjPtr<AActor>	tracer;			// Thing being chased/attacked for tracers
 	TObjPtr<AActor>	master;			// Thing which spawned this one (prevents mutual attacks)
 	fixed_t			floorclip;		// value to use for floor clipping
@@ -866,30 +980,37 @@ public:
 	BYTE			boomwaterlevel;	// splash information for non-swimmable water sectors
 	BYTE			MinMissileChance;// [RH] If a random # is > than this, then missile attack.
 	SBYTE			LastLookPlayerNumber;// Player number last looked for (if TIDtoHate == 0)
+	WORD			BounceFlags;	// which bouncing type?
 	WORD			SpawnFlags;
 	fixed_t			meleerange;		// specifies how far a melee attack reaches.
 	fixed_t			meleethreshold;	// Distance below which a monster doesn't try to shoot missiles anynore
 									// but instead tries to come closer for a melee attack.
 									// This is not the same as meleerange
 	fixed_t			maxtargetrange;	// any target farther away cannot be attacked
-	int				bouncetype;		// which bouncing type?
 	fixed_t			bouncefactor;	// Strife's grenades use 50%, Hexen's Flechettes 70.
 	fixed_t			wallbouncefactor;	// The bounce factor for walls can be different.
 	int				bouncecount;	// Strife's grenades only bounce twice before exploding
 	fixed_t			gravity;		// [GRB] Gravity factor
 	int 			FastChaseStrafeCount;
+	fixed_t			pushfactor;
+	int				lastpush;
 	int				DesignatedTeam;	// Allow for friendly fire cacluations to be done on non-players.
+	int				activationtype;	// How the thing behaves when activated with USESPECIAL or BUMPSPECIAL
+	int				lastbump;		// Last time the actor was bumped, used to control BUMPSPECIAL
+	int				Score;			// manipulated by score items, ACS or DECORATE. The engine doesn't use this itself for anything.
+	FNameNoInit		Tag;			// Strife's tag name. FIXME: should be case sensitive!
 
 	AActor			*BlockingMobj;	// Actor that blocked the last move
 	line_t			*BlockingLine;	// Line that blocked the last move
 
-	// [KS] These temporary-use properties are needed to allow A_LookEx to pass its parameters to
-	// LookFor*InBlock in P_BlockmapSearch so that friendly enemies and monsters that look for
-	// other monsters can find their targets properly. If there's a cleaner way of doing this,
-	// feel free to remove these and use that method instead.
-	fixed_t			LookExMinDist;	// Minimum sight distance
-	fixed_t			LookExMaxDist;	// Maximum sight distance
-	angle_t			LookExFOV;		// Field of Vision
+	int PoisonDamage; // Damage received per tic from poison.
+	int PoisonDuration; // Duration left for receiving poison damage.
+	int PoisonPeriod; // How often poison damage is applied. (Every X tics.)
+
+	int PoisonDamageReceived; // Damage received per tic from poison.
+	int PoisonDurationReceived; // Duration left for receiving poison damage.
+	int PoisonPeriodReceived; // How often poison damage is applied. (Every X tics.)
+	TObjPtr<AActor> Poisoner; // Last source of received poison damage.
 
 	// a linked list of sectors where this object appears
 	struct msecnode_t	*touching_sectorlist;				// phares 3/14/98
@@ -914,13 +1035,16 @@ public:
 	FSoundIDNoInit UseSound;		// [RH] Sound to play when an actor is used.
 	FSoundIDNoInit BounceSound;
 	FSoundIDNoInit WallBounceSound;
+	FSoundIDNoInit CrushPainSound;
 
 	fixed_t Speed;
 	fixed_t FloatSpeed;
 	fixed_t MaxDropOffHeight, MaxStepHeight;
 	SDWORD Mass;
 	SWORD PainChance;
+	int PainThreshold;
 	FNameNoInit DamageType;
+	fixed_t DamageFactor;
 
 	FState *SpawnState;
 	FState *SeeState;
@@ -958,6 +1082,7 @@ public:
 
 	// [RH] Used to interpolate the view to get >35 FPS
 	fixed_t PrevX, PrevY, PrevZ;
+	angle_t PrevAngle;
 
 	// [BB] Last tic in which the server sent a xyz-position / movedir update about this actor to the clients.
 	int	lastNetXUpdateTic, lastNetYUpdateTic, lastNetZUpdateTic, lastNetMomXUpdateTic, lastNetMomYUpdateTic, lastNetMomZUpdateTic, lastNetMovedirUpdateTic;
@@ -981,6 +1106,7 @@ private:
 	static inline int TIDHASH (int key) { return key & 127; }
 
 	friend class FActorIterator;
+	friend bool P_IsTIDUsed(int tid);
 
 	sector_t *LinkToWorldForMapThing ();
 
@@ -992,8 +1118,7 @@ public:
 	void SetOrigin (fixed_t x, fixed_t y, fixed_t z);
 	bool InStateSequence(FState * newstate, FState * basestate);
 	int GetTics(FState * newstate);
-	bool SetState (FState *newstate);
-	bool SetStateNF (FState *newstate);
+	bool SetState (FState *newstate, bool nofunction=false);
 	// [BB] Free the network ID of the actor.
 	void FreeNetID ();
 	// [BB] Completely hides the actor if it's still needed for a map reset, otherwise destroys the actor.
@@ -1097,18 +1222,25 @@ public:
 	}
 };
 
+bool P_IsTIDUsed(int tid);
+int P_FindUniqueTID(int start_tid, int limit);
+
 inline AActor *Spawn (const PClass *type, fixed_t x, fixed_t y, fixed_t z, replace_t allowreplacement)
 {
 	return AActor::StaticSpawn (type, x, y, z, allowreplacement);
 }
 
 AActor *Spawn (const char *type, fixed_t x, fixed_t y, fixed_t z, replace_t allowreplacement);
+AActor *Spawn (FName classname, fixed_t x, fixed_t y, fixed_t z, replace_t allowreplacement);
 
 template<class T>
 inline T *Spawn (fixed_t x, fixed_t y, fixed_t z, replace_t allowreplacement)
 {
 	return static_cast<T *>(AActor::StaticSpawn (RUNTIME_CLASS(T), x, y, z, allowreplacement));
 }
+
+
+void PrintMiscActorInfo(AActor * query);
 
 #define S_FREETARGMOBJ	1
 

@@ -44,6 +44,7 @@
 #include "m_random.h"
 #include "m_crc32.h"
 #include "i_system.h"
+#include "i_input.h"
 #include "p_saveg.h"
 #include "p_tick.h"
 #include "d_main.h"
@@ -77,6 +78,7 @@
 #include "d_net.h"
 #include "d_event.h"
 #include "p_acs.h"
+#include "m_joy.h"
 // [BB] New #includes.
 #include "network.h"
 #include "chat.h"
@@ -105,10 +107,11 @@
 #include "statnums.h"
 #include "domination.h"
 #include "win32/g15/g15.h"
-#include "gl/gl_lights.h"
+#include "gl/dynlights/gl_dynlight.h"
 #include "unlagged.h"
 #include "p_3dmidtex.h"
 #include "a_lightning.h"
+#include "po_man.h"
 
 #include <zlib.h>
 
@@ -139,6 +142,24 @@ CVAR (Bool, chasedemo, false, 0);
 CVAR (Bool, storesavepic, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool, longsavemessages, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (String, save_dir, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
+EXTERN_CVAR (Float, con_midtime);
+
+//==========================================================================
+//
+// CVAR displaynametags
+//
+// Selects whether to display name tags or not when changing weapons/items
+//
+//==========================================================================
+
+CUSTOM_CVAR (Int, displaynametags, 0, CVAR_ARCHIVE)
+{
+	if (self < 0 || self > 3)
+	{
+		self = 0;
+	}
+}
+
 
 gameaction_t	gameaction;
 gamestate_t 	gamestate = GS_STARTUP;
@@ -317,19 +338,8 @@ CCMD (slot)
 
 		if (slot < NUM_WEAPON_SLOTS)
 		{
-			SendItemUse = players[consoleplayer].weapons.Slots[slot].PickWeapon (&players[consoleplayer]);
-
-			// [BC] This can be NULL if we're a spectator.
-			if ( SendItemUse == NULL )
-				return;
-
-			// [BC] If we're the client, switch to this weapon right now, since the whole
-			// DEM_, etc. network code isn't ever executed.
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) &&
-				( CLIENT_GetConnectionState( ) == CTS_ACTIVE ))
-			{
-				players[consoleplayer].mo->UseInventory( (AInventory *)SendItemUse );
-			}
+			SendItemUse = players[consoleplayer].weapons.Slots[slot].PickWeapon (&players[consoleplayer], 
+				!(dmflags2 & DF2_DONTCHECKAMMO));
 		}
 	}
 }
@@ -368,7 +378,7 @@ CCMD(crouch)
 CCMD (land)
 {
 	// [BB] Landing is not allowed, so don't do anything.
-	if ( compatflags2 & COMPATF2_NO_LAND )
+	if ( zacompatflags & ZACOMPATF_NO_LAND )
 		return;
 
 	SendLand = true;
@@ -390,82 +400,40 @@ CVAR( Bool, sv_useteamstartsindm, false, CVAR_SERVERINFO )
 // [BB] In cooperative game modes players are spawned at random player starts instead of the one designated for them.
 CVAR( Bool, sv_randomcoopstarts, false, CVAR_SERVERINFO )
 
-// [BC] New cvar that shows the name of the weapon we're cycling to.
-CVAR( Bool, cl_showweapnameoncycle, true, CVAR_ARCHIVE )
-
-// [BB] Helper function that collects the duplicate code of weapnext and weapprev
-void SelectWeaponAndDisplayName ( AWeapon *pSelectedWeapon )
-{
-	// [BB] No weapnext/weapprev while playing a demo.
-	if ( CLIENTDEMO_IsPlaying( ) == true )
-	{
-		Printf ( "You can't use weapnext or weapprev during demo playback.\n" );
-		return;
-	}
-
-	// [BC] This can be NULL if we're a spectator.
-	if ( pSelectedWeapon == NULL )
-		return;
-
-	// [BC] If we're the client, switch to this weapon right now, since the whole
-	// DEM_, etc. network code isn't ever executed.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( demorecording == false ))
-	{
-		players[consoleplayer].mo->UseInventory( pSelectedWeapon );
-
-		// [BB] We didn't change our weapon, so there is nothing to do.
-		if ( ( players[consoleplayer].PendingWeapon == WP_NOCHANGE )
-			 || ( players[consoleplayer].PendingWeapon == NULL ) )
-		{
-			return;
-		}
-
-		// [BB] UseInventory may select the sister weapon, take this into account here.
-		if ( ( players[consoleplayer].PendingWeapon != pSelectedWeapon )
-			 && ( players[consoleplayer].PendingWeapon->SisterWeaponType != pSelectedWeapon->GetClass() )
-			)
-		{
-			return;
-		}
-	}
-	else
-		SendItemUse = pSelectedWeapon;
-
-	// [BC] Option to display the name of the weapon being cycled to.
-	if ( cl_showweapnameoncycle && ( players[consoleplayer].PendingWeapon != NULL )
-	     && ( players[consoleplayer].PendingWeapon != WP_NOCHANGE ) )
-	{
-		char				szString[64];
-		DHUDMessageFadeOut	*pMsg;
-		
-		// Build the string and text color;
-		sprintf( szString, "%s", players[consoleplayer].PendingWeapon->GetClass( )->TypeName.GetChars( ));
-		pMsg = new DHUDMessageFadeOut( SmallFont, szString,
-			1.5f,
-			gameinfo.gametype == GAME_Doom ? 0.96f : 0.95f,
-			0,
-			0,
-			CR_GOLD,
-			2.f,
-			0.35f );
-
-		StatusBar->AttachMessage( pMsg, MAKE_ID( 'P', 'N', 'A', 'M' ));
-	}
-}
-
 CCMD (weapnext)
 {
-	// [BB] Skulltag does this a little differently from ZDoom.
-	AWeapon	*pSelectedWeapon = players[consoleplayer].weapons.PickNextWeapon (&players[consoleplayer]);
-	SelectWeaponAndDisplayName ( pSelectedWeapon );
+	// [BB] No weapnext while playing a demo.
+	if ( CLIENTDEMO_IsPlaying( ) == true )
+	{
+		Printf ( "You can't use weapnext during demo playback.\n" );
+		return;
+	}
+
+	SendItemUse = players[consoleplayer].weapons.PickNextWeapon (&players[consoleplayer]);
+ 	// [BC] Option to display the name of the weapon being cycled to.
+ 	if ((displaynametags & 2) && StatusBar && SmallFont && SendItemUse)
+ 	{
+ 		StatusBar->AttachMessage(new DHUDMessageFadeOut(SmallFont, SendItemUse->GetTag(),
+ 			1.5f, 0.90f, 0, 0, CR_GOLD, 2.f, 0.35f), MAKE_ID( 'W', 'E', 'P', 'N' ));
+ 	}
 }
 
 CCMD (weapprev)
 {
-	// [BB] Skulltag does this a little differently from ZDoom.
-	AWeapon	*pSelectedWeapon = players[consoleplayer].weapons.PickPrevWeapon (&players[consoleplayer]);
-	SelectWeaponAndDisplayName ( pSelectedWeapon );
+	// [BB] No weapprev while playing a demo.
+	if ( CLIENTDEMO_IsPlaying( ) == true )
+	{
+		Printf ( "You can't use weapprev during demo playback.\n" );
+		return;
+	}
+
+	SendItemUse = players[consoleplayer].weapons.PickPrevWeapon (&players[consoleplayer]);
+ 	// [BC] Option to display the name of the weapon being cycled to.
+ 	if ((displaynametags & 2) && StatusBar && SmallFont && SendItemUse)
+ 	{
+ 		StatusBar->AttachMessage(new DHUDMessageFadeOut(SmallFont, SendItemUse->GetTag(),
+ 			1.5f, 0.90f, 0, 0, CR_GOLD, 2.f, 0.35f), MAKE_ID( 'W', 'E', 'P', 'N' ));
+ 	}
 }
 
 CCMD (invnext)
@@ -493,6 +461,9 @@ CCMD (invnext)
 				who->InvSel = who->Inventory;
 			}
 		}
+		if ((displaynametags & 1) && StatusBar && SmallFont && who->InvSel)
+			StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, who->InvSel->GetTag(), 
+			1.5f, 0.80f, 0, 0, CR_GOLD, 2.f, 0.35f), MAKE_ID('S','I','N','V'));
 	}
 	who->player->inventorytics = 5*TICRATE;
 }
@@ -520,42 +491,25 @@ CCMD (invprev)
 			}
 			who->InvSel = item;
 		}
+		if ((displaynametags & 1) && StatusBar && SmallFont && who->InvSel)
+			StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, who->InvSel->GetTag(), 
+			1.5f, 0.80f, 0, 0, CR_GOLD, 2.f, 0.35f), MAKE_ID('S','I','N','V'));
 	}
 	who->player->inventorytics = 5*TICRATE;
 }
 
 CCMD (invuseall)
 {
-	// [BB] If we are a client, we have to bypass the way ZDoom handles the item usage.
-	if( NETWORK_GetState( ) == NETSTATE_CLIENT )
-		CLIENTCOMMANDS_RequestInventoryUseAll();
-	else
-		SendItemUse = (const AInventory *)1;
+	SendItemUse = (const AInventory *)1;
 }
 
 CCMD (invuse)
 {
-	// [BB] If we are a client, we have to bypass the way ZDoom handles the item usage.
-	if( NETWORK_GetState( ) == NETSTATE_CLIENT )
+	if (players[consoleplayer].inventorytics == 0 || gameinfo.gametype == GAME_Strife)
 	{
-		if ( players[consoleplayer].inventorytics == 0 || gameinfo.gametype == GAME_Strife )
-		{
-			if (players[consoleplayer].mo)
-			{
-				AInventory *item = players[consoleplayer].mo->InvSel;
-				CLIENTCOMMANDS_RequestInventoryUse( item );
-			}
-		}
-		players[consoleplayer].inventorytics = 0;
+		if (players[consoleplayer].mo) SendItemUse = players[consoleplayer].mo->InvSel;
 	}
-	else
-	{
-		if (players[consoleplayer].inventorytics == 0 || gameinfo.gametype == GAME_Strife)
-		{
-			if (players[consoleplayer].mo) SendItemUse = players[consoleplayer].mo->InvSel;
-		}
-		players[consoleplayer].inventorytics = 0;
-	}
+	players[consoleplayer].inventorytics = 0;
 }
 
 CCMD(invquery)
@@ -563,29 +517,15 @@ CCMD(invquery)
 	AInventory *inv = players[consoleplayer].mo->InvSel;
 	if (inv != NULL)
 	{
-		const char *description = inv->GetClass()->Meta.GetMetaString(AMETA_StrifeName);
-		if (description == NULL) description = inv->GetClass()->TypeName;
-		Printf(PRINT_HIGH, "%s (%dx)\n", description, inv->Amount);
+		Printf(PRINT_HIGH, "%s (%dx)\n", inv->GetTag(), inv->Amount);
 	}
 }
 
 CCMD (use)
 {
-	// [BB] If we are a client, we have to bypass the way ZDoom handles the item usage.
-	if( NETWORK_GetState( ) == NETSTATE_CLIENT )
+	if (argv.argc() > 1 && who != NULL)
 	{
-		if (argv.argc() > 1)
-		{
-			AInventory *item = who->FindInventory (PClass::FindClass (argv[1]));
-			CLIENTCOMMANDS_RequestInventoryUse( item );
-		}
-	}
-	else
-	{
-		if (argv.argc() > 1 && who != NULL)
-		{
-			SendItemUse = who->FindInventory (PClass::FindClass (argv[1]));
-		}
+		SendItemUse = who->FindInventory (PClass::FindClass (argv[1]));
 	}
 }
 
@@ -651,10 +591,7 @@ CCMD (useflechette)
 		AInventory *item;
 		if ( (item = who->FindInventory (bagnames[(i+j)%3])) )
 		{
-			if( NETWORK_GetState( ) == NETSTATE_CLIENT )
-				CLIENTCOMMANDS_RequestInventoryUse( item );
-			else
-				SendItemUse = item;
+			SendItemUse = item;
 			break;
 		}
 	}
@@ -675,6 +612,18 @@ CCMD (select)
 		}
 	}
 	who->player->inventorytics = 5*TICRATE;
+}
+
+static inline int joyint(double val)
+{
+	if (val >= 0)
+	{
+		return int(ceil(val));
+	}
+	else
+	{
+		return int(floor(val));
+	}
 }
 
 //
@@ -796,22 +745,39 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 	if (Button_MoveUp.bDown)		cmd->ucmd.buttons |= BT_MOVEUP;
 	if (Button_ShowScores.bDown)	cmd->ucmd.buttons |= BT_SHOWSCORES;
 
-	// [RH] Scale joystick moves to full range of allowed speeds
-	if (JoyAxes[JOYAXIS_PITCH] != 0)
+	// Handle joysticks/game controllers.
+	float joyaxes[NUM_JOYAXIS];
+
+	I_GetAxes(joyaxes);
+
+	// Remap some axes depending on button state.
+	if (Button_Strafe.bDown || (Button_Mlook.bDown && lookstrafe))
 	{
-		G_AddViewPitch (int((JoyAxes[JOYAXIS_PITCH] * 2048) / 256));
+		joyaxes[JOYAXIS_Side] = joyaxes[JOYAXIS_Yaw];
+		joyaxes[JOYAXIS_Yaw] = 0;
+	}
+	if (Button_Mlook.bDown)
+	{
+		joyaxes[JOYAXIS_Pitch] = joyaxes[JOYAXIS_Forward];
+		joyaxes[JOYAXIS_Forward] = 0;
+	}
+
+	if (joyaxes[JOYAXIS_Pitch] != 0)
+	{
+		G_AddViewPitch(joyint(joyaxes[JOYAXIS_Pitch] * 2048));
 		LocalKeyboardTurner = true;
 	}
-	if (JoyAxes[JOYAXIS_YAW] != 0)
+	if (joyaxes[JOYAXIS_Yaw] != 0)
 	{
-		G_AddViewAngle (int((-1280 * JoyAxes[JOYAXIS_YAW]) / 256));
+		G_AddViewAngle(joyint(-1280 * joyaxes[JOYAXIS_Yaw]));
 		LocalKeyboardTurner = true;
 	}
 
-	side += int((MAXPLMOVE * JoyAxes[JOYAXIS_SIDE]) / 256);
-	forward += int((JoyAxes[JOYAXIS_FORWARD] * MAXPLMOVE) / 256);
-	fly += int(JoyAxes[JOYAXIS_UP] * 8);
+	side -= joyint(sidemove[speed] * joyaxes[JOYAXIS_Side]);
+	forward += joyint(joyaxes[JOYAXIS_Forward] * forwardmove[speed]);
+	fly += joyint(joyaxes[JOYAXIS_Up] * 2048);
 
+	// Handle mice.
 	if (!Button_Mlook.bDown && !freelook)
 	{
 		forward += (int)((float)mousey * m_forward);
@@ -830,6 +796,7 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 
 	mousex = mousey = 0;
 
+	// Build command.
 	if (forward > MAXPLMOVE)
 		forward = MAXPLMOVE;
 	else if (forward < -MAXPLMOVE)
@@ -865,16 +832,20 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 		Net_WriteString (savedescription);
 		savegamefile = "";
 	}
-	if (SendItemUse == (const AInventory *)1)
+	// [TP] Don't do this in client mode
+	if ( NETWORK_InClientMode() == false )
 	{
-		Net_WriteByte (DEM_INVUSEALL);
-		SendItemUse = NULL;
-	}
-	else if (SendItemUse != NULL)
-	{
-		Net_WriteByte (DEM_INVUSE);
-		Net_WriteLong (SendItemUse->InventoryID);
-		SendItemUse = NULL;
+		if (SendItemUse == (const AInventory *)1)
+		{
+			Net_WriteByte (DEM_INVUSEALL);
+			SendItemUse = NULL;
+		}
+		else if (SendItemUse != NULL)
+		{
+			Net_WriteByte (DEM_INVUSE);
+			Net_WriteLong (SendItemUse->InventoryID);
+			SendItemUse = NULL;
+		}
 	}
 	if (SendItemDrop != NULL)
 	{
@@ -1007,7 +978,7 @@ static void ChangeSpy (bool forward)
 	}
 
 	// Otherwise, cycle to the next player.
-	int pnum = players[consoleplayer].camera->player - players;
+	int pnum = int(players[consoleplayer].camera->player - players);
 	int step = forward ? 1 : -1;
 
 	// [SP] Let's ignore special LMS settigns if we're playing a demo. Otherwise, we need to enforce
@@ -1228,7 +1199,7 @@ bool G_Responder (event_t *ev)
 				stricmp (cmd, "bumpgamma") &&
 				stricmp (cmd, "screenshot")))
 			{
-				M_StartControlPanel (true);
+				M_StartControlPanel (true, true);
 				return true;
 			}
 			else
@@ -1892,7 +1863,9 @@ void G_Ticker ()
 // G_PlayerFinishLevel
 // Called when a player completes a level.
 //
-void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory)
+// flags is checked for RESETINVENTORY and RESETHEALTH only.
+
+void G_PlayerFinishLevel (int player, EFinishLevelType mode, int flags)
 {
 	AInventory *item, *next;
 	player_t *p;
@@ -1910,7 +1883,8 @@ void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory
 		next = item->Inventory;
 		if (item->IsKindOf (RUNTIME_CLASS(APowerup)))
 		{
-			if (deathmatch || mode != FINISH_SameHub || !(item->ItemFlags & IF_HUBPOWER))
+			if (deathmatch || ((mode != FINISH_SameHub || !(item->ItemFlags & IF_HUBPOWER))
+				&& !(item->ItemFlags & IF_PERSISTENTPOWER))) // Keep persistent powers in non-deathmatch games
 			{
 				item->Destroy ();
 			}
@@ -1928,7 +1902,8 @@ void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory
 	p->mo->RenderStyle = STYLE_Normal;
 	p->mo->alpha = FRACUNIT;
 	p->extralight = 0;					// cancel gun flashes
-	p->fixedcolormap = 0;				// cancel ir goggles
+	p->fixedcolormap = NOFIXEDCOLORMAP;	// cancel ir goggles
+	p->fixedlightlevel = -1;
 	p->damagecount = 0; 				// no palette changes
 	p->bonuscount = 0;
 	p->poisoncount = 0;
@@ -1941,7 +1916,7 @@ void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory
 		while (item != NULL)
 		{
 			next = item->Inventory;
-			if (item->ItemFlags & IF_INTERHUBSTRIP)
+			if (item->InterHubAmount < 1)
 			{
 				item->Destroy ();
 			}
@@ -1950,21 +1925,26 @@ void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory
 	}
 
 	if (mode == FINISH_NoHub && !(level.flags2 & LEVEL2_KEEPFULLINVENTORY))
-	{ // Reduce all owned (visible) inventory to 1 item each
+	{ // Reduce all owned (visible) inventory to defined maximum interhub amount
 		for (item = p->mo->Inventory; item != NULL; item = item->Inventory)
 		{
-			// There may be depletable items with an amount of 0.
-			// Those need to stay at 0; the rest get dropped to 1.
-			if (item->ItemFlags & IF_INVBAR && item->Amount > 1)
+			// If the player is carrying more samples of an item than allowed, reduce amount accordingly
+			if (item->ItemFlags & IF_INVBAR && item->Amount > item->InterHubAmount)
 			{
-				item->Amount = 1;
+				item->Amount = item->InterHubAmount;
 			}
 		}
 	}
 
 	if (p->morphTics)
 	{ // Undo morph
-		P_UndoPlayerMorph (p, p, true);
+		P_UndoPlayerMorph (p, p, 0, true);
+	}
+
+	// Resets player health to default
+	if (flags & CHANGELEVEL_RESETHEALTH)
+	{
+		p->health = p->mo->health = p->mo->SpawnHealth();
 	}
 
 	// [BC] Reset a bunch of other Skulltag stuff.
@@ -1976,7 +1956,7 @@ void G_PlayerFinishLevel (int player, EFinishLevelType mode, bool resetinventory
 	}
 
 	// Clears the entire inventory and gives back the defaults for starting a game
-	if (resetinventory)
+	if (flags & CHANGELEVEL_RESETINVENTORY)
 	{
 		AInventory *inv = p->mo->Inventory;
 
@@ -2096,7 +2076,7 @@ void G_PlayerReborn (int player, bool bGiveInventory)
 	p->LogText = log;
 	p->cheats |= chasecam;
 
-	p->oldbuttons = ~0, p->attackdown = true;	// don't do anything immediately
+	p->oldbuttons = ~0, p->attackdown = true; p->usedown = true;	// don't do anything immediately
 	p->original_oldbuttons = ~0;
 
 	p->bOnTeam = bOnTeam;
@@ -2120,8 +2100,6 @@ void G_PlayerReborn (int player, bool bGiveInventory)
 	p->ulPingAverages = ulPingAverages;
 	p->ulWins = ulWins;
 	p->ulTime = ulTime;
-	if ( lCheats & CF_FREEZE )
-		p->cheats |= CF_FREEZE;
 	// [BB] Players who were able to move while a APowerTimeFreezer is active,
 	// should also be able to do so after being reborn.
 	if ( lCheats & CF_TIMEFREEZE )
@@ -2682,17 +2660,13 @@ void G_DoReborn (int playernum, bool freshbot)
 					// fake as other player
 					// [RH] These numbers should be common across all games. Or better yet, not
 					// used at all outside P_SpawnMapThing().
-					if (playernum < 4 || gameinfo.gametype == GAME_Strife)
+					if (playernum < 4)
 					{
 						playerstarts[i].type = playernum + 1;
 					}
-					else if (gameinfo.gametype == GAME_Hexen)
-					{
-						playerstarts[i].type = playernum + 9100 - 4;
-					}
 					else
 					{
-						playerstarts[i].type = playernum + 4001 - 4;
+						playerstarts[i].type = playernum + gameinfo.player5start - 4;
 					}
 					AActor *mo = P_SpawnPlayer (&playerstarts[i]);
 					if (mo != NULL) P_PlayerStartStomp(mo);
@@ -3225,7 +3199,7 @@ void GAME_ResetMap( bool bRunEnterScripts )
 	GAMEMODE_ResetSpecalGamemodeStates();
 
 	// [BB] If a PowerTimeFreezer was in effect, the sound could be paused. Make sure that it is resumed.
-	S_ResumeSound();
+	S_ResumeSound( false );
 
 	// [BB] We are going to reset the map now, so any request for a reset is fulfilled.
 	g_bResetMap = false;
@@ -3296,9 +3270,9 @@ void GAME_ResetMap( bool bRunEnterScripts )
 			continue;
 
 		// [BB] Is this object being moved?
-		if ( ( pPoly->specialdata != NULL ) && pPoly->specialdata->IsKindOf ( RUNTIME_CLASS( DPolyAction ) ) )
+		if ( pPoly->specialdata != NULL )
 		{
-			DPolyAction *pPolyAction = static_cast<DPolyAction*> ( pPoly->specialdata );
+			DPolyAction *pPolyAction = pPoly->specialdata;
 			// [WS] We have a poly object door, lets destroy it.
 			if ( pPolyAction->IsKindOf ( RUNTIME_CLASS( DPolyDoor ) ) )
 			{
@@ -3336,10 +3310,10 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		if ( pPoly->bMoved )
 		{
 
-			const LONG lDeltaX = pPoly->SavedStartSpot[0] - pPoly->startSpot[0];
-			const LONG lDeltaY = pPoly->SavedStartSpot[1] - pPoly->startSpot[1];
+			const LONG lDeltaX = pPoly->SavedStartSpot[0] - pPoly->StartSpot.x;
+			const LONG lDeltaY = pPoly->SavedStartSpot[1] - pPoly->StartSpot.y;
 
-			PO_MovePolyobj( pPoly->tag, lDeltaX, lDeltaY, true );
+			pPoly->MovePolyobj( lDeltaX, lDeltaY, true );
 			pPoly->bMoved = false;
 
 			// [BB] If we're the server, tell clients about this polyobj reset.
@@ -3352,7 +3326,7 @@ void GAME_ResetMap( bool bRunEnterScripts )
 			// [BB] AFAIK a polyobj always starts with angle 0;
 			const LONG lDeltaAngle = 0 - pPoly->angle;
 
-			PO_RotatePolyobj( pPoly->tag, lDeltaAngle );
+			pPoly->RotatePolyobj( lDeltaAngle );
 			pPoly->bRotated = false;
 
 			// [BB] If we're the server, tell clients about this polyobj reset.
@@ -3374,18 +3348,18 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		// Also, restore any changed textures.
 		if ( lines[ulIdx].ulTexChangeFlags != 0 )
 		{
-			if ( lines[ulIdx].sidenum[0] != 0xffff )
+			if ( lines[ulIdx].sidedef[0] != NULL )
 			{
-				sides[lines[ulIdx].sidenum[0]].SetTexture(side_t::top, sides[lines[ulIdx].sidenum[0]].SavedTopTexture);
-				sides[lines[ulIdx].sidenum[0]].SetTexture(side_t::mid, sides[lines[ulIdx].sidenum[0]].SavedMidTexture);
-				sides[lines[ulIdx].sidenum[0]].SetTexture(side_t::bottom, sides[lines[ulIdx].sidenum[0]].SavedBottomTexture);
+				lines[ulIdx].sidedef[0]->SetTexture(side_t::top, lines[ulIdx].sidedef[0]->SavedTopTexture);
+				lines[ulIdx].sidedef[0]->SetTexture(side_t::mid, lines[ulIdx].sidedef[0]->SavedMidTexture);
+				lines[ulIdx].sidedef[0]->SetTexture(side_t::bottom, lines[ulIdx].sidedef[0]->SavedBottomTexture);
 			}
 
-			if ( lines[ulIdx].sidenum[1] != NO_SIDE )
+			if ( lines[ulIdx].sidedef[1] != NULL )
 			{
-				sides[lines[ulIdx].sidenum[1]].SetTexture(side_t::top, sides[lines[ulIdx].sidenum[1]].SavedTopTexture);
-				sides[lines[ulIdx].sidenum[1]].SetTexture(side_t::mid, sides[lines[ulIdx].sidenum[1]].SavedMidTexture);
-				sides[lines[ulIdx].sidenum[1]].SetTexture(side_t::bottom, sides[lines[ulIdx].sidenum[1]].SavedBottomTexture);
+				lines[ulIdx].sidedef[1]->SetTexture(side_t::top, lines[ulIdx].sidedef[1]->SavedTopTexture);
+				lines[ulIdx].sidedef[1]->SetTexture(side_t::mid, lines[ulIdx].sidedef[1]->SavedMidTexture);
+				lines[ulIdx].sidedef[1]->SetTexture(side_t::bottom, lines[ulIdx].sidedef[1]->SavedBottomTexture);
 			}
 
 			// If we're the server, tell clients about this texture change.
@@ -3650,9 +3624,17 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		SERVERCOMMANDS_SetMapMusic( SERVER_GetMapMusic( ));
 	}
 
-	// Reload the actors on this level.
+	// [BB] TThinkerIterator<AActor> doesn't seem to like if we create new actors while
+	// iterating. So just create a list with all current actors and then go through it.
+	TArray<AActor *> existingActors;
 	while (( pActor = ActorIterator.Next( )) != NULL )
+		existingActors.Push ( pActor );
+
+	// Reload the actors on this level.
+	for ( unsigned int i = 0; i < existingActors.Size(); ++i )
 	{
+		pActor = existingActors[i];
+
 		// Don't reload players.
 		// [BB] but reload voodoo dolls.
 		if ( pActor->IsKindOf( RUNTIME_CLASS( APlayerPawn )) && pActor->player && ( pActor->player->mo == pActor ) )
@@ -3938,7 +3920,7 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		if ( sectors[ulIdx].ceilingdata )
 		{
 			// Stop the sound sequence (if any) associated with this sector.
-			SN_StopSequence( &sectors[ulIdx] );
+			SN_StopSequence( &sectors[ulIdx], CHAN_CEILING );
 
 			sectors[ulIdx].ceilingdata->Destroy( );
 			sectors[ulIdx].ceilingdata = NULL;
@@ -3946,7 +3928,7 @@ void GAME_ResetMap( bool bRunEnterScripts )
 		if ( sectors[ulIdx].floordata )
 		{
 			// Stop the sound sequence (if any) associated with this sector.
-			SN_StopSequence( &sectors[ulIdx] );
+			SN_StopSequence( &sectors[ulIdx], CHAN_FLOOR );
 
 			sectors[ulIdx].floordata->Destroy( );
 			sectors[ulIdx].floordata = NULL;
@@ -4417,14 +4399,11 @@ FString G_BuildSaveName (const char *prefix, int slot)
 		{
 			leader = save_dir;
 		}
+		if (leader.IsEmpty())
+		{
 #ifdef unix
-		if (leader.IsEmpty())
-		{
 			leader = "~/" GAME_DIR;
-		}
 #elif defined(__APPLE__)
-		if (leader.IsEmpty())
-		{
 			char cpath[PATH_MAX];
 			FSRef folder;
 
@@ -4433,8 +4412,10 @@ FString G_BuildSaveName (const char *prefix, int slot)
 			{
 				leader << cpath << "/" GAME_DIR "/Savegames/";
 			}
-		}
+#else
+			leader = progdir;
 #endif
+		}
 	}
 	size_t len = leader.Len();
 	if (leader[0] != '\0' && leader[len-1] != '\\' && leader[len-1] != '/')
@@ -4777,18 +4758,14 @@ void G_WriteDemoTiccmd (ticcmd_t *cmd, int player, int buf)
 //
 // G_RecordDemo
 //
-void G_RecordDemo (char* name)
+void G_RecordDemo (const char* name)
 {
-	char *v;
-
 	usergame = false;
 	strcpy (demoname, name);
 	FixPathSeperator (demoname);
 	DefaultExtension (demoname, ".lmp");
-	v = Args->CheckValue ("-maxdemo");
 	maxdemosize = 0x20000;
 	demobuffer = (BYTE *)M_Malloc (maxdemosize);
-
 	demorecording = true; 
 }
 
@@ -5039,7 +5016,7 @@ bool G_ProcessIFFDemo (char *mapname)
 	if (uncompSize > 0)
 	{
 		BYTE *uncompressed = new BYTE[uncompSize];
-		int r = uncompress (uncompressed, &uncompSize, demo_p, zdembodyend - demo_p);
+		int r = uncompress (uncompressed, &uncompSize, demo_p, uLong(zdembodyend - demo_p));
 		if (r != Z_OK)
 		{
 			Printf ("Could not decompress demo!\n");
@@ -5137,7 +5114,7 @@ void G_DoPlayDemo (void)
 //
 // G_TimeDemo
 //
-void G_TimeDemo (char* name)
+void G_TimeDemo (const char* name)
 {
 	nodrawers = !!Args->CheckParm ("-nodraw");
 	noblit = !!Args->CheckParm ("-noblit");
@@ -5229,7 +5206,7 @@ bool G_CheckDemoStatus (void)
 			// a compressed version. If the BODY successfully compresses, the
 			// contents of the COMP chunk will be changed to indicate the
 			// uncompressed size of the BODY.
-			uLong len = demo_p - demobodyspot;
+			uLong len = uLong(demo_p - demobodyspot);
 			uLong outlen = (len + len/100 + 12);
 			Byte *compressed = new Byte[outlen];
 			int r = compress2 (compressed, &outlen, demobodyspot, len, 9);
@@ -5244,9 +5221,9 @@ bool G_CheckDemoStatus (void)
 		}
 		FinishChunk (&demo_p);
 		formlen = demobuffer + 4;
-		WriteLong (demo_p - demobuffer - 8, &formlen);
+		WriteLong (int(demo_p - demobuffer - 8), &formlen);
 
-		M_WriteFile (demoname, demobuffer, demo_p - demobuffer); 
+		M_WriteFile (demoname, demobuffer, int(demo_p - demobuffer)); 
 		M_Free (demobuffer); 
 		demorecording = false;
 		stoprecording = false;
@@ -5280,8 +5257,8 @@ CCMD( freeze )
 		Printf( "Freeze mode %s\n", ( level.flags2 & LEVEL2_FROZEN ) ? "ON" : "OFF" );
 
 		if ( level.flags2 & LEVEL2_FROZEN )
-			players[consoleplayer].cheats |= CF_FREEZE;
+			players[consoleplayer].cheats |= CF_TIMEFREEZE;
 		else
-			players[consoleplayer].cheats &= ~CF_FREEZE;
+			players[consoleplayer].cheats &= ~CF_TIMEFREEZE;
 	}
 }

@@ -673,7 +673,7 @@ void GAMEMODE_ResetPlayersKillCount( const bool bInformClients )
 	{
 		players[ulIdx].killcount = 0;
 		players[ulIdx].ulRailgunShots = 0;
-		// [BB] Also reset the things for DF2_AWARD_DAMAGE_INSTEAD_KILLS.
+		// [BB] Also reset the things for ZADF_AWARD_DAMAGE_INSTEAD_KILLS.
 		players[ulIdx].lPointCount = 0;
 		players[ulIdx].ulUnrewardedDamageDealt = 0;
 
@@ -715,7 +715,7 @@ bool GAMEMODE_AreSpectatorsFordiddenToChatToPlayers( void )
 		if (( teamlms || lastmanstanding ) && ( LASTMANSTANDING_GetState( ) == LMSS_INPROGRESS ))
 			return true;
 
-		if ( ( dmflags3 & DF3_ALWAYS_APPLY_LMS_SPECTATORSETTINGS ) && GAMEMODE_IsGameInProgress() )
+		if ( ( zadmflags & ZADF_ALWAYS_APPLY_LMS_SPECTATORSETTINGS ) && GAMEMODE_IsGameInProgress() )
 			return true;
 	}
 
@@ -787,7 +787,7 @@ void GAMEMODE_AdjustActorSpawnFlags ( AActor *pActor )
 		return;
 
 	// [BB] Since several Skulltag versions added NOGRAVITY to some spheres on default, allow the user to restore this behavior.
-	if ( compatflags2 & COMPATF2_NOGRAVITY_SPHERES )
+	if ( zacompatflags & ZACOMPATF_NOGRAVITY_SPHERES )
 	{
 		if ( ( stricmp ( pActor->GetClass()->TypeName.GetChars(), "InvulnerabilitySphere" ) == 0 )
 			|| ( stricmp ( pActor->GetClass()->TypeName.GetChars(), "Soulsphere" ) == 0 )

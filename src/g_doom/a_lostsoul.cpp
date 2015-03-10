@@ -13,12 +13,12 @@
 */
 
  FRandom pr_lost ("LostMissileRange");
+ FRandom pr_oldsoul ("BetaLostSoul");
 
 //
 // SkullAttack
 // Fly at the player like a missile.
 //
-#define SKULLSPEED (20*FRACUNIT)
 
 void A_SkullAttack(AActor *self, fixed_t speed)
 {
@@ -51,14 +51,14 @@ void A_SkullAttack(AActor *self, fixed_t speed)
 
 	A_FaceTarget (self);
 	an = self->angle >> ANGLETOFINESHIFT;
-	self->momx = FixedMul (speed, finecosine[an]);
-	self->momy = FixedMul (speed, finesine[an]);
+	self->velx = FixedMul (speed, finecosine[an]);
+	self->vely = FixedMul (speed, finesine[an]);
 	dist = P_AproxDistance (dest->x - self->x, dest->y - self->y);
 	dist = dist / speed;
 	
 	if (dist < 1)
 		dist = 1;
-	self->momz = (dest->z+(dest->height>>1) - self->z) / dist;
+	self->velz = (dest->z + (dest->height>>1) - self->z) / dist;
 
 	// [BC] Update the lost soul's momentum.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -73,6 +73,19 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_SkullAttack)
 	if (n <= 0) n = SKULLSPEED;
 	A_SkullAttack(self, n);
 }
+
+DEFINE_ACTION_FUNCTION(AActor, A_BetaSkullAttack)
+{
+	int damage;
+	if (!self || !self->target || self->target->GetSpecies() == self->GetSpecies())
+		return;
+	S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM);
+	A_FaceTarget(self);
+	damage = (pr_oldsoul()%8+1)*self->Damage;
+	P_DamageMobj(self->target, self, self, damage, NAME_None);
+}
+
+
 
 //==========================================================================
 //

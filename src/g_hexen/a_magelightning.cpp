@@ -42,8 +42,8 @@ int ALightning::SpecialMissileHit (AActor *thing)
 	{
 		if (thing->Mass != INT_MAX)
 		{
-			thing->momx += momx>>4;
-			thing->momy += momy>>4;
+			thing->velx += velx>>4;
+			thing->vely += vely>>4;
 		}
 		if ((!thing->player && !(thing->flags2&MF2_BOSS))
 			|| !(level.time&1))
@@ -51,7 +51,7 @@ int ALightning::SpecialMissileHit (AActor *thing)
 			P_DamageMobj(thing, this, target, 3, NAME_Electric);
 			if (!(S_IsActorPlayingSomething (this, CHAN_WEAPON, -1)))
 			{
-				S_Sound (this, CHAN_WEAPON, "MageLightningZap", 1, ATTN_NORM);
+				S_Sound (this, CHAN_WEAPON, this->AttackSound, 1, ATTN_NORM);
 			}
 			if (thing->flags3&MF3_ISMONSTER && pr_hit() < 64)
 			{
@@ -195,8 +195,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightningClip)
 		else
 		{
 			self->angle = R_PointToAngle2(self->x, self->y, target->x, target->y);
-			self->momx = 0;
-			self->momy = 0;
+			self->velx = 0;
+			self->vely = 0;
 			P_ThrustMobj (self, self->angle, self->Speed>>1);
 		}
 	}
@@ -211,6 +211,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightningClip)
 
 DEFINE_ACTION_FUNCTION(AActor, A_LightningZap)
 {
+
+	const PClass *lightning=PClass::FindClass((ENamedName) self->GetClass()->Meta.GetMetaInt (ACMETA_MissileName, NAME_LightningZap));
 	AActor *mo;
 	fixed_t deltaZ;
 
@@ -230,27 +232,27 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightningZap)
 	{
 		deltaZ = -10*FRACUNIT;
 	}
-	mo = Spawn<ALightningZap> (self->x+((pr_zap()-128)*self->radius/256), 
+	mo = Spawn(lightning, self->x+((pr_zap()-128)*self->radius/256), 
 		self->y+((pr_zap()-128)*self->radius/256), 
 		self->z+deltaZ, ALLOW_REPLACE);
 	if (mo)
 	{
 		mo->lastenemy = self;
-		mo->momx = self->momx;
-		mo->momy = self->momy;
+		mo->velx = self->velx;
+		mo->vely = self->vely;
 		mo->target = self->target;
 		if (self->flags3 & MF3_FLOORHUGGER)
 		{
-			mo->momz = 20*FRACUNIT;
+			mo->velz = 20*FRACUNIT;
 		}
 		else 
 		{
-			mo->momz = -20*FRACUNIT;
+			mo->velz = -20*FRACUNIT;
 		}
 	}
 	if ((self->flags3 & MF3_FLOORHUGGER) && pr_zapf() < 160)
 	{
-		S_Sound (self, CHAN_BODY, "MageLightningContinuous", 1, ATTN_NORM);
+		S_Sound (self, CHAN_BODY, self->ActiveSound, 1, ATTN_NORM);
 	}
 }
 
@@ -260,8 +262,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightningZap)
 //
 //============================================================================
 
-DEFINE_ACTION_FUNCTION(AActor, A_MLightningAttack)
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_MLightningAttack)
 {
+    ACTION_PARAM_START(2);
+    ACTION_PARAM_CLASS(floor, 0);
+    ACTION_PARAM_CLASS(ceiling, 1);
+
 	AActor *fmo, *cmo;
 
 	// [BC/BB] The projectile spawning is handled by the server.
@@ -271,8 +277,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_MLightningAttack)
 		goto spawningdone;
 	}
 
-	fmo = P_SpawnPlayerMissile (self, PClass::FindClass ("LightningFloor"));
-	cmo = P_SpawnPlayerMissile (self, PClass::FindClass ("LightningCeiling"));
+	fmo = P_SpawnPlayerMissile (self, floor);
+	cmo = P_SpawnPlayerMissile (self, ceiling);
 	if (fmo)
 	{
 		fmo->special1 = 0;
@@ -358,8 +364,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_ZapMimic)
 		}
 		else
 		{
-			self->momx = mo->momx;
-			self->momy = mo->momy;
+			self->velx = mo->velx;
+			self->vely = mo->vely;
 		}
 	}
 }
@@ -372,13 +378,15 @@ DEFINE_ACTION_FUNCTION(AActor, A_ZapMimic)
 
 DEFINE_ACTION_FUNCTION(AActor, A_LastZap)
 {
+	const PClass *lightning=PClass::FindClass((ENamedName) self->GetClass()->Meta.GetMetaInt (ACMETA_MissileName, NAME_LightningZap));
+
 	AActor *mo;
 
-	mo = Spawn<ALightningZap> (self->x, self->y, self->z, ALLOW_REPLACE);
+	mo = Spawn(lightning, self->x, self->y, self->z, ALLOW_REPLACE);
 	if (mo)
 	{
 		mo->SetState (mo->FindState (NAME_Death));
-		mo->momz = 40*FRACUNIT;
+		mo->velz = 40*FRACUNIT;
 		mo->Damage = 0;
 	}
 }

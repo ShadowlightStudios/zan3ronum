@@ -73,6 +73,9 @@ EXTERN_CVAR (Bool, teamplay)
 CVAR (Float,	autoaim,				5000.f,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	name,					"Player",	CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Color,	color,					0x40cf00,	CVAR_USERINFO | CVAR_ARCHIVE);
+// [BB] For now Zandronum doesn't let the player use the color sets.
+const int colorset = -1;
+//CVAR (Int,		colorset,				0,			CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	skin,					"base",		CVAR_USERINFO | CVAR_ARCHIVE);
 // [BC] "team" is no longer a cvar.
 //CVAR (Int,		team,					TEAM_NONE,	CVAR_USERINFO | CVAR_ARCHIVE);
@@ -215,6 +218,7 @@ enum
 	INFO_MoveBob,
 	INFO_StillBob,
 	INFO_PlayerClass,
+	INFO_ColorSet,
 
 	// [BB]
 	INFO_Ticsperupdate,
@@ -240,6 +244,7 @@ static const char *UserInfoStrings[] =
 	"movebob",
 	"stillbob",
 	"playerclass",
+	"colorset",
 
 	// [Spleen] The player's unlagged preference.
 	"unlagged",
@@ -333,27 +338,24 @@ int D_PlayerClassToInt (const char *classname)
 	}
 }
 
-void D_GetPlayerColor (int player, float *h, float *s, float *v)
+void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet **set)
 {
-	// [Dusk] The user can override these colors.
-	int cameraplayer;
-	if (( D_ShouldOverridePlayerColors() )
-		&& ( players[consoleplayer].camera != NULL )
-		&& ( PLAYER_IsValidPlayerWithMo( cameraplayer = players[consoleplayer].camera->player - players ))
-		&& ( PLAYER_IsValidPlayerWithMo( player ))
-		&& ( players[cameraplayer].bSpectating == false ))
-	{
-		bool isally = players[cameraplayer].mo->IsTeammate( players[player].mo );
-		int color = isally ? cl_allycolor : cl_enemycolor;
-		RGBtoHSV( RPART( color ) / 255.f, GPART( color ) / 255.f, BPART( color ) / 255.f, h, s, v );
-		return;
-	}
-
-/* [BB] New team code by Karate Chris. Currently not used in ST.
 	userinfo_t *info = &players[player].userinfo;
-	int color = info->color;
-*/
-	int color = players[player].userinfo.color;
+	FPlayerColorSet *colorset = NULL;
+	int color;
+
+	if (players[player].mo != NULL)
+	{
+		colorset = P_GetPlayerColorSet(players[player].mo->GetClass()->TypeName, info->colorset);
+	}
+	if (colorset != NULL)
+	{
+		color = GPalette.BaseColors[GPalette.Remap[colorset->RepresentativeColor]];
+	}
+	else
+	{
+		color = info->color;
+	}
 
 	RGBtoHSV (RPART(color)/255.f, GPART(color)/255.f, BPART(color)/255.f,
 		h, s, v);
@@ -374,6 +376,10 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v)
 		*v = clamp(tv + *v * 0.5f - 0.25f, 0.f, 1.f);
 	}
 */
+	if (set != NULL)
+	{
+		*set = colorset;
+	}
 
 	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
 	{
@@ -409,6 +415,19 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v)
 			*v = *v*0.4f+0.3f;
 		}
 */
+	}
+
+	// [Dusk] The user can override these colors.
+	int cameraplayer;
+	if (( D_ShouldOverridePlayerColors() )
+		&& ( players[consoleplayer].camera != NULL )
+		&& ( PLAYER_IsValidPlayerWithMo( cameraplayer = players[consoleplayer].camera->player - players ))
+		&& ( PLAYER_IsValidPlayerWithMo( player ))
+		&& ( players[cameraplayer].bSpectating == false ))
+	{
+		bool isally = players[cameraplayer].mo->IsTeammate( players[player].mo );
+		int color = isally ? cl_allycolor : cl_enemycolor;
+		RGBtoHSV( RPART( color ) / 255.f, GPART( color ) / 255.f, BPART( color ) / 255.f, h, s, v );
 	}
 }
 
@@ -616,6 +635,7 @@ void D_SetupUserInfo ()
 		coninfo->aimdist = abs ((int)(autoaim * (float)ANGLE_1));
 	}
 	coninfo->color = color;
+	coninfo->colorset = colorset;
 	// [BB] We need to take into account CurrentPlayerClass when determining the skin.
 	coninfo->skin = R_FindSkin (skin, players[consoleplayer].CurrentPlayerClass);
 	coninfo->gender = D_GenderToInt (gender);
@@ -693,7 +713,8 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			name = cleanedName;
 			return;
 		}
-		V_ColorizeString( val.String );
+		// [BB] Get rid of this cast.
+		V_ColorizeString( const_cast<char *> ( val.String ) );
 
 		ulUpdateFlags |= USERINFO_NAME;
 
@@ -1007,6 +1028,7 @@ void D_WriteUserInfoStrings (int i, BYTE **stream, bool compact)
 					 "\\name\\%s"
 					 "\\autoaim\\%g"
 					 "\\color\\%x %x %x"
+					 "\\colorset\\%d"
 					 "\\skin\\%s"
 					 //"\\team\\%d"
 					 "\\gender\\%s"
@@ -1022,6 +1044,7 @@ void D_WriteUserInfoStrings (int i, BYTE **stream, bool compact)
 					 ,
 					 D_EscapeUserInfo(info->netname).GetChars(),
 					 (double)info->aimdist / (float)ANGLE_1,
+					 info->colorset,
 					 RPART(info->color), GPART(info->color), BPART(info->color),
 					 D_EscapeUserInfo(skins[info->skin].name).GetChars(),
 					 //info->team,
@@ -1059,6 +1082,7 @@ void D_WriteUserInfoStrings (int i, BYTE **stream, bool compact)
 				"\\%g"			// movebob
 				"\\%g"			// stillbob
 				"\\%s"			// playerclass
+				"\\%d"			// colorset
 				"\\%lu"			// [BB] ticsperupdate
 				"\\%lu"			// [BB] connectiontype
 				"\\%u"			// [CK] Clientflags
@@ -1077,6 +1101,7 @@ void D_WriteUserInfoStrings (int i, BYTE **stream, bool compact)
 				(float)(info->StillBob) / 65536.f,
 				info->PlayerClass == -1 ? "Random" :
 					D_EscapeUserInfo(type->Meta.GetMetaString (APMETA_DisplayName)).GetChars(),
+				info->colorset,
 
 				// [BB]
 				info->ulTicsPerUpdate,
@@ -1199,7 +1224,15 @@ void D_ReadUserInfoStrings (int i, BYTE **stream, bool update)
 */
 
 			case INFO_Color:
-				info->color = V_GetColorFromString (NULL, value);
+			case INFO_ColorSet:
+				if (infotype == INFO_Color)
+				{
+					info->color = V_GetColorFromString (NULL, value);
+				}
+				else
+				{
+					info->colorset = atoi(value);
+				}
 				R_BuildPlayerTranslation (i);
 				if (StatusBar != NULL && i == StatusBar->GetPlayer())
 				{
@@ -1223,10 +1256,6 @@ void D_ReadUserInfoStrings (int i, BYTE **stream, bool update)
 				// Rebuild translation in case the new skin uses a different range
 				// than the old one.
 				R_BuildPlayerTranslation (i);
-				if (StatusBar != NULL && i == StatusBar->GetPlayer())
-				{
-					StatusBar->SetFace (&skins[info->skin]);
-				}
 
 				// If the skin was hidden, reveal it!
 				if ( skins[info->skin].bRevealed == false )
@@ -1323,6 +1352,10 @@ FArchive &operator<< (FArchive &arc, userinfo_t &info)
 		arc.Read (&info.netname, sizeof(info.netname));
 	}
 	arc << /*info.team <<*/ info.aimdist << info.color << info.skin << info.gender << info.switchonpickup;
+	if (SaveVersion >= 2193)
+	{
+		arc << info.colorset;
+	}
 	return arc;
 }
 
@@ -1377,6 +1410,7 @@ CCMD (playerinfo)
 		Printf ("Team:           %s (%d)\n",	players[i].bOnTeam ? TEAM_GetName( players[i].ulTeam ) : "NONE", static_cast<unsigned int> (players[i].ulTeam) );
 		Printf ("Aimdist:        %d\n",		ui->aimdist);
 		Printf ("Color:          %06x\n",		ui->color);
+		Printf ("ColorSet:    %d\n",		ui->colorset);
 		Printf ("Skin:           %s (%d)\n",	skins[ui->skin].name, ui->skin);
 		Printf ("Gender:         %s (%d)\n",	GenderNames[ui->gender], ui->gender);
 		Printf ("SwitchOnPickup: %s\n",	ui->switchonpickup == 0 ? "never" : ui->switchonpickup == 1 ? "only higher ranked" : "always" );
@@ -1385,6 +1419,7 @@ CCMD (playerinfo)
 		Printf ("PlayerClass:    %s (%d)\n",
 			ui->PlayerClass == -1 ? "Random" : PlayerClasses[ui->PlayerClass].Type->Meta.GetMetaString (APMETA_DisplayName),
 			ui->PlayerClass);
+		if (argv.argc() > 2) PrintMiscActorInfo(players[i].mo);
 
 		// [BB]
 		Printf ("Ticsperupdate:  %lu\n", ui->ulTicsPerUpdate);

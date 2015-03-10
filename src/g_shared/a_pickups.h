@@ -5,8 +5,6 @@
 #include "info.h"
 #include "s_sound.h"
 
-#define MAX_MANA				200
-
 #define NUM_WEAPON_SLOTS		10
 
 class player_t;
@@ -23,7 +21,7 @@ public:
 	bool AddWeapon (const char *type);
 	bool AddWeapon (const PClass *type);
 	void AddWeaponList (const char *list, bool clear);
-	AWeapon *PickWeapon (player_t *player);
+	AWeapon *PickWeapon (player_t *player, bool checkammo = false);
 	int Size () const { return (int)Weapons.Size(); }
 	int LocateWeapon (const PClass *type);
 
@@ -121,7 +119,7 @@ enum
 	IF_UNDROPPABLE		= 1<<5,		// The player cannot manually drop the item
 	IF_INVBAR			= 1<<6,		// Item appears in the inventory bar
 	IF_HUBPOWER			= 1<<7,		// Powerup is kept when moving in a hub
-	IF_INTERHUBSTRIP	= 1<<8,		// Item is removed when travelling between hubs
+//	IF_INTERHUBSTRIP	= 1<<8,		// Item is removed when travelling between hubs
 	IF_ADDITIVETIME		= 1<<9,		// when picked up while another item is active, time is added instead of replaced.
 	IF_ALWAYSPICKUP		= 1<<10,	// For IF_AUTOACTIVATE, MaxAmount=0 items: Always "pick up", even if it doesn't do anything
 	IF_FANCYPICKUPSOUND	= 1<<11,	// Play pickup sound in "surround" mode
@@ -131,7 +129,8 @@ enum
 	IF_CREATECOPYMOVED	= 1<<15,	// CreateCopy changed the owner (copy's Owner field holds new owner).
 	IF_INITEFFECTFAILED	= 1<<16,	// CreateCopy tried to activate a powerup and activation failed (can happen with PowerMorph)
 	IF_NOATTENPICKUPSOUND = 1<<17,	// Play pickup sound with ATTN_NONE
-	IF_FORCERESPAWNINSURVIVAL = 1<<18,	// [BB] Will be respawned in survival even without DF_ITEMS_RESPAWN.
+	IF_PERSISTENTPOWER	= 1<<18,	// Powerup is kept when travelling between levels
+	IF_FORCERESPAWNINSURVIVAL = 1<<19,	// [BB] Will be respawned in survival even without DF_ITEMS_RESPAWN.
 };
 
 struct vissprite_t;
@@ -169,6 +168,7 @@ public:
 	TObjPtr<AActor> Owner;		// Who owns this item? NULL if it's still a pickup.
 	int Amount;					// Amount of item this instance has
 	int MaxAmount;				// Max amount of item this instance can have
+	int InterHubAmount;			// Amount of item that can be kept between hubs or levels
 	int RespawnTics;			// Tics from pickup time to respawn time
 	FTextureID Icon;			// Icon to show on status bar or HUD
 	int DropTime;				// Countdown after dropping
@@ -257,7 +257,6 @@ public:
 	int AmmoGive1, AmmoGive2;				// Amount of each ammo to get when picking up weapon
 	int MinAmmo1, MinAmmo2;					// Minimum ammo needed to switch to this weapon
 	int AmmoUse1, AmmoUse2;					// How much ammo to use with each shot
-//	int AmmoUseDM1, AmmoUseDM2;				// [BC] How much ammo should be used with each shot during deathmatch/teamgame mode?
 	int Kickback;
 	fixed_t YAdjust;						// For viewing the weapon fullscreen
 	FSoundIDNoInit UpSound, ReadySound;		// Sounds when coming up and idle
@@ -275,8 +274,9 @@ public:
 	// In-inventory instance variables
 	TObjPtr<AAmmo> Ammo1, Ammo2;
 	TObjPtr<AWeapon> SisterWeapon;
-	bool GivenAsMorphWeapon;
 	float FOVScale;
+	int Crosshair;							// 0 to use player's crosshair
+	bool GivenAsMorphWeapon;
 
 	bool bAltFire;	// Set when this weapon's alternate fire is used.
 
@@ -328,22 +328,22 @@ enum
 	WIF_ALT_USES_BOTH =		0x00000100, // alternate fire uses both ammo
 	WIF_WIMPY_WEAPON =		0x00000200, // change away when ammo for another weapon is replenished
 	WIF_POWERED_UP =		0x00000400, // this is a tome-of-power'ed version of its sister
-
+	WIF_AMMO_CHECKBOTH =	0x00000800, // check for both primary and secondary fire before switching it off
 	WIF_NO_AUTO_SWITCH =	0x00001000,	// never switch to this weapon when it's picked up
-	WIF_STAFF2_KICKBACK =	0x00002000, // the powered-up Heretic staff has special kickba
+	WIF_STAFF2_KICKBACK =	0x00002000, // the powered-up Heretic staff has special kickback
+	WIF_NOAUTOAIM =			0x00004000, // this weapon never uses autoaim (useful for ballistic projectiles)
+	WIF_MELEEWEAPON =		0x00008000,	// melee weapon. Used by bots and monster AI.
 
 	// [BC] New weapon info definitions.
-	WIF_ALLOW_WITH_RESPAWN_INVUL	= 0x00004000,	// The player can continue to wield this weapon even with respawn invulnerability active.
+	WIF_ALLOW_WITH_RESPAWN_INVUL	= 0x00008000,	// The player can continue to wield this weapon even with respawn invulnerability active.
 	WIF_NOLMS						= 0x00010000,	// Don't give this weapon in LMS games.
-	WIF_NOAUTOAIM				= 0x00020000, // [BB] If the level allows freelook, this weapon behaves as if CVAR autoaim was 0.
 
-	WIF_CHEATNOTWEAPON	=	1<<27,		// Give cheat considers this not a weapon (used by Sigil)
+	WIF_CHEATNOTWEAPON	=	0x08000000,	// Give cheat considers this not a weapon (used by Sigil)
 
 	// Flags used only by bot AI:
 
 	WIF_BOT_REACTION_SKILL_THING = 1<<31, // I don't understand this
 	WIF_BOT_EXPLOSIVE =		1<<30,		// weapon fires an explosive
-	WIF_BOT_MELEE =			1<<29,		// melee weapon
 	WIF_BOT_BFG =			1<<28,		// this is a BFG
 };
 
@@ -500,6 +500,18 @@ public:
 
 	bool bDepleted;
 };
+
+
+// A score item is picked up without being added to the inventory.
+// It differs from FakeInventory by doing nothing more than increasing the player's score.
+class AScoreItem : public AInventory
+{
+	DECLARE_CLASS (AScoreItem, AInventory)
+
+public:
+	bool TryPickup(AActor *&toucher);
+};
+
 
 // [Dusk]
 extern TArray<unsigned short> g_keysFound;

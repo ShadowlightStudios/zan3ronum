@@ -333,6 +333,24 @@ void FScanner::RestorePos (const FScanner::SavedPos &pos)
 
 //==========================================================================
 //
+// FScanner :: isText
+//
+// Checks if this is a text file.
+//
+//==========================================================================
+
+bool FScanner::isText()
+{
+	for(unsigned int i=0;i<ScriptBuffer.Len();i++)
+	{
+		int c = ScriptBuffer[i];
+		if (c < ' ' && c != '\n' && c != '\r' && c != '\t') return false;
+	}
+	return true;
+}
+
+//==========================================================================
+//
 // FScanner :: SetCMode
 //
 // Enables/disables C mode. In C mode, more characters are considered to
@@ -704,12 +722,12 @@ bool FScanner::GetFloat ()
 		Float = (float)strtod (String, &stopper);
 		if (*stopper != 0)
 		{
-			I_Error ("SC_GetFloat: Bad numeric constant \"%s\".\n"
+			ScriptError ("SC_GetFloat: Bad numeric constant \"%s\"."
 #ifndef WIN32
 				// [BB] Precompiled Linux binaries seem to have a problem parsing floats when the language setting uses ',' instead of '.' as float seperator.
 				"Perhaps a problem with your LANG enviroment variable, try \"export LANG=C\".\n"
 #endif
-				"Script %s, Line %d\n", String, ScriptName.GetChars(), Line);
+				, String);
 		}
 		Number = (int)Float;
 		return true;
@@ -757,7 +775,7 @@ void FScanner::UnGet ()
 //
 //==========================================================================
 
-int FScanner::MatchString (const char **strings, size_t stride)
+int FScanner::MatchString (const char * const *strings, size_t stride)
 {
 	int i;
 
@@ -782,7 +800,7 @@ int FScanner::MatchString (const char **strings, size_t stride)
 //
 //==========================================================================
 
-int FScanner::MustMatchString (const char **strings, size_t stride)
+int FScanner::MustMatchString (const char * const *strings, size_t stride)
 {
 	int i;
 
@@ -817,116 +835,8 @@ FString FScanner::TokenName (int token, const char *string)
 {
 	static const char *const names[] =
 	{
-		"identifier",
-		"string constant",
-		"name constant",
-		"integer constant",
-		"float constant",
-		"'...'",
-		"'>>='",
-		"'<<='",
-		"'+='",
-		"'-='",
-		"'*='",
-		"'/='",
-		"'%='",
-		"'&='",
-		"'^='",
-		"'|='",
-		"'>>'",
-		"'>>>'",
-		"'<<'",
-		"'++'",
-		"'--'",
-		"'&&'",
-		"'||'",
-		"'<='",
-		"'>='",
-		"'=='",
-		"'!='",
-		"'action'",
-		"'break'",
-		"'case'",
-		"'const'",
-		"'continue'",
-		"'default'",
-		"'do'",
-		"'else'",
-		"'for'",
-		"'if'",
-		"'return'",
-		"'states'",
-		"'switch'",
-		"'until'",
-		"'while'",
-		"'bool'",
-		"'float'",
-		"'double'",
-		"'char'",
-		"'byte'",
-		"'sbyte'",
-		"'short'",
-		"'ushort'",
-		"'int'",
-		"'uint'",
-		"'long'",
-		"'ulong'",
-		"'void'",
-		"'struct'",
-		"'class'",
-		"'mode'",
-		"'enum'",
-		"'name'",
-		"'string'",
-		"'sound'",
-		"'state'",
-		"'color'",
-		"'goto'",
-		"'abstract'",
-		"'foreach'",
-		"'true'",
-		"'false'",
-		"'none'",
-		"'new'",
-		"'instanceof'",
-		"'auto'",
-		"'exec'",
-		"'defaultproperties'",
-		"'native'",
-		"'out'",
-		"'ref'",
-		"'event'",
-		"'static'",
-		"'transient'",
-		"'volatile'",
-		"'final'",
-		"'throws'",
-		"'extends'",
-		"'public'",
-		"'protected'",
-		"'private'",
-		"'dot'",
-		"'cross'",
-		"'ignores'",
-		"'localized'",
-		"'latent'",
-		"'singular'",
-		"'config'",
-		"'coerce'",
-		"'iterator'",
-		"'optional'",
-		"'export'",
-		"'virtual'",
-		"'super'",
-		"'global'",
-		"'self'",
-		"'stop'",
-		"'#include'",
-		"'fixed_t'",
-		"'angle_t'",
-		"'abs'",
-		"'random'",
-		"'random2'"
+#define xx(sym,str)		str,
+#include "sc_man_tokens.h"
 	};
 
 	FString work;
@@ -997,7 +907,7 @@ void STACK_ARGS FScanner::ScriptError (const char *message, ...)
 
 //==========================================================================
 //
-// FScanner::ScriptError
+// FScanner::ScriptMessage
 //
 //==========================================================================
 

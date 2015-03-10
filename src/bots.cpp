@@ -794,7 +794,7 @@ bool BOTS_IsVisible( AActor *pActor1, AActor *pActor2 )
 	angle_t	Angle;
 
 	// Check if we have a line of sight to this object.
-	if ( P_CheckSight( pActor1, pActor2, 2 ) == false )
+	if ( P_CheckSight( pActor1, pActor2, SF_SEEPASTBLOCKEVERYTHING ) == false )
 		return ( false );
 
 	Angle = R_PointToAngle2( pActor1->x,
@@ -1715,6 +1715,8 @@ CSkullBot::CSkullBot( char *pszName, char *pszTeamName, ULONG ulPlayerNum )
 	// Setup the player's userinfo based on the bot's botinfo.
 	// [BB] First clear the userinfo.
 	memset (&m_pPlayer->userinfo, 0, sizeof(m_pPlayer->userinfo));
+	// [BB] For now Zandronum doesn't let the player use the color sets.
+	m_pPlayer->userinfo.colorset = -1;
 	strncpy( m_pPlayer->userinfo.netname, g_BotInfo[m_ulBotInfoIdx]->szName, MAXPLAYERNAME );
 	m_pPlayer->userinfo.netname[MAXPLAYERNAME] = 0;
 

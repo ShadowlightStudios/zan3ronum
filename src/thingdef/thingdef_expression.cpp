@@ -49,7 +49,7 @@
 #include "p_lnspec.h"
 #include "doomstat.h"
 #include "thingdef_exp.h"
-#include "autosegs.h"
+#include "m_fixed.h"
 
 int testglobalvar = 1337;	// just for having one global variable to test with
 DEFINE_GLOBAL_VARIABLE(testglobalvar)
@@ -63,16 +63,22 @@ DEFINE_MEMBER_VARIABLE(floorz, AActor)
 DEFINE_MEMBER_VARIABLE(health, AActor)
 DEFINE_MEMBER_VARIABLE(pitch, AActor)
 DEFINE_MEMBER_VARIABLE(special, AActor)
+DEFINE_MEMBER_VARIABLE(special1, AActor)
+DEFINE_MEMBER_VARIABLE(special2, AActor)
 DEFINE_MEMBER_VARIABLE(tid, AActor)
 DEFINE_MEMBER_VARIABLE(TIDtoHate, AActor)
 DEFINE_MEMBER_VARIABLE(waterlevel, AActor)
 DEFINE_MEMBER_VARIABLE(x, AActor)
 DEFINE_MEMBER_VARIABLE(y, AActor)
 DEFINE_MEMBER_VARIABLE(z, AActor)
-DEFINE_MEMBER_VARIABLE(momx, AActor)
-DEFINE_MEMBER_VARIABLE(momy, AActor)
-DEFINE_MEMBER_VARIABLE(momz, AActor)
+DEFINE_MEMBER_VARIABLE(velx, AActor)
+DEFINE_MEMBER_VARIABLE(vely, AActor)
+DEFINE_MEMBER_VARIABLE(velz, AActor)
+DEFINE_MEMBER_VARIABLE_ALIAS(momx, velx, AActor)
+DEFINE_MEMBER_VARIABLE_ALIAS(momy, vely, AActor)
+DEFINE_MEMBER_VARIABLE_ALIAS(momz, velz, AActor)
 DEFINE_MEMBER_VARIABLE(Damage, AActor)
+DEFINE_MEMBER_VARIABLE(Score, AActor)
 
 //==========================================================================
 //
@@ -1659,10 +1665,9 @@ ExpVal FxRandom::EvalExpression (AActor *self)
 		int minval = min->EvalExpression (self).GetInt();
 		int maxval = max->EvalExpression (self).GetInt();
 
-
 		if (maxval < minval)
 		{
-			swap (maxval, minval);
+			swapvalues (maxval, minval);
 		}
 
 		val.Int = (*rng)(maxval - minval + 1) + minval;
@@ -1670,6 +1675,53 @@ ExpVal FxRandom::EvalExpression (AActor *self)
 	else
 	{
 		val.Int = (*rng)();
+	}
+	return val;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+FxFRandom::FxFRandom(FRandom *r, FxExpression *mi, FxExpression *ma, const FScriptPosition &pos)
+: FxRandom(r, NULL, NULL, pos)
+{
+	if (mi != NULL && ma != NULL)
+	{
+		min = mi;
+		max = ma;
+	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+ExpVal FxFRandom::EvalExpression (AActor *self)
+{
+	ExpVal val;
+	val.Type = VAL_Float;
+	int random = (*rng)(0x40000000);
+	double frandom = random / double(0x40000000);
+
+	if (min != NULL && max != NULL)
+	{
+		double minval = min->EvalExpression (self).GetFloat();
+		double maxval = max->EvalExpression (self).GetFloat();
+
+		if (maxval < minval)
+		{
+			swapvalues (maxval, minval);
+		}
+
+		val.Float = frandom * (maxval - minval) + minval;
+	}
+	else
+	{
+		val.Float = frandom;
 	}
 	return val;
 }
@@ -2764,13 +2816,13 @@ int FStateExpressions::Reserve(int num, const PClass *cls)
 //
 //==========================================================================
 
-void FStateExpressions::Set(int num, FxExpression *x)
+void FStateExpressions::Set(int num, FxExpression *x, bool cloned)
 {
 	if (num >= 0 && num < int(Size()))
 	{
 		assert(expressions[num].expr == NULL || expressions[num].cloned);
 		expressions[num].expr = x;
-		expressions[num].cloned = false;
+		expressions[num].cloned = cloned;
 	}
 }
 
@@ -2807,7 +2859,7 @@ int FStateExpressions::ResolveAll()
 		if (expressions[i].cloned)
 		{
 			// Now that everything coming before has been resolved we may copy the actual pointer.
-			intptr_t ii = ((intptr_t)expressions[i].expr);
+			unsigned ii = unsigned((intptr_t)expressions[i].expr);
 			expressions[i].expr = expressions[ii].expr;
 		}
 		else if (expressions[i].expr != NULL)

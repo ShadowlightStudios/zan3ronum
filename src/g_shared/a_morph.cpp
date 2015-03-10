@@ -105,21 +105,13 @@ bool P_MorphPlayer (player_t *activator, player_t *p, const PClass *spawntype, i
 	p->morphTics = (duration) ? duration : MORPHTICS;
 
 	// [MH] Used by SBARINFO to speed up face drawing
-	p->MorphedPlayerClass = 0;
-	for (unsigned int i = 1; i < PlayerClasses.Size(); i++)
-	{
-		if (PlayerClasses[i].Type == spawntype)
-		{
-			p->MorphedPlayerClass = i;
-			break;
-		}
-	}
+	p->MorphedPlayerClass = spawntype;
 
 	p->MorphStyle = style;
 	p->MorphExitFlash = (exit_flash) ? exit_flash : RUNTIME_CLASS(ATeleportFog);
 	p->health = morphed->health;
 	p->mo = morphed;
-	p->momx = p->momy = 0;
+	p->velx = p->vely = 0;
 	morphed->ObtainInventory (actor);
 	// Remove all armor
 	for (item = morphed->Inventory; item != NULL; )
@@ -156,21 +148,6 @@ bool P_MorphPlayer (player_t *activator, player_t *p, const PClass *spawntype, i
 	}
 	morphed->ScoreIcon = actor->ScoreIcon;	// [GRB]
 
-	// [MH]
-	// If the player that was morphed is the one
-	// taking events, set up the face, if any;
-	// this is only needed for old-skool skins
-	// and for the original DOOM status bar.
-	if (p == &players[consoleplayer])
-	{
-		const char *face = spawntype->Meta.GetMetaString (APMETA_Face);
-
-		if (face != NULL && strcmp(face, "None") != 0)
-		{
-			StatusBar->SetFace(&skins[p->MorphedPlayerClass]);
-		}
-	}
-
 	// [BB] Tell the clients to morph the player.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
@@ -195,7 +172,7 @@ bool P_MorphPlayer (player_t *activator, player_t *p, const PClass *spawntype, i
 //
 //----------------------------------------------------------------------------
 
-bool P_UndoPlayerMorph (player_t *activator, player_t *player, bool force)
+bool P_UndoPlayerMorph (player_t *activator, player_t *player, int unmorphflag, bool force)
 {
 	AWeapon *beastweap;
 	APlayerPawn *mo;
@@ -214,10 +191,13 @@ bool P_UndoPlayerMorph (player_t *activator, player_t *player, bool force)
 		return false;
 	}
 
-	if ((pmo->flags2 & MF2_INVULNERABLE) && ((player != activator) || (!(player->MorphStyle & MORPH_WHENINVULNERABLE))))
-	{ // Immune when invulnerable unless this is something we initiated.
-		// If the WORLD is the initiator, the same player should be given
-		// as the activator; WORLD initiated actions should always succeed.
+	bool DeliberateUnmorphIsOkay = !!(MORPH_STANDARDUNDOING & unmorphflag);
+
+    if ((pmo->flags2 & MF2_INVULNERABLE) // If the player is invulnerable
+        && ((player != activator)       // and either did not decide to unmorph,
+        || (!((player->MorphStyle & MORPH_WHENINVULNERABLE)  // or the morph style does not allow it
+        || (DeliberateUnmorphIsOkay))))) // (but standard morph styles always allow it),
+	{ // Then the player is immune to the unmorph.
 		return false;
 	}
 
@@ -255,11 +235,11 @@ bool P_UndoPlayerMorph (player_t *activator, player_t *player, bool force)
 	mo->player = player;
 	mo->reactiontime = 18;
 	mo->flags = pmo->special2 & ~MF_JUSTHIT;
-	mo->momx = 0;
-	mo->momy = 0;
-	player->momx = 0;
-	player->momy = 0;
-	mo->momz = pmo->momz;
+	mo->velx = 0;
+	mo->vely = 0;
+	player->velx = 0;
+	player->vely = 0;
+	mo->velz = pmo->velz;
 	if (!(pmo->special2 & MF_JUSTHIT))
 	{
 		mo->renderflags &= ~RF_INVISIBLE;
@@ -285,7 +265,7 @@ bool P_UndoPlayerMorph (player_t *activator, player_t *player, bool force)
 
 	if ((player->health > 0) || undobydeathsaves)
 	{
-		player->health = mo->health = mo->GetDefault()->health;
+		player->health = mo->health = mo->SpawnHealth();
 	}
 	else // killed when morphed so stay dead
 	{
@@ -329,7 +309,6 @@ bool P_UndoPlayerMorph (player_t *activator, player_t *player, bool force)
 					}
 				}
 			}
-			StatusBar->SetFace(&skins[skinindex]);
 		}
 	}
 
@@ -503,10 +482,10 @@ bool P_UndoMonsterMorph (AMorphedMonster *beast, bool force)
 	actor->flags4 = (actor->flags4 & ~MF4_NOHATEPLAYERS) | (beast->flags4 & MF4_NOHATEPLAYERS);
 	if (!(beast->FlagsSave & MF_JUSTHIT))
 		actor->renderflags &= ~RF_INVISIBLE;
-	actor->health = actor->GetDefault()->health;
-	actor->momx = beast->momx;
-	actor->momy = beast->momy;
-	actor->momz = beast->momz;
+	actor->health = actor->SpawnHealth();
+	actor->velx = beast->velx;
+	actor->vely = beast->vely;
+	actor->velz = beast->velz;
 	actor->tid = beast->tid;
 	actor->special = beast->special;
 	memcpy (actor->args, beast->args, sizeof(actor->args));

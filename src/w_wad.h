@@ -27,30 +27,9 @@
 #include "doomdef.h"
 #include "tarray.h"
 
-// [RH] Compare wad header as ints instead of chars
-#define IWAD_ID		MAKE_ID('I','W','A','D')
-#define PWAD_ID		MAKE_ID('P','W','A','D')
-#define RFF_ID		MAKE_ID('R','F','F',0x1a)
-#define ZIP_ID		MAKE_ID('P','K',3,4)
-#define GRP_ID_0	MAKE_ID('K','e','n','S')
-#define GRP_ID_1	MAKE_ID('i','l','v','e')
-#define GRP_ID_2	MAKE_ID('r','m','a','n')
+class FResourceFile;
+struct FResourceLump;
 
-// [RH] Remove limit on number of WAD files
-struct wadlist_t
-{
-	wadlist_t *next;
-
-	// [BC] Is this a file that was added automatically from a subdirectory?
-	bool	bLoadedAutomatically;
-
-	char name[1];	// +size of string
-};
-extern wadlist_t *wadfiles;
-
-//
-// TYPES
-//
 struct wadinfo_t
 {
 	// Should be "IWAD" or "PWAD".
@@ -66,16 +45,8 @@ struct wadlump_t
 	char		Name[8];
 };
 
-enum
-{
-	LUMPF_BLOODCRYPT	= 1,	// Lump uses Blood-style encryption
-	LUMPF_COMPRESSED	= 2,	// Zip-compressed
-	LUMPF_ZIPFILE		= 4,	// Inside a Zip file - used to enforce use of special directories insize Zips
-	LUMPF_NEEDFILESTART	= 8,	// Still need to process local file header to find file start inside a zip
-	LUMPF_EXTERNAL		= 16,	// Lump is from an external file that won't be kept open permanently
-	LUMPF_7ZFILE		= 32,	// Inside a 7z archive; position is its index in the archive
-};
-
+#define IWAD_ID		MAKE_ID('I','W','A','D')
+#define PWAD_ID		MAKE_ID('P','W','A','D')
 
 // [RH] Namespaces from BOOM.
 typedef enum {
@@ -100,16 +71,21 @@ typedef enum {
 	ns_patches,
 	ns_graphics,
 	ns_music,
+
+	ns_firstskin,
 } namespace_t;
+
+enum ELumpFlags
+{
+	LUMPF_MAYBEFLAT=1,
+	LUMPF_ZIPFILE=2,
+	LUMPF_EMBEDDED=4,
+	LUMPF_BLOODCRYPT = 8,
+};
+
 
 // [RH] Copy an 8-char string and uppercase it.
 void uppercopy (char *to, const char *from);
-
-// Perform Blood encryption/decryption.
-void BloodCrypt (void *data, int key, int len);
-
-// Locate central directory in a zip file.
-DWORD Zip_FindCentralDir(FileReader * fin);
 
 // A very loose reference to a lump on disk. This is really just a wrapper
 // around the main wad's FILE object with a different length recorded. Since
@@ -131,13 +107,9 @@ public:
 	char *Gets(char *strbuf, int len);
 
 private:
-	FWadLump (const FileReader &reader, long length, bool encrypted);
-	FWadLump (FILE *file, long length);
-	FWadLump (char * data, long length, bool destroy);
+	FWadLump (FResourceLump *Lump, bool alwayscache = false);
 
-	char *SourceData;
-	bool DestroySource;
-	bool Encrypted;
+	FResourceLump *Lump;
 
 	friend class FWadCollection;
 };
@@ -173,12 +145,15 @@ public:
 	// The wadnum for the IWAD
 	enum { IWAD_FILENUM = 1 };
 
-	void InitMultipleFiles (wadlist_t **filenames);
-	void AddFile (const char *filename, const char *data=NULL,int length=-1, bool bLoadedAutomatically = false);	// [BC]
+	void InitMultipleFiles (/*TArray<FString> &filenames*/); // [BB] Removed argument.
+	void AddFile (const char *filename, FileReader *wadinfo = NULL, bool bLoadedAutomatically = false, bool isOptional = false);	// [BC], [TP]
 	int CheckIfWadLoaded (const char *name);
 
 	const char *GetWadName (int wadnum) const;
 	const char *GetWadFullName (int wadnum) const;
+
+	int GetFirstLump(int wadnum) const;
+	int GetLastLump(int wadnum) const;
 
 	int CheckNumForName (const char *name, int namespc);
 	int CheckNumForName (const char *name, int namespc, int wadfile, bool exact = true);
@@ -207,6 +182,7 @@ public:
 	FileReader * GetFileReader(int wadnum);	// Gets a FileReader object to the entire WAD
 
 	int FindLump (const char *name, int *lastlump, bool anyns=false);		// [RH] Find lumps with duplication
+	int FindLumpMulti (const char **names, int *lastlump, bool anyns = false, int *nameindex = NULL); // same with multiple possible names
 	bool CheckLumpName (int lump, const char *name);	// [RH] True if lump's name == name
 
 	static DWORD LumpNameHash (const char *name);		// [RH] Create hash key from an 8-char name
@@ -219,6 +195,7 @@ public:
 	FString GetLumpFullPath (int lump) const;		// [RH] Returns wad's name + lump's full name
 	int GetLumpFile (int lump) const;				// [RH] Returns wadnum for a specified lump
 	int GetLumpNamespace (int lump) const;			// [RH] Returns the namespace a lump belongs to
+	int GetLumpIndexNum (int lump) const;			// Returns the RFF index number for this lump
 	bool CheckLumpName (int lump, const char *name) const;	// [RH] Returns true if the names match
 
 	bool IsUncompressedFile(int lump) const;
@@ -230,14 +207,25 @@ public:
 	int AddExternalFile(const char *filename);
 
 	// [BC] Was this wad loaded automatically?
-	bool	GetLoadedAutomatically( int wadnum ) const;
+	bool GetLoadedAutomatically( int wadnum ) const;
 
 	// [BB] Returns the number of the wad this given lump is in.
 	int GetWadnumFromLumpnum ( int lumpnum ) const;
 
+	// [BB] Returns the number of the wad with the given full name.
+	int GetWadnumFromWadFullName ( const char *FullName ) const;
+
+	// [TP]
+	int GetParentWad( int wadnum ) const;
+	bool IsWadOptional( int wadnum ) const;
+	void LumpIsMandatory( int lumpnum );
+
 protected:
-	class WadFileRecord;
+
 	struct LumpRecord;
+
+	TArray<FResourceFile *> Files;
+	TArray<LumpRecord> LumpInfo;
 
 	DWORD *FirstLumpIndex;	// [RH] Hashing stuff moved out of lumpinfo structure
 	DWORD *NextLumpIndex;
@@ -245,27 +233,14 @@ protected:
 	DWORD *FirstLumpIndex_FullName;	// The same information for fully qualified paths from .zips
 	DWORD *NextLumpIndex_FullName;
 
-
-	TArray<LumpRecord> LumpInfo;
-	TArray<WadFileRecord *> Wads;
 	DWORD NumLumps;					// Not necessarily the same as LumpInfo.Size()
 	DWORD NumWads;
 
 	void SkinHack (int baselump);
 	void InitHashChains ();								// [RH] Set up the lumpinfo hashing
 
-	// [RH] Combine multiple marked ranges of lumps into one.
-	int MergeLumps (const char *start, const char *end, int name_space);
-	bool IsMarker (const LumpRecord *lump, const char *marker) const;
-	void FindStrifeTeaserVoices ();
-
-	char *ReadZipLump(LumpRecord *l);
-
 private:
-	static int STACK_ARGS lumpcmp(const void * a, const void * b);
-	void ScanForFlatHack (int startlump);
-	void RenameSprites (int startlump);
-	void SetLumpAddress(LumpRecord *l);
+	void RenameSprites ();
 	void DeleteAll();
 };
 

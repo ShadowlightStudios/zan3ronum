@@ -70,6 +70,10 @@ void DCeiling::PlayCeilingSound ()
 	{
 		SN_StartSequence (m_Sector, CHAN_CEILING, m_Sector->seqType, SEQ_PLATFORM, 0, false);
 	}
+	else if (m_Sector->SeqName != NAME_None)
+	{
+		SN_StartSequence (m_Sector, CHAN_CEILING, m_Sector->SeqName, 0);
+	}
 	else
 	{
 		if (m_Silent == 2)
@@ -153,7 +157,7 @@ void DCeiling::Tick ()
 					SERVERCOMMANDS_DestroyCeiling( m_lCeilingID );
 				}
 
-				SN_StopSequence (m_Sector);
+				SN_StopSequence (m_Sector, CHAN_CEILING);
 				Destroy ();
 				break;
 			}
@@ -222,7 +226,7 @@ void DCeiling::Tick ()
 					SERVERCOMMANDS_DestroyCeiling( m_lCeilingID );
 				}
 
-				SN_StopSequence (m_Sector);
+				SN_StopSequence (m_Sector, CHAN_CEILING);
 				Destroy ();
 				break;
 			}
@@ -404,7 +408,7 @@ bool EV_DoCeiling (DCeiling::ECeiling type, line_t *line,
 		sec = &sectors[secnum];
 manual_ceiling:
 		// if ceiling already moving, don't start a second function on it
-		if (sec->ceilingdata)
+		if (sec->PlaneMoving(sector_t::ceiling))
 		{
 			if (!manual)
 				continue;
@@ -705,7 +709,7 @@ bool EV_CeilingCrushStop (int tag)
 				SERVERCOMMANDS_StopSectorSequence( scan->m_Sector );
 			}
 
-			SN_StopSequence (scan->m_Sector);
+			SN_StopSequence (scan->m_Sector, CHAN_CEILING);
 			scan->m_OldDirection = scan->m_Direction;
 			scan->m_Direction = 0;		// in-stasis;
 			rtn = true;

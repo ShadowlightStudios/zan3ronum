@@ -15,7 +15,7 @@ public:
 	void SetSfxVolume (float volume);
 	void SetMusicVolume (float volume);
 	SoundHandle LoadSound(BYTE *sfxdata, int length);
-	SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits);
+	SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart);
 	void UnloadSound (SoundHandle sfx);
 	unsigned int GetMSLength(SoundHandle sfx);
 	unsigned int GetSampleLength(SoundHandle sfx);
@@ -34,8 +34,14 @@ public:
 	// Stops a sound channel.
 	void StopChannel (FISoundChannel *chan);
 
+	// Marks a channel's start time without actually playing it.
+	void MarkStartTime (FISoundChannel *chan);
+
 	// Returns position of sound on this channel, in samples.
 	unsigned int GetPosition(FISoundChannel *chan);
+
+	// Gets a channel's audibility (real volume).
+	float GetAudibility(FISoundChannel *chan);
 
 	// Synchronizes following sound startups.
 	void Sync (bool sync);
@@ -60,6 +66,7 @@ public:
 	void DrawWaveDebug(int mode);
 
 private:
+	DWORD ActiveFMODVersion;
 	int SFXPaused;
 	bool InitSuccess;
 	bool DSPLocked;
@@ -69,11 +76,12 @@ private:
 	static FMOD_RESULT F_CALLBACK ChannelCallback(FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *data1, void *data2);
 	static float F_CALLBACK RolloffCallback(FMOD_CHANNEL *channel, float distance);
 
-	bool HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *reuse_chan, bool abstime, float freq) const;
+	bool HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *reuse_chan, int flags, float freq) const;
 	FISoundChannel *CommonChannelSetup(FMOD::Channel *chan, FISoundChannel *reuse_chan) const;
 	FMOD_MODE SetChanHeadSettings(SoundListener *listener, FMOD::Channel *chan, const FVector3 &pos, bool areasound, FMOD_MODE oldmode) const;
 
 	bool ReconnectSFXReverbUnit();
+	void InitCreateSoundExInfo(FMOD_CREATESOUNDEXINFO *exinfo) const;
 
 	bool Init ();
 	void Shutdown ();

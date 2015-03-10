@@ -285,7 +285,16 @@ R_SetSpanSize_ASM:
 	
 aret:	ret
 
+%ifdef M_TARGET_MACHO
+	SECTION .text align=64
+%else
 	SECTION .rtext	progbits alloc exec write align=64
+%endif
+
+%ifdef M_TARGET_MACHO
+GLOBAL _rtext_tmap_start
+_rtext_tmap_start:
+%endif
 
 rtext_start:
 
@@ -622,10 +631,6 @@ rdcp1:	sub	edi,SPACEFILLER4
 
 	cmp	BYTE [CPU+66],byte 5
 	jg	rdcploop2
-
-; need 12 bytes of filler to make it aligned
-	db	0x8D,0x80,0,0,0,0	; lea eax,[eax+00000000]
-	db	0x8D,0xBF,0,0,0,0	; lea edi,[edi+00000000]
 
 	align 16
 
@@ -1742,6 +1747,10 @@ ac4nil:	pop		edi
 		ret
 
 rtext_end:
+%ifdef M_TARGET_MACHO
+GLOBAL _rtext_tmap_end
+_rtext_tmap_end:
+%endif
 		align	16
 
 ;************************

@@ -36,6 +36,7 @@ struct drawseg_t
 	fixed_t		sz1, sz2;		// z for left, right of parent seg on screen
 	fixed_t		siz1, siz2;		// 1/z for left, right of parent seg on screen
 	fixed_t		cx, cy, cdx, cdy;
+	fixed_t		yrepeat;
 	BYTE 		silhouette;		// 0=none, 1=bottom, 2=top, 3=both
 	BYTE		bFogBoundary;
 	BYTE		bFakeBoundary;		// for fake walls
@@ -79,6 +80,7 @@ EXTERN_CVAR (Bool, r_drawflat)		// [RH] Don't texture segs?
 // BSP?
 void R_ClearClipSegs (short left, short right);
 void R_ClearDrawSegs ();
+void R_BuildPolyBSP(subsector_t *sub);
 void R_RenderBSPNode (void *node);
 
 // killough 4/13/98: fake floors/ceilings for deep water / fake ceilings:

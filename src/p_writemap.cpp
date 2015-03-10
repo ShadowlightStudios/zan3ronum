@@ -132,8 +132,8 @@ static int WriteLINEDEFS (FILE *file)
 		{
 			mld.args[j] = (BYTE)lines[i].args[j];
 		}
-		mld.sidenum[0] = LittleShort(WORD(lines[i].sidenum[0]));
-		mld.sidenum[1] = LittleShort(WORD(lines[i].sidenum[1]));
+		mld.sidenum[0] = LittleShort(WORD(lines[i].sidedef[0] - sides));
+		mld.sidenum[1] = LittleShort(WORD(lines[i].sidedef[1] - sides));
 		fwrite (&mld, sizeof(mld), 1, file);
 	}
 	return numlines * sizeof(mld);
@@ -183,8 +183,10 @@ static int WriteVERTEXES (FILE *file)
 	return numvertexes * sizeof(mv);
 }
 
+
 static int WriteSEGS (FILE *file)
 {
+#if 0
 	mapseg_t ms;
 
 	ms.offset = 0;		// unused by ZDoom, so just leave it 0
@@ -195,16 +197,20 @@ static int WriteSEGS (FILE *file)
 			ms.v1 = LittleShort(short(segs[i].v1 - vertexes));
 			ms.v2 = LittleShort(short(segs[i].v2 - vertexes));
 			ms.linedef = LittleShort(short(segs[i].linedef - lines));
-			ms.side = DWORD(segs[i].sidedef - sides) == segs[i].linedef->sidenum[0] ? 0 : LittleShort((short)1);
+			ms.side = segs[i].sidedef == segs[i].linedef->sidedef[0] ? 0 : LittleShort((short)1);
 			ms.angle = LittleShort(short(R_PointToAngle2 (segs[i].v1->x, segs[i].v1->y, segs[i].v2->x, segs[i].v2->y)>>16));
 			fwrite (&ms, sizeof(ms), 1, file);
 		}
 	}
 	return numsegs * sizeof(ms);
+#else
+	return 0;
+#endif
 }
 
 static int WriteSSECTORS (FILE *file)
 {
+#if 0
 	mapsubsector_t mss;
 
 	for (int i = 0; i < numsubsectors; ++i)
@@ -214,10 +220,14 @@ static int WriteSSECTORS (FILE *file)
 		fwrite (&mss, sizeof(mss), 1, file);
 	}
 	return numsubsectors * sizeof(mss);
+#else
+	return 0;
+#endif
 }
 
 static int WriteNODES (FILE *file)
 {
+#if 0
 	mapnode_t mn;
 
 	for (int i = 0; i < numnodes; ++i)
@@ -235,7 +245,7 @@ static int WriteNODES (FILE *file)
 			WORD child;
 			if ((size_t)nodes[i].children[j] & 1)
 			{
-				child = NF_SUBSECTOR | WORD((subsector_t *)((BYTE *)nodes[i].children[j] - 1) - subsectors);
+				child = mapnode_t::NF_SUBSECTOR | WORD((subsector_t *)((BYTE *)nodes[i].children[j] - 1) - subsectors);
 			}
 			else
 			{
@@ -246,6 +256,9 @@ static int WriteNODES (FILE *file)
 		fwrite (&mn, sizeof(mn), 1, file);
 	}
 	return numnodes * sizeof(mn);
+#else
+	return 0;
+#endif
 }
 
 static int WriteSECTORS (FILE *file)

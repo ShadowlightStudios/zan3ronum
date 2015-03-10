@@ -37,7 +37,7 @@
 
 #include "doomtype.h"
 
-#define DEFINE_SPECIAL(name, num, min, max) name = num,
+#define DEFINE_SPECIAL(name, num, min, max, map) name = num,
 
 typedef enum {
 #include "actionspecials.h"
@@ -48,6 +48,17 @@ typedef enum {
 	Team_Score = 152,
 	Team_GivePoints = 153,
 } linespecial_t;
+
+struct FLineSpecial
+{
+	const char *name;
+	BYTE number;
+	SBYTE min_args;
+	SBYTE max_args;
+	BYTE map_args;
+};
+
+extern const FLineSpecial *LineSpecialsInfo[256];
 
 typedef enum {
 	Init_Gravity = 0,
@@ -99,6 +110,7 @@ typedef enum {
 	dDamage_LavaWimpy = 82,
 	dDamage_LavaHefty = 83,
 	dScroll_EastLavaDamage = 84,
+	hDamage_Sludge = 85,
 	Sector_Outside = 87,
 
 	// And here are some for Strife
@@ -191,5 +203,6 @@ typedef int (*lnSpecFunc)(struct line_t	*line,
 extern lnSpecFunc LineSpecials[256];
 
 int P_FindLineSpecial (const char *string, int *min_args=NULL, int *max_args=NULL);
+bool P_ActivateThingSpecial(AActor * thing, AActor * trigger, bool death=false);
 
 #endif //__P_LNSPEC_H__

@@ -67,7 +67,7 @@ bool P_CheckTickerPaused ()
 		 && players[consoleplayer].viewz != 1
 		 && wipegamestate == gamestate)
 	{
-		S_PauseSound (!(level.flags2 & LEVEL2_PAUSE_MUSIC_IN_MENUS));
+		S_PauseSound (!(level.flags2 & LEVEL2_PAUSE_MUSIC_IN_MENUS), false);
 		return true;
 	}
 	return false;
@@ -130,8 +130,11 @@ void P_Ticker (void)
 				break;
 		}
 
-		if ( i == MAXPLAYERS )
-			S_ResumeSound ();
+		// [BB] If the freeze command was executed from the console, the sound needs to
+		// be resumed. In this case, the music isn't paused. The other check is only meant
+		// not to resume the music.
+		if ( ( i == MAXPLAYERS ) || ( S_IsMusicPaused () == false ) )
+			S_ResumeSound (false);
 		P_ResetSightCounters (false);
 
 		// Since things will be moving, it's okay to interpolate them in the renderer.
@@ -361,7 +364,7 @@ void P_Ticker (void)
 			if (( playeringame[ulIdx] ) && ( players[ulIdx].pSkullBot ))
 			{
 				// Also, if they have an enemy, and can see it, update their known enemy position.
-				if (( players[ulIdx].pSkullBot->m_ulPlayerEnemy != MAXPLAYERS ) && ( P_CheckSight( players[ulIdx].mo, players[players[ulIdx].pSkullBot->m_ulPlayerEnemy].mo, 2 )))
+				if (( players[ulIdx].pSkullBot->m_ulPlayerEnemy != MAXPLAYERS ) && ( P_CheckSight( players[ulIdx].mo, players[players[ulIdx].pSkullBot->m_ulPlayerEnemy].mo, SF_SEEPASTBLOCKEVERYTHING )))
 					players[ulIdx].pSkullBot->SetEnemyPosition( players[players[ulIdx].pSkullBot->m_ulPlayerEnemy].mo->x, players[players[ulIdx].pSkullBot->m_ulPlayerEnemy].mo->y, players[players[ulIdx].pSkullBot->m_ulPlayerEnemy].mo->z );
 
 				// Now that all the players have moved to their final location for this tick,

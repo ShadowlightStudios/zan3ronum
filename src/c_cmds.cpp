@@ -102,7 +102,7 @@ CCMD (toggleconsole)
 	C_ToggleConsole();
 }
 
-bool CheckCheatmode ()
+bool CheckCheatmode (bool printmsg)
 {
 	if ((( G_SkillProperty( SKILLP_DisableCheats )) ||
 		( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
@@ -110,9 +110,12 @@ bool CheckCheatmode ()
 		( NETWORK_GetState( ) == NETSTATE_SERVER )) &&
 		( sv_cheats == false ))
 	{
-		// [BB] Don't allow clients to lag themself by flooding the cheat message.
-		if ( ( NETWORK_InClientMode() == false ) || CLIENT_AllowSVCheatMessage( ) )
-			Printf ("sv_cheats must be true to enable this command.\n");
+		if (printmsg)
+		{
+			// [BB] Don't allow clients to lag themself by flooding the cheat message.
+			if ( ( NETWORK_InClientMode() == false ) || CLIENT_AllowSVCheatMessage( ) )
+ 				Printf ("sv_cheats must be true to enable this command.\n");
+ 		}
 		return true;
 	}
 	else
@@ -256,6 +259,22 @@ CCMD( idchoppers )
 		Net_WriteByte (DEM_GENERICCHEAT);
 		Net_WriteByte (CHT_CHAINSAW);
 	}
+}
+
+CCMD (buddha)
+{
+	if (CheckCheatmode())
+		return;
+
+	// [BB] Clients need to request the cheat from the server.
+	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
+	{
+		CLIENTCOMMANDS_GenericCheat( CHT_BUDDHA );
+		return;
+	}
+
+	Net_WriteByte(DEM_GENERICCHEAT);
+	Net_WriteByte(CHT_BUDDHA);
 }
 
 CCMD (notarget)
@@ -443,7 +462,8 @@ CCMD (chase)
 
 CCMD (idclev)
 {
-	if ((CheckCheatmode ()) || ( NETWORK_GetState( ) == NETSTATE_CLIENT ))
+	// [BB] Check if client instead of "netgame"
+	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 		return;
 
 	if ((argv.argc() > 1) && (*(argv[1] + 2) == 0) && *(argv[1] + 1) && *argv[1])
@@ -481,7 +501,8 @@ CCMD (idclev)
 
 CCMD (hxvisit)
 {
-	if (CheckCheatmode ())
+	// [BB] Check if client instead of "netgame"
+	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 		return;
 
 	if ((argv.argc() > 1) && (*(argv[1] + 2) == 0) && *(argv[1] + 1) && *argv[1])
@@ -880,7 +901,7 @@ CCMD (r_visibility)
 	}
 	else if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
 	{
-		R_SetVisibility (atof (argv[1]));
+		R_SetVisibility ((float)atof (argv[1]));
 	}
 	else
 	{
@@ -1035,20 +1056,46 @@ CCMD(linetarget)
 	P_AimLineAttack(players[consoleplayer].mo,players[consoleplayer].mo->angle,MISSILERANGE, &linetarget, 0);
 	if (linetarget)
 	{
-		// [Dusk] If we're the client, ask the server for information about the
-		// linetarget. The client doesn't know the health of the actor.
+		// [TP] If we're the client, ask the server for information about the linetarget.
 		if ( NETWORK_GetState() == NETSTATE_CLIENT && linetarget->lNetID != -1 )
 		{
-			CLIENTCOMMANDS_Linetarget( linetarget );
+			CLIENTCOMMANDS_InfoCheat( linetarget, false );
 			return;
 		}
 
 		Printf("Target=%s, Health=%d, Spawnhealth=%d\n",
 			linetarget->GetClass()->TypeName.GetChars(),
 			linetarget->health,
-			linetarget->GetDefault()->health);
+			linetarget->SpawnHealth());
 	}
 	else Printf("No target found\n");
+}
+
+// As linetarget, but also give info about non-shootable actors
+CCMD(info)
+{
+	AActor *linetarget;
+
+	if (CheckCheatmode () || players[consoleplayer].mo == NULL) return;
+	P_AimLineAttack(players[consoleplayer].mo,players[consoleplayer].mo->angle,MISSILERANGE, 
+		&linetarget, 0,	ALF_CHECKNONSHOOTABLE|ALF_FORCENOSMART);
+	if (linetarget)
+	{
+		// [TP] If we're the client, ask the server for information about the linetarget.
+		if ( NETWORK_GetState() == NETSTATE_CLIENT && linetarget->lNetID != -1 )
+		{
+			CLIENTCOMMANDS_InfoCheat( linetarget, true );
+			return;
+		}
+
+		Printf("Target=%s, Health=%d, Spawnhealth=%d\n",
+			linetarget->GetClass()->TypeName.GetChars(),
+			linetarget->health,
+			linetarget->SpawnHealth());
+		PrintMiscActorInfo(linetarget);
+	}
+	else Printf("No target found. Info cannot find actors that have\
+				the NOBLOCKMAP flag or have height/radius of 0.\n");
 }
 
 //-----------------------------------------------------------------------------
@@ -1348,3 +1395,16 @@ CCMD(countactors)
 {
 	CountActors ();
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+CCMD(currentpos)
+{
+	AActor *mo = players[consoleplayer].mo;
+	Printf("Current player position: (%1.3f,%1.3f,%1.3f), angle: %1.3f, floorheight: %1.3f, sector:%d, lightlevel: %d\n",
+		FIXED2FLOAT(mo->x), FIXED2FLOAT(mo->y), FIXED2FLOAT(mo->z), mo->angle/float(ANGLE_1), FIXED2FLOAT(mo->floorz), mo->Sector->sectornum, mo->Sector->lightlevel);
+}
+

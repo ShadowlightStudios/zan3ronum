@@ -71,6 +71,7 @@
 #include "r_interpolate.h"
 #include "doomstat.h"
 #include "m_argv.h"
+#include "po_man.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -270,7 +271,7 @@ void Mark(DObject **obj)
 	{
 		if (lobj->ObjectFlags & OF_EuthanizeMe)
 		{
-			*obj = NULL;
+			*obj = (DObject *)NULL;
 		}
 		else if (lobj->IsWhite())
 		{

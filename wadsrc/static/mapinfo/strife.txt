@@ -23,8 +23,10 @@ gameinfo
 	defaultbloodcolor = "68 00 00"
 	defaultbloodparticlecolor = "ff 00 00"
 	backpacktype = "AmmoSatchel"
+	armoricons = "I_ARM2", 0.5, "I_ARM1"
 	statusbar = ""
 	intermissionmusic = "d_slide"
+	intermissioncounter = false
 	weaponslot = 1, "PunchDagger"
 	weaponslot = 2, "StrifeCrossbow2", "StrifeCrossbow"
 	weaponslot = 3, "AssaultGun"
@@ -33,6 +35,14 @@ gameinfo
 	weaponslot = 6, "FlameThrower"
 	weaponslot = 7, "Mauler2", "Mauler"
 	weaponslot = 8, "Sigil"
+	dimcolor = "ff d7 00"
+	dimamount = 0.2
+	definventorymaxamount = 25
+	defaultrespawntime = 16
+	defaultdropstyle = 2
+	endoom = "ENDSTRF"
+	player5start = 5
+	pickupcolor = "d6 ba 45"
 }
 
 skill baby
@@ -43,6 +53,7 @@ skill baby
 	EasyBossBrain
 	SpawnFilter = Baby
 	PicName = "M_JKILL"
+	Name = "$SSKILL_BABY"
 	Key = "t"
 }
 
@@ -50,6 +61,7 @@ skill easy
 {
 	SpawnFilter = Easy
 	PicName = "M_ROUGH"
+	Name = "$SSKILL_EASY"
 	Key = "r"
 }
 
@@ -57,13 +69,16 @@ skill normal
 {
 	SpawnFilter = Normal
 	PicName = "M_HURT"
+	Name = "$SSKILL_NORMAL"
 	Key = "v"
+	DefaultSkill
 }
 
 skill hard
 {
 	SpawnFilter = Hard
 	PicName = "M_ULTRA"
+	Name = "$SSKILL_HARD"
 	Key = "e"
 }
 
@@ -75,6 +90,7 @@ skill nightmare
 	RespawnTime = 16
 	SpawnFilter = Nightmare
 	PicName = "M_NMARE"
+	Name = "$SSKILL_NIGHTMARE"
 	Key = "b"
 }
 

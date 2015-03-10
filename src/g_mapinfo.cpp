@@ -50,6 +50,9 @@
 #include "p_acs.h"
 #include "doomstat.h"
 #include "d_player.h"
+#include "autosegs.h"
+#include "version.h"
+#include "v_text.h"
 
 int FindEndSequence (int type, const char *picname);
 
@@ -84,7 +87,9 @@ level_info_t *FindLevelInfo (const char *mapname)
 	int i;
 
 	if ((i = FindWadLevelInfo (mapname)) > -1)
+	{
 		return &wadlevelinfos[i];
+	}
 	else
 	{
 		if (TheDefaultLevelInfo.LevelName.IsEmpty())
@@ -207,6 +212,9 @@ void G_ClearSnapshots (void)
 	{
 		wadlevelinfos[i].ClearSnapshot();
 	}
+	// Since strings are only locked when snapshotting a level, unlock them
+	// all now, since we got rid of all the snapshots that cared about them.
+	GlobalACSStrings.UnlockAll();
 }
 
 //==========================================================================
@@ -277,6 +285,7 @@ void level_info_t::Reset()
 	bordertexture[0] = 0;
 	teamdamage = 0.f;
 	specialactions.Clear();
+	DefaultEnvironment = 0;
 }
 
 
@@ -401,7 +410,7 @@ bool level_info_t::isValid()
 void cluster_info_t::Reset()
 {
 	cluster = 0;
-	finaleflat[0] = 0;
+	FinaleFlat = "";
 	ExitText = "";
 	EnterText = "";
 	MessageMusic = "";
@@ -627,6 +636,12 @@ void FMapInfoParser::ParseLumpOrTextureName(char *name)
 	name[8]=0;
 }
 
+void FMapInfoParser::ParseLumpOrTextureName(FString &name)
+{
+	sc.MustGetString();
+	name = sc.String;
+}
+
 
 //==========================================================================
 //
@@ -703,12 +718,12 @@ void FMapInfoParser::ParseCluster()
 		else if (sc.Compare("flat"))
 		{
 			ParseAssign();
-			ParseLumpOrTextureName(clusterinfo->finaleflat);
+			ParseLumpOrTextureName(clusterinfo->FinaleFlat);
 		}
 		else if (sc.Compare("pic"))
 		{
 			ParseAssign();
-			ParseLumpOrTextureName(clusterinfo->finaleflat);
+			ParseLumpOrTextureName(clusterinfo->FinaleFlat);
 			clusterinfo->flags |= CLUSTER_FINALEPIC;
 		}
 		else if (sc.Compare("hub"))
@@ -936,6 +951,7 @@ void FMapInfoParser::ParseNextMap(char *mapname)
 		else
 		{
 			strncpy (mapname, sc.String, 8);
+			mapname[8] = 0;
 		}
 		if (useseq)
 		{
@@ -950,8 +966,8 @@ void FMapInfoParser::ParseNextMap(char *mapname)
 			{
 				seqnum = (int)EndSequences.Push (newSeq);
 			}
-			strcpy (mapname, "enDSeQ");
-			*((WORD *)(mapname + 6)) = (WORD)seqnum;
+			// mapname can point to nextmap and secretmap which are both 12 characters long
+			mysnprintf(mapname, 11, "enDSeQ%04x", (WORD)seqnum);
 		}
 	}
 }
@@ -976,6 +992,12 @@ DEFINE_MAP_OPTION(next, true)
 }
 
 DEFINE_MAP_OPTION(secretnext, true)
+{
+	parse.ParseAssign();
+	parse.ParseNextMap(info->secretmap);
+}
+
+DEFINE_MAP_OPTION(secret, true) // Just an alias for secretnext, for Vavoom compatibility
 {
 	parse.ParseAssign();
 	parse.ParseNextMap(info->secretmap);
@@ -1014,7 +1036,7 @@ DEFINE_MAP_OPTION(sky1, true)
 		{
 			parse.sc.Float /= 256;
 		}
-		info->skyspeed1 = parse.sc.Float * (35.f / 1000.f);
+		info->skyspeed1 = float(parse.sc.Float * (35. / 1000.));
 	}
 }
 
@@ -1028,8 +1050,16 @@ DEFINE_MAP_OPTION(sky2, true)
 		{
 			parse.sc.Float /= 256;
 		}
-		info->skyspeed2 = parse.sc.Float * (35.f / 1000.f);
+		info->skyspeed2 = float(parse.sc.Float * (35. / 1000.));
 	}
+}
+
+// Vavoom compatibility
+DEFINE_MAP_OPTION(skybox, true)
+{
+	parse.ParseAssign();
+	parse.ParseLumpOrTextureName(info->skypic1);
+	info->skyspeed1 = 0;
 }
 
 DEFINE_MAP_OPTION(fade, true)
@@ -1137,14 +1167,14 @@ DEFINE_MAP_OPTION(gravity, true)
 {
 	parse.ParseAssign();
 	parse.sc.MustGetFloat();
-	info->gravity = parse.sc.Float;
+	info->gravity = float(parse.sc.Float);
 }
 
 DEFINE_MAP_OPTION(aircontrol, true)
 {
 	parse.ParseAssign();
 	parse.sc.MustGetFloat();
-	info->aircontrol = parse.sc.Float;
+	info->aircontrol = float(parse.sc.Float);
 }
 
 DEFINE_MAP_OPTION(airsupply, true)
@@ -1253,13 +1283,43 @@ DEFINE_MAP_OPTION(teamdamage, true)
 {
 	parse.ParseAssign();
 	parse.sc.MustGetFloat();
-	info->teamdamage = parse.sc.Float;
+	info->teamdamage = float(parse.sc.Float);
 }
 
 DEFINE_MAP_OPTION(mapbackground, true)
 {
 	parse.ParseAssign();
 	parse.ParseLumpOrTextureName(info->mapbg);
+}
+
+DEFINE_MAP_OPTION(defaultenvironment, false)
+{
+	int id;
+
+	parse.ParseAssign();
+	if (parse.sc.CheckNumber())
+	{ // Numeric ID XXX [, YYY]
+		id = parse.sc.Number << 8;
+		if (parse.CheckNumber())
+		{
+			id |= parse.sc.Number;
+		}
+	}
+	else
+	{ // Named environment
+		parse.sc.MustGetString();
+		ReverbContainer *reverb = S_FindEnvironment(parse.sc.String);
+		if (reverb == NULL)
+		{
+			parse.sc.ScriptMessage("Unknown sound environment '%s'\n", parse.sc.String);
+			id = 0;
+		}
+		else
+		{
+			id = reverb->ID;
+		}
+	}
+	info->DefaultEnvironment = id;
 }
 
 
@@ -1305,6 +1365,7 @@ MapFlagHandlers[] =
 	{ "specialaction_exitlevel",		MITYPE_SCFLAGS,	0, ~LEVEL_SPECACTIONSMASK },
 	{ "specialaction_opendoor",			MITYPE_SCFLAGS,	LEVEL_SPECOPENDOOR, ~LEVEL_SPECACTIONSMASK },
 	{ "specialaction_lowerfloor",		MITYPE_SCFLAGS,	LEVEL_SPECLOWERFLOOR, ~LEVEL_SPECACTIONSMASK },
+	{ "specialaction_lowerfloortohighest",MITYPE_SCFLAGS,LEVEL_SPECLOWERFLOORTOHIGHEST, ~LEVEL_SPECACTIONSMASK },
 	{ "specialaction_killmonsters",		MITYPE_SETFLAG,	LEVEL_SPECKILLMONSTERS, 0 },
 	{ "lightning",						MITYPE_SETFLAG,	LEVEL_STARTLIGHTNING, 0 },
 	{ "smoothlighting",					MITYPE_SETFLAG2,	LEVEL2_SMOOTHLIGHTING, 0 },
@@ -1350,6 +1411,10 @@ MapFlagHandlers[] =
 	{ "teamplayoff",					MITYPE_SCFLAGS2,	LEVEL2_FORCETEAMPLAYOFF, ~LEVEL2_FORCETEAMPLAYON },
 	{ "checkswitchrange",				MITYPE_SETFLAG2,	LEVEL2_CHECKSWITCHRANGE, 0 },
 	{ "nocheckswitchrange",				MITYPE_CLRFLAG2,	LEVEL2_CHECKSWITCHRANGE, 0 },
+	{ "grinding_polyobj",				MITYPE_SETFLAG2,	LEVEL2_POLYGRIND, 0 },
+	{ "no_grinding_polyobj",			MITYPE_CLRFLAG2,	LEVEL2_POLYGRIND, 0 },
+	{ "resetinventory",					MITYPE_SETFLAG2,	LEVEL2_RESETINVENTORY, 0 },
+	{ "resethealth",					MITYPE_SETFLAG2,	LEVEL2_RESETHEALTH, 0 },
 	{ "unfreezesingleplayerconversations",MITYPE_SETFLAG2,	LEVEL2_CONV_SINGLE_UNFREEZE, 0 },
 	{ "nobotnodes",						MITYPE_SETFLAG2,	LEVEL2_NOBOTNODES, 0 },// [BC] Allow the prevention of spawning bot nodes (helpful for very large maps).
 	{ "lobby",							MITYPE_SETFLAG2,	LEVEL2_ISLOBBY, 0 },	// [AM] Prefer this.
@@ -1372,6 +1437,15 @@ MapFlagHandlers[] =
 	{ "compat_sectorsounds",			MITYPE_COMPATFLAG, COMPATF_SECTORSOUNDS},
 	{ "compat_missileclip",				MITYPE_COMPATFLAG, COMPATF_MISSILECLIP},
 	{ "compat_crossdropoff",			MITYPE_COMPATFLAG, COMPATF_CROSSDROPOFF},
+	{ "compat_anybossdeath",			MITYPE_COMPATFLAG, COMPATF_ANYBOSSDEATH},
+	{ "compat_minotaur",				MITYPE_COMPATFLAG, COMPATF_MINOTAUR},
+	{ "compat_mushroom",				MITYPE_COMPATFLAG, COMPATF_MUSHROOM},
+	{ "compat_mbfmonstermove",			MITYPE_COMPATFLAG, COMPATF_MBFMONSTERMOVE},
+	{ "compat_corpsegibs",				MITYPE_COMPATFLAG, COMPATF_CORPSEGIBS},
+	{ "compat_noblockfriends",			MITYPE_COMPATFLAG, COMPATF_NOBLOCKFRIENDS},
+	{ "compat_spritesort",				MITYPE_COMPATFLAG, COMPATF_SPRITESORT},
+	{ "compat_light",					MITYPE_COMPATFLAG, COMPATF_LIGHT},
+	{ "compat_polyobj",					MITYPE_COMPATFLAG, COMPATF_POLYOBJ},
 	{ "cd_start_track",					MITYPE_EATNEXT,	0, 0 },
 	{ "cd_end1_track",					MITYPE_EATNEXT,	0, 0 },
 	{ "cd_end2_track",					MITYPE_EATNEXT,	0, 0 },
@@ -1467,14 +1541,18 @@ void FMapInfoParser::ParseMapDefinition(level_info_t &info)
 		}
 		else
 		{
-			TAutoSegIterator<FMapOptInfo*, &YRegHead, &YRegTail> probe;
+			FAutoSegIterator probe(YRegHead, YRegTail);
 			bool success = false;
 
-			while (++probe != NULL)
+			while (*++probe != NULL)
 			{
-				if (sc.Compare(probe->name))
+				if (sc.Compare(((FMapOptInfo *)(*probe))->name))
 				{
-					probe->handler(*this, &info);
+					if (!((FMapOptInfo *)(*probe))->old && format_type != FMT_New)
+					{
+						sc.ScriptError("MAPINFO option '%s' requires the new MAPINFO format", sc.String);
+					}
+					((FMapOptInfo *)(*probe))->handler(*this, &info);
 					success = true;
 					break;
 				}
@@ -1793,7 +1871,6 @@ void FMapInfoParser::ParseEpisodeInfo ()
 		EpisodeMenu[i].bBotSkill = bBotEpisode;
 		EpisodeMenu[i].bBotSkillFullText = !bBotSkillPicIsGFX;
 		strncpy (EpisodeMaps[i], map, 8);
-		// [BB] Terminate the string.
 		EpisodeMaps[i][8] = 0;
 		if ( bBotEpisode )
 			sprintf( EpisodeSkillHeaders[i], "%s", szBotSkillTitle );
@@ -1867,6 +1944,15 @@ void FMapInfoParser::ParseMapInfo (int lump, level_info_t &gamedefaults, level_i
 			{
 				sc.ScriptError("include file '%s' not found", sc.String);
 			}
+			if (Wads.GetLumpFile(sc.LumpNum) != Wads.GetLumpFile(inclump))
+			{
+				// Do not allow overriding includes from the default MAPINFO
+				if (Wads.GetLumpFile(sc.LumpNum) == 0)
+				{
+					I_FatalError("File %s is overriding core lump %s.",
+						Wads.GetWadFullName(Wads.GetLumpFile(inclump)), sc.String);
+				}
+			}
 			FScanner saved_sc = sc;
 			ParseMapInfo(inclump, gamedefaults, defaultinfo);
 			sc = saved_sc;
@@ -1921,6 +2007,7 @@ void FMapInfoParser::ParseMapInfo (int lump, level_info_t &gamedefaults, level_i
 		else if (sc.Compare("clearskills"))
 		{
 			AllSkills.Clear();
+			DefaultSkill = -1;
 		}
 		else if (sc.Compare("gameinfo"))
 		{
@@ -1957,18 +2044,37 @@ void G_ParseMapInfo (const char *basemapinfo)
 
 	atterm(ClearEpisodes);
 
-	// Parse the default MAPINFO for the current game.
+	// Parse the default MAPINFO for the current game. This lump *MUST* come from zdoom.pk3.
 	if (basemapinfo != NULL)
 	{
 		FMapInfoParser parse;
 		level_info_t defaultinfo;
-		parse.ParseMapInfo(Wads.GetNumForFullName(basemapinfo), gamedefaults, defaultinfo);
+		int baselump = Wads.GetNumForFullName(basemapinfo);
+		if (Wads.GetLumpFile(baselump) > 0)
+		{
+			I_FatalError("File %s is overriding core lump %s.", 
+				Wads.GetWadFullName(Wads.GetLumpFile(baselump)), basemapinfo);
+		}
+		parse.ParseMapInfo(baselump, gamedefaults, defaultinfo);
 	}
 
+	static const char *mapinfonames[] = { "MAPINFO", "ZMAPINFO", NULL };
+	int nindex;
+
 	// Parse any extra MAPINFOs.
-	while ((lump = Wads.FindLump ("MAPINFO", &lastlump)) != -1)
+	while ((lump = Wads.FindLumpMulti (mapinfonames, &lastlump, false, &nindex)) != -1)
 	{
-		FMapInfoParser parse;
+		if (nindex == 0)
+		{
+			// If this lump is named MAPINFO we need to check if the same WAD contains a ZMAPINFO lump.
+			// If that exists we need to skip this one.
+
+			int wad = Wads.GetLumpFile(lump);
+			int altlump = Wads.CheckNumForName("ZMAPINFO", ns_global, wad, true);
+
+			if (altlump >= 0) continue;
+		}
+		FMapInfoParser parse(nindex == 1? FMapInfoParser::FMT_New : FMapInfoParser::FMT_Unknown);
 		level_info_t defaultinfo;
 		parse.ParseMapInfo(lump, gamedefaults, defaultinfo);
 	}
@@ -1978,7 +2084,7 @@ void G_ParseMapInfo (const char *basemapinfo)
 	{
 		I_FatalError ("You cannot use clearepisodes in a MAPINFO if you do not define any new episodes after it.");
 	}
-	if (AllSkills.Size()==0)
+	if (AllSkills.Size() == 0)
 	{
 		I_FatalError ("You cannot use clearskills in a MAPINFO if you do not define any new skills after it.");
 	}

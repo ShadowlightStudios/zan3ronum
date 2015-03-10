@@ -71,6 +71,7 @@ FTexture *TGATexture_TryCreate(FileReader &, int lumpnum);
 FTexture *RawPageTexture_TryCreate(FileReader &, int lumpnum);
 FTexture *FlatTexture_TryCreate(FileReader &, int lumpnum);
 FTexture *PatchTexture_TryCreate(FileReader &, int lumpnum);
+FTexture *EmptyTexture_TryCreate(FileReader &, int lumpnum);
 FTexture *AutomapTexture_TryCreate(FileReader &, int lumpnum);
 
 
@@ -88,6 +89,7 @@ FTexture * FTexture::CreateTexture (int lumpnum, int usetype)
 		{ RawPageTexture_TryCreate,		TEX_MiscPatch },
 		{ FlatTexture_TryCreate,		TEX_Flat },
 		{ PatchTexture_TryCreate,		TEX_Any },
+		{ EmptyTexture_TryCreate,		TEX_Any },
 		{ AutomapTexture_TryCreate,		TEX_MiscPatch },
 	};
 
@@ -141,9 +143,10 @@ FTexture::FTexture (const char *name, int lumpnum)
 : LeftOffset(0), TopOffset(0),
   WidthBits(0), HeightBits(0), xScale(FRACUNIT), yScale(FRACUNIT), SourceLump(lumpnum),
   UseType(TEX_Any), bNoDecals(false), bNoRemap0(false), bWorldPanning(false),
-  bMasked(true), bAlphaTexture(false), bHasCanvas(false), bWarped(0), bComplex(false),
-  Rotations(0xFFFF), Width(0), Height(0), WidthMask(0), Native(NULL)
+  bMasked(true), bAlphaTexture(false), bHasCanvas(false), bWarped(0), bComplex(false), bMultiPatch(false),
+  Rotations(0xFFFF), SkyOffset(0), Width(0), Height(0), WidthMask(0), Native(NULL)
 {
+	id.SetInvalid();
 	if (name != NULL)
 	{
 		uppercopy(Name, name);
@@ -314,8 +317,9 @@ void FTexture::CopyToBlock (BYTE *dest, int dwidth, int dheight, int xpos, int y
 	int srcheight = Height;
 	int step_x = Height;
 	int step_y = 1;
+	FClipRect cr = {0, 0, dwidth, dheight};
 
-	if (ClipCopyPixelRect(dwidth, dheight, xpos, ypos, pixels, srcwidth, srcheight, step_x, step_y, rotate))
+	if (ClipCopyPixelRect(&cr, xpos, ypos, pixels, srcwidth, srcheight, step_x, step_y, rotate))
 	{
 		dest += ypos + dheight * xpos;
 		if (translation == NULL)
@@ -362,12 +366,12 @@ void FTexture::FlipSquareBlock (BYTE *block, int x, int y)
 		if (count & 1)
 		{
 			count--;
-			swap<BYTE> (corner[count], corner[count*x]);
+			swapvalues<BYTE> (corner[count], corner[count*x]);
 		}
 		for (j = 0; j < count; j += 2)
 		{
-			swap<BYTE> (corner[j], corner[j*x]);
-			swap<BYTE> (corner[j+1], corner[(j+1)*x]);
+			swapvalues<BYTE> (corner[j], corner[j*x]);
+			swapvalues<BYTE> (corner[j+1], corner[(j+1)*x]);
 		}
 	}
 }
@@ -545,8 +549,8 @@ FTexture *FTexture::GetRedirect(bool wantwarped)
 
 void FTexture::SetScaledSize(int fitwidth, int fitheight)
 {
-	xScale = DivScale16(Width, fitwidth);
-	yScale = DivScale16(Height,fitheight);
+	xScale = FLOAT2FIXED(float(Width) / fitwidth);
+	yScale = FLOAT2FIXED(float(Height) / fitheight);
 	// compensate for roundoff errors
 	if (MulScale16(xScale, fitwidth) != Width) xScale++;
 	if (MulScale16(yScale, fitheight) != Height) yScale++;

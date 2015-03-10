@@ -35,6 +35,7 @@
 #include "statnums.h"
 #include "r_translate.h"
 #include "d_event.h"
+#include "gi.h"
 
 #include "m_cheat.h"
 #include "i_system.h"
@@ -57,6 +58,8 @@
 
 #include "am_map.h"
 #include "a_artifacts.h"
+#include "po_man.h"
+#include "a_keys.h"
 
 #include "gl/gl_functions.h"
 // [BC] New #includes.
@@ -85,7 +88,7 @@ struct AMColor
 
 static AMColor Background, YourColor, WallColor, TSWallColor,
 		   FDWallColor, CDWallColor, ThingColor,
-		   ThingColor_Item, ThingColor_Monster, ThingColor_Friend,
+		   ThingColor_Item, ThingColor_CountItem, ThingColor_Monster, ThingColor_Friend,
 		   SecretWallColor, GridColor, XHairColor,
 		   NotSeenColor,
 		   LockedColor,
@@ -173,14 +176,61 @@ CVAR (Color, am_ovtelecolor,		0xffff00,	CVAR_ARCHIVE);
 CVAR (Color, am_intralevelcolor,	0x0000ff,	CVAR_ARCHIVE);
 CVAR (Color, am_interlevelcolor,	0xff0000,	CVAR_ARCHIVE);
 CVAR (Color, am_secretsectorcolor,	0xff00ff,	CVAR_ARCHIVE);
+CVAR (Color, am_ovsecretsectorcolor,0x00ffff,	CVAR_ARCHIVE);
 CVAR (Int,   am_map_secrets,		1,			CVAR_ARCHIVE);
 CVAR (Bool,  am_drawmapback,		true,		CVAR_ARCHIVE);
+CVAR (Bool,  am_showkeys,			true,		CVAR_ARCHIVE);
 CVAR (Color, am_thingcolor_friend,		0xfcfcfc,	CVAR_ARCHIVE);
 CVAR (Color, am_thingcolor_monster,		0xfcfcfc,	CVAR_ARCHIVE);
 CVAR (Color, am_thingcolor_item,		0xfcfcfc,	CVAR_ARCHIVE);
+CVAR (Color, am_thingcolor_citem,		0xfcfcfc,	CVAR_ARCHIVE);
 CVAR (Color, am_ovthingcolor_friend,	0xe88800,	CVAR_ARCHIVE);
 CVAR (Color, am_ovthingcolor_monster,	0xe88800,	CVAR_ARCHIVE);
 CVAR (Color, am_ovthingcolor_item,		0xe88800,	CVAR_ARCHIVE);
+CVAR (Color, am_ovthingcolor_citem,		0xe88800,	CVAR_ARCHIVE);
+
+
+CVAR(Int, am_showsubsector, -1, 0);
+
+
+// Disable the ML_DONTDRAW line flag if x% of all lines in a map are flagged with it
+// (To counter annoying mappers who think they are smart by making the automap unusable)
+bool am_showallenabled;
+
+CUSTOM_CVAR (Int, am_showalllines, -1, 0)	// This is a cheat so don't save it.
+{
+	int flagged = 0;
+	int total = 0;
+	if (self > 0 && numlines > 0)
+	{
+		for(int i=0;i<numlines;i++)
+		{
+			line_t *line = &lines[i];
+
+			// disregard intra-sector lines
+			if (line->frontsector == line->backsector) continue;	
+
+			// disregard control sectors for deep water
+			if (line->frontsector->e->FakeFloor.Sectors.Size() > 0) continue;	
+
+			// disregard control sectors for 3D-floors
+			if (line->frontsector->e->XFloor.attached.Size() > 0) continue;	
+
+			total++;
+			if (line->flags & ML_DONTDRAW) flagged++;
+		}
+		am_showallenabled =  (flagged * 100 / total >= self);
+	}
+	else if (self == 0)
+	{
+		am_showallenabled = true;
+	}
+	else
+	{
+		am_showallenabled = false;
+	}
+}
+
 
 // drawing stuff
 #define AM_PANDOWNKEY	KEY_DOWNARROW
@@ -258,10 +308,22 @@ mline_t player_arrow[] = {
 	{ { -R+3*R/8, 0 }, { -R+R/8, R/4 } }, // >>--->
 	{ { -R+3*R/8, 0 }, { -R+R/8, -R/4 } }
 };
-#undef R
 #define NUMPLYRLINES (sizeof(player_arrow)/sizeof(mline_t))
 
-#define R ((8*PLAYERRADIUS)/7)
+mline_t player_arrow_raven[] = {
+	{ { -R+R/4, 0 }, { 0, 0} }, // center line.
+	{ { -R+R/4, R/8 }, { R, 0} }, // blade
+	{ { -R+R/4, -R/8 }, { R, 0 } },
+	{ { -R+R/4, -R/4 }, { -R+R/4, R/4 } }, // crosspiece
+	{ { -R+R/8, -R/4 }, { -R+R/8, R/4 } },
+	{ { -R+R/8, -R/4 }, { -R+R/4, -R/4} }, //crosspiece connectors
+	{ { -R+R/8, R/4 }, { -R+R/4, R/4} },
+	{ { -R-R/4, R/8 }, { -R-R/4, -R/8 } }, //pommel
+	{ { -R-R/4, R/8 }, { -R+R/8, R/8 } },
+	{ { -R-R/4, -R/8}, { -R+R/8, -R/8 } }
+};
+#define NUMPLYRLINES_RAVEN (sizeof(player_arrow_raven)/sizeof(mline_t))
+
 mline_t cheat_player_arrow[] = {
 	{ { -R+R/8, 0 }, { R, 0 } }, // -----
 	{ { R, 0 }, { R-R/2, R/6 } },  // ----->
@@ -280,8 +342,9 @@ mline_t cheat_player_arrow[] = {
 	{ { R/6, -R/7 }, { R/6+R/32, -R/7-R/32 } },
 	{ { R/6+R/32, -R/7-R/32 }, { R/6+R/10, -R/7 } }
 };
-#undef R
 #define NUMCHEATPLYRLINES (sizeof(cheat_player_arrow)/sizeof(mline_t))
+
+#undef R
 
 #define R (MAPUNIT)
 // [RH] Avoid lots of warnings without compiler-specific #pragmas
@@ -298,9 +361,37 @@ mline_t thintriangle_guy[] = {
 	L (1,0, -.5,.7),
 	L (-.5,.7, -.5,-.7)
 };
+#define NUMTHINTRIANGLEGUYLINES (sizeof(thintriangle_guy)/sizeof(mline_t))
+
+mline_t square_guy[] = {
+	L (0,1,1,0),
+	L (1,0,0,-1),
+	L (0,-1,-1,0),
+	L (-1,0,0,1)
+};
+#define NUMSQUAREGUYLINES (sizeof(square_guy)/sizeof(mline_t))
+
+#undef R
+#define R (MAPUNIT)
+
+mline_t key_guy[] = {
+	L (-2, 0, -1.7, -0.5),
+	L (-1.7, -0.5, -1.5, -0.7),
+	L (-1.5, -0.7, -0.8, -0.5),
+	L (-0.8, -0.5, -0.6, 0),
+	L (-0.6, 0, -0.8, 0.5),
+	L (-1.5, 0.7, -0.8, 0.5),
+	L (-1.7, 0.5, -1.5, 0.7),
+	L (-2, 0, -1.7, 0.5),
+	L (-0.6, 0, 2, 0),
+	L (1.7, 0, 1.7, -1),
+	L (1.5, 0, 1.5, -1),
+	L (1.3, 0, 1.3, -1)
+};
+#define NUMKEYGUYLINES (sizeof(key_guy)/sizeof(mline_t))
+
 #undef L
 #undef R
-#define NUMTHINTRIANGLEGUYLINES (sizeof(thintriangle_guy)/sizeof(mline_t))
 
 
 
@@ -403,14 +494,24 @@ void AM_getIslope (mline_t *ml, islope_t *is)
 }
 */
 
+//=============================================================================
+//
+// called by the coordinate drawer
+//
+//=============================================================================
+
 void AM_GetPosition(fixed_t &x, fixed_t &y)
 {
 	x = (m_x + m_w/2) << FRACTOMAPBITS;
 	y = (m_y + m_h/2) << FRACTOMAPBITS;
 }
+
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_activateNewScale ()
 {
 	m_x += m_w/2;
@@ -423,9 +524,12 @@ void AM_activateNewScale ()
 	m_y2 = m_y + m_h;
 }
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_saveScaleAndLoc ()
 {
 	old_m_x = m_x;
@@ -434,9 +538,12 @@ void AM_saveScaleAndLoc ()
 	old_m_h = m_h;
 }
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_restoreScaleAndLoc ()
 {
 	m_w = old_m_w;
@@ -459,9 +566,12 @@ void AM_restoreScaleAndLoc ()
 	scale_ftom = MapDiv(MAPUNIT, scale_mtof);
 }
 
+//=============================================================================
 //
 // adds a marker at the current location
 //
+//=============================================================================
+
 bool AM_addMark ()
 {
 	if (marknums[0].isValid())
@@ -474,10 +584,13 @@ bool AM_addMark ()
 	return false;
 }
 
+//=============================================================================
 //
 // Determines bounding box of all vertices,
 // sets global variables controlling zoom range.
 //
+//=============================================================================
+
 static void AM_findMinMaxBoundaries ()
 {
 	min_x = min_y = FIXED_MAX;
@@ -505,6 +618,12 @@ static void AM_findMinMaxBoundaries ()
 	AM_calcMinMaxMtoF();
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 static void AM_calcMinMaxMtoF()
 {
 	fixed_t a = MapDiv (SCREENWIDTH << MAPBITS, max_w);
@@ -513,6 +632,12 @@ static void AM_calcMinMaxMtoF()
 	min_scale_mtof = a < b ? a : b;
 	max_scale_mtof = MapDiv (SCREENHEIGHT << MAPBITS, 2*PLAYERRADIUS);
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 static void AM_ClipRotatedExtents (fixed_t pivotx, fixed_t pivoty)
 {
@@ -578,6 +703,12 @@ static void AM_ClipRotatedExtents (fixed_t pivotx, fixed_t pivoty)
 	m_y2 = m_y + m_h;
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 static void AM_ScrollParchment (fixed_t dmapx, fixed_t dmapy)
 {
 	mapxstart -= MulScale12 (dmapx, scale_mtof);
@@ -604,9 +735,12 @@ static void AM_ScrollParchment (fixed_t dmapx, fixed_t dmapy)
 	}
 }
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_changeWindowLoc ()
 {
 	if (0 != (m_paninc.x | m_paninc.y))
@@ -637,9 +771,12 @@ void AM_changeWindowLoc ()
 }
 
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_initVariables ()
 {
 	int pnum;
@@ -685,6 +822,11 @@ static void GetComponents (int color, DWORD *palette, float &r, float &g, float 
 }
 */
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 static void AM_initColors (bool overlayed)
 {
@@ -710,8 +852,10 @@ static void AM_initColors (bool overlayed)
 	{
 		YourColor.FromCVar (am_ovyourcolor);
 		WallColor.FromCVar (am_ovwallcolor);
-		SecretSectorColor = SecretWallColor = WallColor;
+		SecretWallColor = WallColor;
+		SecretSectorColor.FromCVar (am_ovsecretsectorcolor);
 		ThingColor_Item.FromCVar (am_ovthingcolor_item);
+		ThingColor_CountItem.FromCVar (am_ovthingcolor_citem);
 		ThingColor_Friend.FromCVar (am_ovthingcolor_friend);
 		ThingColor_Monster.FromCVar (am_ovthingcolor_monster);
 		ThingColor.FromCVar (am_ovthingcolor);
@@ -735,6 +879,7 @@ static void AM_initColors (bool overlayed)
 			FDWallColor.FromCVar (am_fdwallcolor);
 			CDWallColor.FromCVar (am_cdwallcolor);
 			ThingColor_Item.FromCVar (am_thingcolor_item);
+			ThingColor_CountItem.FromCVar (am_thingcolor_citem);
 			ThingColor_Friend.FromCVar (am_thingcolor_friend);
 			ThingColor_Monster.FromCVar (am_thingcolor_monster);
 			ThingColor.FromCVar (am_thingcolor);
@@ -831,9 +976,12 @@ static void AM_initColors (bool overlayed)
 	lastpal = palette;
 }
 
+//=============================================================================
 //
 // 
 //
+//=============================================================================
+
 void AM_loadPics ()
 {
 	int i;
@@ -845,10 +993,16 @@ void AM_loadPics ()
 		marknums[i] = TexMan.CheckForTexture (namebuf, FTexture::TEX_MiscPatch);
 	}
 
-	const char *autopage = level.info->mapbg[0] == 0? "AUTOPAGE" : (const char*)level.info->mapbg[0];
+	const char *autopage = level.info->mapbg[0] == 0? "AUTOPAGE" : (const char*)&level.info->mapbg[0];
 
 	mapback = TexMan.CheckForTexture(autopage, FTexture::TEX_MiscPatch);
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 bool AM_clearMarks ()
 {
@@ -858,9 +1012,12 @@ bool AM_clearMarks ()
 	return marknums[0].isValid();
 }
 
+//=============================================================================
 //
 // called right after the level has been loaded
 //
+//=============================================================================
+
 void AM_LevelInit ()
 {
 	leveljuststarted = 0;
@@ -872,11 +1029,16 @@ void AM_LevelInit ()
 	if (scale_mtof > max_scale_mtof)
 		scale_mtof = min_scale_mtof;
 	scale_ftom = MapDiv(MAPUNIT, scale_mtof);
+
+	am_showalllines.Callback();
 }
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_Stop ()
 {
 	automapactive = false;
@@ -885,9 +1047,12 @@ void AM_Stop ()
 	viewactive = true;
 }
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_Start ()
 {
 	if (!stopped) AM_Stop();
@@ -898,27 +1063,36 @@ void AM_Start ()
 
 
 
+//=============================================================================
 //
 // set the window scale to the maximum size
 //
+//=============================================================================
+
 void AM_minOutWindowScale ()
 {
 	scale_mtof = min_scale_mtof;
 	scale_ftom = MapDiv(MAPUNIT, scale_mtof);
 }
 
+//=============================================================================
 //
 // set the window scale to the minimum size
 //
+//=============================================================================
+
 void AM_maxOutWindowScale ()
 {
 	scale_mtof = max_scale_mtof;
 	scale_ftom = MapDiv(MAPUNIT, scale_mtof);
 }
 
+//=============================================================================
 //
 // Called right after the resolution has changed
 //
+//=============================================================================
+
 void AM_NewResolution()
 {
 	fixed_t oldmin = min_scale_mtof;
@@ -940,6 +1114,12 @@ void AM_NewResolution()
 }
 
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 CCMD (togglemap)
 {
 	// [BB] The server can't do this.
@@ -948,6 +1128,12 @@ CCMD (togglemap)
 
 	gameaction = ga_togglemap;
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_ToggleMap ()
 {
@@ -982,9 +1168,12 @@ void AM_ToggleMap ()
 	}
 }
 
+//=============================================================================
 //
 // Handle events (user inputs) in automap mode
 //
+//=============================================================================
+
 bool AM_Responder (event_t *ev)
 {
 	bool rc;
@@ -1109,9 +1298,12 @@ bool AM_Responder (event_t *ev)
 }
 
 
+//=============================================================================
 //
 // Zooming
 //
+//=============================================================================
+
 void AM_changeWindowScale ()
 {
 	// Change the scaling multipliers
@@ -1125,9 +1317,12 @@ void AM_changeWindowScale ()
 }
 
 
+//=============================================================================
 //
 //
 //
+//=============================================================================
+
 void AM_doFollowPlayer ()
 {
 	fixed_t sx, sy;
@@ -1155,6 +1350,12 @@ void AM_doFollowPlayer ()
 	}
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 static void AM_ToggleFollowPlayer()
 {
 	followplayer = !followplayer;
@@ -1162,9 +1363,12 @@ static void AM_ToggleFollowPlayer()
 	Printf ("%s\n", GStrings(followplayer ? "AMSTR_FOLLOWON" : "AMSTR_FOLLOWOFF"));
 }
 
+//=============================================================================
 //
 // Updates on Game Tick
 //
+//=============================================================================
+
 void AM_Ticker ()
 {
 	if (!automapactive)
@@ -1185,9 +1389,12 @@ void AM_Ticker ()
 }
 
 
+//=============================================================================
 //
 // Clear automap frame buffer.
 //
+//=============================================================================
+
 void AM_clearFB (const AMColor &color)
 {
 	if (!mapback.isValid() || !am_drawmapback)
@@ -1216,6 +1423,7 @@ void AM_clearFB (const AMColor &color)
 }
 
 
+//=============================================================================
 //
 // Automap clipping of lines.
 //
@@ -1223,6 +1431,8 @@ void AM_clearFB (const AMColor &color)
 // faster reject and precalculated slopes.  If the speed is needed,
 // use a hash algorithm to handle the common cases.
 //
+//=============================================================================
+
 bool AM_clipMline (mline_t *ml, fline_t *fl)
 {
 	enum {
@@ -1344,9 +1554,12 @@ bool AM_clipMline (mline_t *ml, fline_t *fl)
 #undef DOOUTCODE
 
 
+//=============================================================================
 //
 // Clip lines, draw visible parts of lines.
 //
+//=============================================================================
+
 void AM_drawMline (mline_t *ml, const AMColor &color)
 {
 	fline_t fl;
@@ -1357,11 +1570,12 @@ void AM_drawMline (mline_t *ml, const AMColor &color)
 	}
 }
 
-
-
+//=============================================================================
 //
 // Draws flat (floor/ceiling tile) aligned grid lines.
 //
+//=============================================================================
+
 void AM_drawGrid (const AMColor &color)
 {
 	fixed_t x, y;
@@ -1424,11 +1638,17 @@ void AM_drawGrid (const AMColor &color)
 	}
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 static bool AM_CheckSecret(line_t *line)
 {
 	if (line->frontsector != NULL)
 	{
-		if (line->frontsector->oldspecial)
+		if (line->frontsector->secretsector)
 		{
 			if (am_map_secrets!=0 && !(line->frontsector->special&SECRET_MASK)) return true;
 			if (am_map_secrets==2 && !(line->flags & ML_SECRET)) return true;
@@ -1436,7 +1656,7 @@ static bool AM_CheckSecret(line_t *line)
 	}
 	if (line->backsector != NULL)
 	{
-		if (line->backsector->oldspecial)
+		if (line->backsector->secretsector)
 		{
 			if (am_map_secrets!=0 && !(line->backsector->special&SECRET_MASK)) return true;
 			if (am_map_secrets==2 && !(line->flags & ML_SECRET)) return true;
@@ -1444,10 +1664,89 @@ static bool AM_CheckSecret(line_t *line)
 	}
 	return false;
 }
+
+
+//=============================================================================
+//
+// Polyobject debug stuff
+//
+//=============================================================================
+
+void AM_drawSeg(seg_t *seg, const AMColor &color)
+{
+	mline_t l;
+	l.a.x = seg->v1->x >> FRACTOMAPBITS;
+	l.a.y = seg->v1->y >> FRACTOMAPBITS;
+	l.b.x = seg->v2->x >> FRACTOMAPBITS;
+	l.b.y = seg->v2->y >> FRACTOMAPBITS;
+
+	if (am_rotate == 1 || (am_rotate == 2 && viewactive))
+	{
+		AM_rotatePoint (&l.a.x, &l.a.y);
+		AM_rotatePoint (&l.b.x, &l.b.y);
+	}
+	AM_drawMline(&l, color);
+}
+
+void AM_drawPolySeg(FPolySeg *seg, const AMColor &color)
+{
+	mline_t l;
+	l.a.x = seg->v1.x >> FRACTOMAPBITS;
+	l.a.y = seg->v1.y >> FRACTOMAPBITS;
+	l.b.x = seg->v2.x >> FRACTOMAPBITS;
+	l.b.y = seg->v2.y >> FRACTOMAPBITS;
+
+	if (am_rotate == 1 || (am_rotate == 2 && viewactive))
+	{
+		AM_rotatePoint (&l.a.x, &l.a.y);
+		AM_rotatePoint (&l.b.x, &l.b.y);
+	}
+	AM_drawMline(&l, color);
+}
+
+void AM_showSS()
+{
+	if (am_showsubsector >= 0 && am_showsubsector < numsubsectors)
+	{
+		AMColor yellow;
+		yellow.FromRGB(255,255,0);
+		AMColor red;
+		red.FromRGB(255,0,0);
+
+		subsector_t *sub = &subsectors[am_showsubsector];
+		for (unsigned int i = 0; i < sub->numlines; i++)
+		{
+			AM_drawSeg(sub->firstline + i, yellow);
+		}
+		PO_LinkToSubsectors();
+
+		for (int i = 0; i <po_NumPolyobjs; i++)
+		{
+			FPolyObj *po = &polyobjs[i];
+			FPolyNode *pnode = po->subsectorlinks;
+
+			while (pnode != NULL)
+			{
+				if (pnode->subsector == sub)
+				{
+					for (unsigned j = 0; j < pnode->segs.Size(); j++)
+					{
+						AM_drawPolySeg(&pnode->segs[j], red);
+					}
+				}
+				pnode = pnode->snext;
+			}
+		}
+	}
+}
+
+//=============================================================================
 //
 // Determines visible lines, draws them.
 // This is LineDef based, not LineSeg based.
 //
+//=============================================================================
+
 void AM_drawWalls (bool allmap)
 {
 	int i;
@@ -1469,7 +1768,12 @@ void AM_drawWalls (bool allmap)
 		if (am_cheat != 0 || (lines[i].flags & ML_MAPPED))
 		{
 			if ((lines[i].flags & ML_DONTDRAW) && am_cheat == 0)
-				continue;
+			{
+				if (!am_showallenabled || CheckCheatmode(false))
+				{
+					continue;
+				}
+			}
 
 			if (AM_CheckSecret(&lines[i]))
 			{
@@ -1548,17 +1852,26 @@ void AM_drawWalls (bool allmap)
 		}
 		else if (allmap)
 		{
-			if (!(lines[i].flags & ML_DONTDRAW))
-				AM_drawMline(&l, NotSeenColor);
+			if ((lines[i].flags & ML_DONTDRAW) && am_cheat == 0)
+			{
+				if (!am_showallenabled || CheckCheatmode(false))
+				{
+					continue;
+				}
+			}
+			AM_drawMline(&l, NotSeenColor);
 		}
     }
 }
 
 
+//=============================================================================
 //
 // Rotation in 2D.
 // Used to rotate player arrow line character.
 //
+//=============================================================================
+
 void AM_rotate (fixed_t *x, fixed_t *y, angle_t a)
 {
 	fixed_t tmpx;
@@ -1568,6 +1881,12 @@ void AM_rotate (fixed_t *x, fixed_t *y, angle_t a)
 	*y = DMulScale16 (*x,finesine[a],*y,finecosine[a]);
 	*x = tmpx;
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_rotatePoint (fixed_t *x, fixed_t *y)
 {
@@ -1579,6 +1898,12 @@ void AM_rotatePoint (fixed_t *x, fixed_t *y)
 	*x += pivotx;
 	*y += pivoty;
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void
 AM_drawLineCharacter
@@ -1626,6 +1951,12 @@ AM_drawLineCharacter
 	}
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 void AM_drawPlayers ()
 {
 	mpoint_t pt;
@@ -1648,7 +1979,13 @@ void AM_drawPlayers ()
 		{
 			angle = players[consoleplayer].camera->angle;
 		}
-		if (am_cheat != 0)
+		
+		if (gameinfo.gametype & GAME_Raven)
+		{
+			arrow = player_arrow_raven;
+			numarrowlines = NUMPLYRLINES_RAVEN;
+		}
+		else if (am_cheat != 0)
 		{
 			arrow = cheat_player_arrow;
 			numarrowlines =  NUMCHEATPLYRLINES;
@@ -1693,7 +2030,7 @@ void AM_drawPlayers ()
 		{
 			float h, s, v, r, g, b;
 
-			D_GetPlayerColor (i, &h, &s, &v);
+			D_GetPlayerColor (i, &h, &s, &v, NULL);
 			HSVtoRGB (&r, &g, &b, h, s, v);
 
 			color.FromRGB(clamp (int(r*255.f),0,255), clamp (int(g*255.f),0,255), clamp (int(b*255.f),0,255));
@@ -1717,6 +2054,12 @@ void AM_drawPlayers ()
 		}
     }
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_drawThings ()
 {
@@ -1749,11 +2092,40 @@ void AM_drawThings ()
 				if (t->flags & MF_FRIENDLY || !(t->flags & MF_COUNTKILL)) color = ThingColor_Friend;
 				else color = ThingColor_Monster;
 			}
-			else if (t->flags&MF_SPECIAL) color = ThingColor_Item;
+			else if (t->flags&MF_SPECIAL)
+			{
+				// Find the key's own color.
+				// Only works correctly if single-key locks have lower numbers than any-key locks.
+				// That is the case for all default keys, however.
+				if (t->IsKindOf(RUNTIME_CLASS(AKey)))
+				{
+					if (am_showkeys)
+					{
+						int P_GetMapColorForKey (AInventory * key);
+						int c = P_GetMapColorForKey(static_cast<AKey *>(t));
 
-			AM_drawLineCharacter
-			(thintriangle_guy, NUMTHINTRIANGLEGUYLINES,
-			 16<<MAPBITS, angle, color, p.x, p.y);
+						if (c >= 0)	color.FromRGB(RPART(c), GPART(c), BPART(c));
+						else color = ThingColor_CountItem;
+						AM_drawLineCharacter(key_guy, NUMKEYGUYLINES, 16<<MAPBITS, 0, color, p.x, p.y);
+						color.Index = -1;
+					}
+					else
+					{
+						color = ThingColor_Item;
+					}
+				}
+				else if (t->flags&MF_COUNTITEM)
+					color = ThingColor_CountItem;
+				else
+					color = ThingColor_Item;
+			}
+
+			if (color.Index != -1)
+			{
+				AM_drawLineCharacter
+				(thintriangle_guy, NUMTHINTRIANGLEGUYLINES,
+				 16<<MAPBITS, angle, color, p.x, p.y);
+			}
 
 			if (am_cheat >= 3)
 			{
@@ -1771,6 +2143,12 @@ void AM_drawThings ()
 		}
 	}
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 static void DrawMarker (FTexture *tex, fixed_t x, fixed_t y, int yadjust,
 	INTBOOL flip, fixed_t xscale, fixed_t yscale, int translation, fixed_t alpha, DWORD fillcolor, FRenderStyle renderstyle)
@@ -1798,6 +2176,12 @@ static void DrawMarker (FTexture *tex, fixed_t x, fixed_t y, int yadjust,
 		TAG_DONE);
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 void AM_drawMarks ()
 {
 	for (int i = 0; i < AM_NUMMARKPOINTS; i++)
@@ -1809,6 +2193,12 @@ void AM_drawMarks ()
 		}
 	}
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_drawAuthorMarkers ()
 {
@@ -1871,10 +2261,22 @@ void AM_drawAuthorMarkers ()
 	}
 }
 
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
 void AM_drawCrosshair (const AMColor &color)
 {
 	screen->DrawPixel(f_w/2, (f_h+1)/2, color.Index, color.RGB);
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_Drawer ()
 {
@@ -1882,7 +2284,7 @@ void AM_Drawer ()
 		return;
 
 	bool allmap = (level.flags2 & LEVEL2_ALLMAP) != 0;
-	bool allthings = allmap && players[consoleplayer].mo->FindInventory<APowerScanner>() != NULL;
+	bool allthings = allmap && players[consoleplayer].mo->FindInventory(RUNTIME_CLASS(APowerScanner), true) != NULL;
 
 	AM_initColors (viewactive);
 
@@ -1921,7 +2323,15 @@ void AM_Drawer ()
 		AM_drawCrosshair(XHairColor);
 
 	AM_drawMarks();
+
+	AM_showSS();
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
 
 void AM_SerializeMarkers(FArchive &arc)
 {

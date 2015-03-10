@@ -37,6 +37,7 @@
 #include "actor.h"
 #include "templates.h"
 #include "autosegs.h"
+#include "v_text.h"
 
 TArray<PClass *> PClass::m_RuntimeActors;
 TArray<PClass *> PClass::m_Types;
@@ -67,15 +68,15 @@ void PClass::StaticInit ()
 	// MinGW's linker is linking the object files backwards for me now...
 	if (head > tail)
 	{
-		swap (head, tail);
+		swapvalues (head, tail);
 	}
 	qsort (head + 1, tail - head - 1, sizeof(REGINFO), cregcmp);
 
-	TAutoSegIterator<ClassReg *, &CRegHead, &CRegTail> probe;
+	FAutoSegIterator probe(CRegHead, CRegTail);
 
-	while (++probe != NULL)
+	while (*++probe != NULL)
 	{
-		probe->RegisterClass ();
+		((ClassReg *)*probe)->RegisterClass ();
 	}
 }
 
@@ -118,7 +119,7 @@ void PClass::StaticFreeData (PClass *type)
 {
 	if (type->Defaults != NULL)
 	{
-		delete[] type->Defaults;
+		M_Free(type->Defaults);
 		type->Defaults = NULL;
 	}
 	type->FreeStateList ();
@@ -140,6 +141,11 @@ void PClass::StaticFreeData (PClass *type)
 			delete type->ActorInfo->PainChances;
 			type->ActorInfo->PainChances = NULL;
 		}
+		if (type->ActorInfo->ColorSets != NULL)
+		{
+			delete type->ActorInfo->ColorSets;
+			type->ActorInfo->ColorSets = NULL;
+		}
 		delete type->ActorInfo;
 		type->ActorInfo = NULL;
 	}
@@ -153,7 +159,7 @@ void PClass::StaticFreeData (PClass *type)
 	}
 }
 
-void ClassReg::RegisterClass ()
+void ClassReg::RegisterClass () const
 {
 	assert (MyClass != NULL);
 
@@ -185,7 +191,7 @@ void PClass::InsertIntoHash ()
 		else if (lexx == 0)
 		{ // This type has already been inserted
 		  // ... but there is no need whatsoever to make it a fatal error!
-			Printf ("Tried to register class '%s' more than once.\n", TypeName.GetChars());
+			Printf (TEXTCOLOR_RED"Tried to register class '%s' more than once.\n", TypeName.GetChars());
 			break;
 		}
 		else
@@ -281,7 +287,7 @@ PClass *PClass::CreateDerivedClass (FName name, unsigned int size)
 	type->Meta = Meta;
 
 	// Set up default instance of the new class.
-	type->Defaults = new BYTE[size];
+	type->Defaults = (BYTE *)M_Malloc(size);
 	memcpy (type->Defaults, Defaults, Size);
 	if (size > Size)
 	{
@@ -310,9 +316,23 @@ PClass *PClass::CreateDerivedClass (FName name, unsigned int size)
 		info->StateList = NULL;
 		info->DamageFactors = NULL;
 		info->PainChances = NULL;
+		info->ColorSets = NULL;
 		m_RuntimeActors.Push (type);
 	}
 	return type;
+}
+
+// Add <extension> bytes to the end of this class. Returns the
+// previous size of the class.
+unsigned int PClass::Extend(unsigned int extension)
+{
+	assert(this->bRuntimeClass);
+
+	unsigned int oldsize = Size;
+	Size += extension;
+	Defaults = (BYTE *)M_Realloc(Defaults, Size);
+	memset(Defaults + oldsize, 0, extension);
+	return oldsize;
 }
 
 // Like FindClass but creates a placeholder if no class
@@ -364,7 +384,7 @@ const PClass *PClass::FindClassTentative (FName name)
 void PClass::InitializeActorInfo ()
 {
 	Symbols.SetParentTable (&ParentClass->Symbols);
-	Defaults = new BYTE[Size];
+	Defaults = (BYTE *)M_Malloc(Size);
 	if (ParentClass->Defaults != NULL) 
 	{
 		memcpy (Defaults, ParentClass->Defaults, ParentClass->Size);
@@ -390,6 +410,7 @@ void PClass::InitializeActorInfo ()
 	info->StateList = NULL;
 	info->DamageFactors = NULL;
 	info->PainChances = NULL;
+	info->ColorSets = NULL;
 	m_RuntimeActors.Push (this);
 }
 

@@ -1,7 +1,7 @@
 
 // Macil (version 1) ---------------------------------------------------------
 
-ACTOR Macil1 64 native
+ACTOR Macil1 64
 {
 	Game Strife
 	ConversationID 49, 48, 49
@@ -16,12 +16,14 @@ ACTOR Macil1 64 native
 	+NOICEDEATH
 	+NOSPLASHALERT
 	+NODAMAGE
+	+NEVERRESPAWN
 	DamageFactor "Fire", 0.5
 	MinMissileChance 150
 	SeeSound "macil/sight"
 	PainSound "macil/pain"
 	ActiveSound "macil/active"
-	Tag "MACIL"
+	CrushPainSound "misc/pcrush"
+	Tag "$TAG_MACIL1"
 	Obituary "$OB_MACIL"
 	DropItem "BoxOfBullets"
 	MaxStepHeight 16
@@ -64,8 +66,10 @@ ACTOR Macil2 : Macil1 200
 	+COUNTKILL
 	+SPECTRAL
 	-NODAMAGE
+	Tag "$TAG_MACIL2"
 	DeathSound "macil/slop"
 	DropItem "None"
+	DamageFactor "SpectralLow", 0
 	States
 	{
 	Missile:

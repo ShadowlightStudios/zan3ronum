@@ -113,6 +113,8 @@
 #include "domination.h"
 #include "a_movingcamera.h"
 #include "cl_main.h"
+#include "d_netinf.h"
+#include "po_man.h"
 #include "network/cl_auth.h"
 #include "network/sv_auth.h"
 #include "unlagged.h" // [CK]
@@ -162,7 +164,7 @@ static	bool	server_MorphCheat( BYTESTREAM_s *pByteStream );
 static	bool	server_CheckForClientMinorCommandFlood( ULONG ulClient );
 static	bool	server_ProcessMoveCommand( const CLIENT_MOVE_COMMAND_s &ClientMoveCmd, const ULONG ulClient );
 static	bool	server_CheckJoinPassword( const FString& clientPassword );
-static	bool	server_Linetarget( BYTESTREAM_s* pByteStream );
+static	bool	server_InfoCheat( BYTESTREAM_s* pByteStream );
 static	bool	server_CheckLogin( const ULONG ulClient );
 
 // [RC]
@@ -373,8 +375,8 @@ CUSTOM_CVAR( Bool, sv_limitcommands, true, CVAR_ARCHIVE|CVAR_NOSETBYACS )
 
 void SERVER_Construct( void )
 {
-    char		*pszPort;
-	char		*pszMaxClients;
+	const char	*pszPort;
+	const char	*pszMaxClients;
 	ULONG		ulIdx;
 	USHORT		usPort;
 
@@ -1364,7 +1366,7 @@ void SERVER_ConnectNewPlayer( BYTESTREAM_s *pByteStream )
 	if ( lastmanstanding || teamlms )
 		SERVERCOMMANDS_SetLMSAllowedWeapons( g_lCurrentClient, SVCF_ONLYTHISCLIENT );
 
-	// [BB] Due to DF3_ALWAYS_APPLY_LMS_SPECTATORSETTINGS, this is necessary in all game modes.
+	// [BB] Due to ZADF_ALWAYS_APPLY_LMS_SPECTATORSETTINGS, this is necessary in all game modes.
 	SERVERCOMMANDS_SetLMSSpectatorSettings( g_lCurrentClient, SVCF_ONLYTHISCLIENT );
 
 	// If this is CTF or ST, tell the client whether or not we're in simple mode.
@@ -2286,21 +2288,27 @@ void SERVER_ClientError( ULONG ulClient, ULONG ulErrorCode )
 		NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, DOTVERSIONSTR );
 		break;
 	case NETWORK_ERRORCODE_BANNED:
+		{
+			FString banReason = SERVERBAN_GetBanList( )->getEntryComment( g_aClients[ulClient].Address );
+			if ( banReason.IsNotEmpty() )
+				Printf( "Client banned (reason: %s)\n", banReason.GetChars() );
+			else
+				Printf( "Client banned.\n" );
 
-		Printf( "Client banned.\n" );
-
-		// Tell the client why he was banned, and when his ban expires.
-		NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, SERVERBAN_GetBanList( )->getEntryComment( g_aClients[ulClient].Address ));
-		NETWORK_WriteLong( &g_aClients[ulClient].PacketBuffer.ByteStream, (LONG) SERVERBAN_GetBanList( )->getEntryExpiration( g_aClients[ulClient].Address ));
+			// Tell the client why he was banned, and when his ban expires.
+			NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, banReason );
+			NETWORK_WriteLong( &g_aClients[ulClient].PacketBuffer.ByteStream, (LONG) SERVERBAN_GetBanList( )->getEntryExpiration( g_aClients[ulClient].Address ));
+		}
 		break;
 	case NETWORK_ERRORCODE_AUTHENTICATIONFAILED:
 	case NETWORK_ERRORCODE_PROTECTED_LUMP_AUTHENTICATIONFAILED:
 
-		NETWORK_WriteByte( &g_aClients[ulClient].PacketBuffer.ByteStream, NETWORK_GetPWADList( )->size( ));
-		for( std::list<std::pair<FString, FString> >::iterator i = NETWORK_GetPWADList( )->begin( ); i != NETWORK_GetPWADList( )->end(); ++i )
+		NETWORK_WriteByte( &g_aClients[ulClient].PacketBuffer.ByteStream, NETWORK_GetPWADList().Size() );
+		for ( unsigned int i = 0; i < NETWORK_GetPWADList().Size(); ++i )
 		{
-			NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, i->first.GetChars( ));
-			NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, i->second.GetChars( ));
+			const NetworkPWAD& pwad = NETWORK_GetPWADList()[i];
+			NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, pwad.name );
+			NETWORK_WriteString( &g_aClients[ulClient].PacketBuffer.ByteStream, pwad.checksum );
 		}
 
 		Printf( "%s authentication failed.\n", ( ulErrorCode == NETWORK_ERRORCODE_PROTECTED_LUMP_AUTHENTICATIONFAILED ) ? "Protected lump" : "Level" );
@@ -2562,13 +2570,13 @@ void SERVER_SendFullUpdate( ULONG ulClient )
 				// [WS/BB] Always inform client of the actor's lastX/Y/Z.
 				ULONG ulBits = CM_LAST_X|CM_LAST_Y|CM_LAST_Z;
 
-				if ( pActor->momx != 0 )
+				if ( pActor->velx != 0 )
 					ulBits |= CM_MOMX;
 
-				if ( pActor->momy != 0 )
+				if ( pActor->vely != 0 )
 					ulBits |= CM_MOMY;
 
-				if ( pActor->momz != 0 )
+				if ( pActor->velz != 0 )
 					ulBits |= CM_MOMZ;
 
 				if ( pActor->movedir != 0 )
@@ -2692,6 +2700,9 @@ void SERVER_SendFullUpdate( ULONG ulClient )
 	{
 		SERVERCOMMANDS_SetMapSky( ulClient, SVCF_ONLYTHISCLIENT );
 	}
+
+	// [BB] Inform the client about the values of server mod cvars.
+	SERVER_SyncServerModCVars ( ulClient );
 
 	// [BB] Let the client know that the full update is completed.
 	SERVERCOMMANDS_FullUpdateCompleted( ulClient );
@@ -2911,7 +2922,7 @@ void SERVER_DisconnectClient( ULONG ulClient, bool bBroadcast, bool bSaveInfo )
 	if ( players[ulClient].mo )
 	{
 		// [BB] Stop all scripts of the player that are still running.
-		if ( !( compatflags2 & COMPATF2_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT ) )
+		if ( !( zacompatflags & ZACOMPATF_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT ) )
 			FBehavior::StaticStopMyScripts ( players[ulClient].mo );
 		// If he's disconnecting while carrying an important item like a flag, etc., make sure he, 
 		// drops it before he leaves.
@@ -4003,7 +4014,7 @@ void SERVER_ErrorCleanup( void )
 //
 void SERVER_SyncSharedKeys( int playerToSync, bool withmessage )
 {
-	if ((( dmflags3 & DF3_SHARE_KEYS ) == 0 ) || ( NETWORK_GetState() != NETSTATE_SERVER ))
+	if ((( zadmflags & ZADF_SHARE_KEYS ) == 0 ) || ( NETWORK_GetState() != NETSTATE_SERVER ))
 		return;
 
 	FString keylist;
@@ -4062,6 +4073,21 @@ void SERVER_SyncSharedKeys( int playerToSync, bool withmessage )
 			SERVER_PrintfPlayer( PRINT_HIGH, playerToSync, "%s", message.GetChars() );
 		else
 			SERVER_Printf( PRINT_HIGH, "%s", message.GetChars() );
+	}
+}
+
+//*****************************************************************************
+//
+void SERVER_SyncServerModCVars ( const int PlayerToSync )
+{
+	FBaseCVar *cvar = CVars;
+
+	while ( cvar )
+	{
+		if ( ( cvar->GetFlags() & CVAR_MOD ) && ( cvar->GetFlags() & CVAR_SERVERINFO ) )
+			SERVERCOMMANDS_SetCVar ( *cvar, PlayerToSync, SVCF_ONLYTHISCLIENT );
+
+		cvar = cvar->GetNext();
 	}
 }
 
@@ -4445,10 +4471,10 @@ bool SERVER_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 		// [BB] The client just confirmed receiving the full update.
 		SERVER_GetClient ( g_lCurrentClient )->bFullUpdateIncomplete = false;
 		return ( false );
-	case CLC_LINETARGET:
+	case CLC_INFOCHEAT:
 
-		// [Dusk]
-		return ( server_Linetarget( pByteStream ));
+		// [TP] Client wishes to use the linetarget or info cheat on an actor.
+		return ( server_InfoCheat( pByteStream ));
 
 	case CLC_SRP_USER_REQUEST_LOGIN:
 	case CLC_SRP_USER_START_AUTHENTICATION:
@@ -4550,11 +4576,11 @@ void SERVER_SetThingNonZeroAngleAndMomentum( AActor *pActor )
 
 	if ( pActor->angle != 0 )
 		ulBits |= CM_ANGLE;
-	if ( pActor->momx != 0 )
+	if ( pActor->velx != 0 )
 		ulBits |= CM_MOMX;
-	if ( pActor->momy != 0 )
+	if ( pActor->vely != 0 )
 		ulBits |= CM_MOMY;
-	if ( pActor->momz != 0 )
+	if ( pActor->velz != 0 )
 		ulBits |= CM_MOMZ;
 
 	if ( ulBits )
@@ -5229,7 +5255,7 @@ static bool server_Taunt( BYTESTREAM_s *pByteStream )
 	if (( players[g_lCurrentClient].bSpectating ) ||
 		( players[g_lCurrentClient].health <= 0 ) ||
 		( players[g_lCurrentClient].mo == NULL ) ||
-		( i_compatflags & COMPATF_DISABLETAUNTS ))
+		( zacompatflags & ZACOMPATF_DISABLETAUNTS ))
 	{
 		return ( false );
 	}
@@ -5879,7 +5905,7 @@ static bool server_AuthenticateLevel( BYTESTREAM_s *pByteStream )
 	if ( lastmanstanding || teamlms )
 		SERVERCOMMANDS_SetLMSAllowedWeapons( g_lCurrentClient, SVCF_ONLYTHISCLIENT );
 
-	// [BB] Due to DF3_ALWAYS_APPLY_LMS_SPECTATORSETTINGS, this is necessary in all game modes.
+	// [BB] Due to ZADF_ALWAYS_APPLY_LMS_SPECTATORSETTINGS, this is necessary in all game modes.
 	SERVERCOMMANDS_SetLMSSpectatorSettings( g_lCurrentClient, SVCF_ONLYTHISCLIENT );
 
 	// If this is CTF or ST, tell the client whether or not we're in simple mode.
@@ -6308,16 +6334,17 @@ static bool server_CheckLogin ( const ULONG ulClient )
 
 //*****************************************************************************
 //
-// [Dusk] Client wishes to apply the linetarget cheat on a particularly
+// [TP] Client wishes to apply the linetarget or info cheat on a particularly
 // interesting actor but cannot because they don't know the health of it.
 // Let's help it out. :)
 //
-static bool server_Linetarget( BYTESTREAM_s *pByteStream )
+static bool server_InfoCheat( BYTESTREAM_s *pByteStream )
 {
 	LONG lID = NETWORK_ReadShort( pByteStream );
 	AActor* linetarget = CLIENT_FindThingByNetID( lID );
+	bool extended = !!NETWORK_ReadByte( pByteStream );
 
-	// [Dusk] Except not if we don't allow cheats.
+	// [TP] Except not if we don't allow cheats.
 	if ( sv_cheats == false )
 	{
 		SERVER_KickPlayer( g_lCurrentClient, "Attempted to cheat with sv_cheats being false!" );
@@ -6335,6 +6362,17 @@ static bool server_Linetarget( BYTESTREAM_s *pByteStream )
 		linetarget->GetClass()->TypeName.GetChars(),
 		linetarget->health,
 		linetarget->GetDefault()->health);
+
+	// [TP] The info cheat is exactly the same as linetarget but also calls PrintMiscActorInfo on
+	// the actor. However, this prints the result to the console so to keep code changes to a minimum
+	// the result must be captured.
+	if ( extended )
+	{
+		C_StartCapture();
+		PrintMiscActorInfo( linetarget );
+		SERVER_PrintfPlayer( PRINT_HIGH, g_lCurrentClient, "%s", C_EndCapture().GetChars() );
+	}
+
 	return false;
 }
 

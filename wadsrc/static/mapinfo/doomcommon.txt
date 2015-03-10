@@ -1,4 +1,3 @@
-
 gameinfo
 {
 	titlepage = "TITLEPIC"
@@ -23,8 +22,10 @@ gameinfo
 	defaultbloodcolor = "68 00 00"
 	defaultbloodparticlecolor = "ff 00 00"
 	backpacktype = "Backpack"
+	armoricons = "ARM1A0", 0.5, "ARM2A0"
 	statusbar = "sbarinfo/doom.txt"
 	intermissionmusic = "$MUSIC_DM2INT"
+	intermissioncounter = true
 	weaponslot = 1, "Fist", "Chainsaw"
 	weaponslot = 2, "Pistol"
 	weaponslot = 3, "Shotgun", "SuperShotgun"
@@ -32,6 +33,14 @@ gameinfo
 	weaponslot = 5, "RocketLauncher", "GrenadeLauncher"	// [BB] Create default binding for the grenade launcher.
 	weaponslot = 6, "PlasmaRifle", "Railgun"		// [BB] Create default binding for the railgun.
 	weaponslot = 7, "BFG9000", "BFG10K"			// [BB] Create default binding for the BFG10K.
+	dimcolor = "ff d7 00"
+	dimamount = 0.2
+	definventorymaxamount = 25
+	defaultrespawntime = 12
+	defaultdropstyle = 1
+	endoom = "ENDOOM"
+	player5start = 4001
+	pickupcolor = "d6 ba 45"
 }
 
 skill baby
@@ -42,6 +51,7 @@ skill baby
 	EasyBossBrain
 	SpawnFilter = Baby
 	PicName = "M_JKILL"
+	Name = "$SKILL_BABY"
 	Key = "i"
 }
 
@@ -50,6 +60,7 @@ skill easy
 	EasyBossBrain
 	SpawnFilter = Easy
 	PicName = "M_ROUGH"
+	Name = "$SKILL_EASY"
 	Key = "h"
 }
 
@@ -58,12 +69,15 @@ skill normal
 	SpawnFilter = Normal
 	PicName = "M_HURT"
 	Key = "h"
+	Name = "$SKILL_NORMAL"
+	DefaultSkill
 }
 
 skill hard
 {
 	SpawnFilter = Hard
 	PicName = "M_ULTRA"
+	Name = "$SKILL_HARD"
 	Key = "u"
 }
 
@@ -75,7 +89,7 @@ skill nightmare
 	RespawnTime = 12
 	SpawnFilter = Nightmare
 	PicName = "M_NMARE"
+	Name = "$SKILL_NIGHTMARE"
 	MustConfirm
 	Key = "n"
 }
-

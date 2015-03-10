@@ -132,14 +132,14 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 		ffloor->bottom.plane = &sec2->floorplane;
 		ffloor->bottom.texture = &sec2->planes[sector_t::floor].Texture;
 		ffloor->bottom.texheight = &sec2->planes[sector_t::floor].TexZ;
-		ffloor->bottom.isceiling = false;
+		ffloor->bottom.isceiling = sector_t::floor;
 	}
 	else 
 	{
 		ffloor->bottom.plane = &sec2->ceilingplane;
 		ffloor->bottom.texture = &sec2->planes[sector_t::ceiling].Texture;
 		ffloor->bottom.texheight = &sec2->planes[sector_t::ceiling].TexZ;
-		ffloor->bottom.isceiling = true;
+		ffloor->bottom.isceiling = sector_t::ceiling;
 	}
 	
 	if (!(flags&FF_FIX))
@@ -148,7 +148,7 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 		ffloor->top.texture = &sec2->planes[sector_t::ceiling].Texture;
 		ffloor->top.texheight = &sec2->planes[sector_t::ceiling].TexZ;
 		ffloor->toplightlevel = &sec2->lightlevel;
-		ffloor->top.isceiling = true;
+		ffloor->top.isceiling = sector_t::ceiling;
 	}
 	else	// FF_FIX is a special case to patch rendering holes
 	{
@@ -156,7 +156,7 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 		ffloor->top.texture = &sec2->planes[sector_t::floor].Texture;
 		ffloor->top.texheight = &sec2->planes[sector_t::floor].TexZ;
 		ffloor->toplightlevel = &sec->lightlevel;
-		ffloor->top.isceiling = false;
+		ffloor->top.isceiling = sector_t::floor;
 		ffloor->top.model = sec;
 	}
 
@@ -175,17 +175,20 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 			// fortunately this plane won't be rendered - otherwise this wouldn't work...
 			ffloor->bottom.plane=&sec->floorplane;
 			ffloor->bottom.model=sec;
+			ffloor->bottom.isceiling = sector_t::floor;
 		}
 	}
 
 	ffloor->flags  = flags;
 	ffloor->master = master;
 	ffloor->alpha  = transluc;
+	ffloor->top.vindex = ffloor->bottom.vindex = -1;
 
 	// The engine cannot handle sloped translucent floors. Sorry
 	if (ffloor->top.plane->a || ffloor->top.plane->b || ffloor->bottom.plane->a || ffloor->bottom.plane->b)
 	{
 		ffloor->alpha = FRACUNIT;
+		ffloor->flags &= ~FF_ADDITIVETRANS;
 	}
 
 	if(flags & FF_THISINSIDE) {
@@ -237,13 +240,19 @@ static int P_Set3DFloor(line_t * line, int param,int param2, int alpha)
 					if (l->args[0]) 
 					{
 						// Yes, Vavoom's 3D-floor definitions suck!
-						static DWORD vavoomcolors[]={
-							0, 0x101080, 0x801010, 0x108010, 0x287020, 0xf0f010};
+						// The content list changed in r1783 of Vavoom to be unified
+						// among all its supported games, so it has now ten different
+						// values instead of just five.
+						static DWORD vavoomcolors[]={VC_EMPTY, 
+							VC_WATER, VC_LAVA, VC_NUKAGE, VC_SLIME, VC_HELLSLIME,
+							VC_BLOOD, VC_SLUDGE, VC_HAZARD, VC_BOOMWATER};
 						flags|=FF_SWIMMABLE|FF_BOTHPLANES|FF_ALLSIDES|FF_FLOOD;
 
-						l->frontsector->ColorMap = GetSpecialLights (l->frontsector->ColorMap->Color, 
-																	 vavoomcolors[l->args[0]], 
-																	 l->frontsector->ColorMap->Desaturate);
+						l->frontsector->ColorMap = 
+							GetSpecialLights (l->frontsector->ColorMap->Color, 
+											  (unsigned int)(vavoomcolors[l->args[0]]&VC_COLORMASK), 
+											  (unsigned int)(vavoomcolors[l->args[0]]&VC_ALPHAMASK)>>24);
+										//	  l->frontsector->ColorMap->Desaturate);
 					}
 					alpha=(alpha*255)/100;
 					break;
@@ -279,7 +288,7 @@ static int P_Set3DFloor(line_t * line, int param,int param2, int alpha)
 			// if flooding is used the floor must be non-solid and is automatically made shootthrough and seethrough
 			if ((param2&128) && !(flags & FF_SOLID)) flags |= FF_FLOOD|FF_SEETHROUGH|FF_SHOOTTHROUGH;
 			if (param2&512) flags |= FF_FADEWALLS;
-			FTextureID tex = sides[line->sidenum[0]].GetTexture(side_t::top);
+			FTextureID tex = line->sidedef[0]->GetTexture(side_t::top);
 			if (!tex.Exists() && alpha<255)
 			{
 				alpha=clamp(-tex.GetIndex(), 0, 255);
@@ -291,8 +300,8 @@ static int P_Set3DFloor(line_t * line, int param,int param2, int alpha)
 		P_Add3DFloor(ss, sec, line, flags, alpha);
 	}
 	// To be 100% safe this should be done even if the alpha by texture value isn't used.
-	if (!sides[line->sidenum[0]].GetTexture(side_t::top).isValid()) 
-		sides[line->sidenum[0]].SetTexture(side_t::top, FNullTextureID());
+	if (!line->sidedef[0]->GetTexture(side_t::top).isValid()) 
+		line->sidedef[0]->SetTexture(side_t::top, FNullTextureID());
 	return 1;
 }
 
@@ -402,7 +411,6 @@ bool P_CheckFor3DCeilingHit(AActor * mo)
 // that the given sector uses to light floors/ceilings/walls according to the 3D floors.
 //
 //==========================================================================
-#define CenterSpot(sec) (vertex_t*)&(sec)->soundorg[0]
 
 void P_Recalculate3DFloors(sector_t * sector)
 {
@@ -805,6 +813,33 @@ void P_Spawn3DFloors (void)
 	}
 }
 
+
+//==========================================================================
+//
+// Returns a 3D floorplane appropriate for the given coordinates
+//
+//==========================================================================
+
+secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z)
+{
+	secplane_t retplane = sector->floorplane;
+	if (sector->e)	// apparently this can be called when the data is already gone
+	{
+		for(unsigned int i=0;i<sector->e->XFloor.ffloors.Size();i++)
+		{
+			F3DFloor * rover= sector->e->XFloor.ffloors[i];
+			if(!(rover->flags & FF_SOLID) || !(rover->flags & FF_EXISTS)) continue;
+
+			if (rover->top.plane->ZatPoint(x, y) == z)
+			{
+				retplane = *rover->top.plane;
+				if (retplane.c<0) retplane.FlipVert();
+				break;
+			}
+		}
+	}
+	return retplane;
+}
 
 
 #endif

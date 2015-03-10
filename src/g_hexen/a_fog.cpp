@@ -73,7 +73,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FogMove)
 
 	if (self->args[3]-- <= 0)
 	{
-		self->SetStateNF (self->FindState(NAME_Death));
+		self->SetState (self->FindState(NAME_Death), true);
 		return;
 	}
 
@@ -85,7 +85,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FogMove)
 	}
 
 	angle = self->angle>>ANGLETOFINESHIFT;
-	self->momx = FixedMul(speed, finecosine[angle]);
-	self->momy = FixedMul(speed, finesine[angle]);
+	self->velx = FixedMul(speed, finecosine[angle]);
+	self->vely = FixedMul(speed, finesine[angle]);
 }
 

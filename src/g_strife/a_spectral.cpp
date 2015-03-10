@@ -28,7 +28,7 @@ void ASpectralMonster::Touch (AActor *toucher)
 
 DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightningTail)
 {
-	AActor *foo = Spawn("SpectralLightningHTail", self->x - self->momx, self->y - self->momy, self->z, ALLOW_REPLACE);
+	AActor *foo = Spawn("SpectralLightningHTail", self->x - self->velx, self->y - self->vely, self->z, ALLOW_REPLACE);
 
 	foo->angle = self->angle;
 	foo->health = self->health;
@@ -62,8 +62,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 	if (self->threshold != 0)
 		--self->threshold;
 
-	self->momx += pr_zap5.Random2(3) << FRACBITS;
-	self->momy += pr_zap5.Random2(3) << FRACBITS;
+	self->velx += pr_zap5.Random2(3) << FRACBITS;
+	self->vely += pr_zap5.Random2(3) << FRACBITS;
 
 	// [CW] Tell clients to spawn the actor.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -72,14 +72,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 	x = self->x + pr_zap5.Random2(3) * FRACUNIT * 50;
 	y = self->y + pr_zap5.Random2(3) * FRACUNIT * 50;
 
-	flash = Spawn (self->threshold > 25 ? PClass::FindClass("SpectralLightningV2") :
-		PClass::FindClass("SpectralLightningV1"), x, y, ONCEILINGZ, ALLOW_REPLACE);
+	flash = Spawn (self->threshold > 25 ? PClass::FindClass(NAME_SpectralLightningV2) :
+		PClass::FindClass(NAME_SpectralLightningV1), x, y, ONCEILINGZ, ALLOW_REPLACE);
 
 	flash->target = self->target;
-	flash->momz = -18*FRACUNIT;
+	flash->velz = -18*FRACUNIT;
 	flash->health = self->health;
 
-	flash = Spawn("SpectralLightningV2", self->x, self->y, ONCEILINGZ, ALLOW_REPLACE);
+	flash = Spawn(NAME_SpectralLightningV2, self->x, self->y, ONCEILINGZ, ALLOW_REPLACE);
 
 	// [CW] Tell clients to spawn the actor.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -87,7 +87,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 
 
 	flash->target = self->target;
-	flash->momz = -18*FRACUNIT;
+	flash->velz = -18*FRACUNIT;
 	flash->health = self->health;
 
 	// [CW] Tell clients to spawn the missile.
@@ -137,32 +137,35 @@ DEFINE_ACTION_FUNCTION(AActor, A_Tracer2)
 	}
 
 	exact = self->angle >> ANGLETOFINESHIFT;
-	self->momx = FixedMul (self->Speed, finecosine[exact]);
-	self->momy = FixedMul (self->Speed, finesine[exact]);
+	self->velx = FixedMul (self->Speed, finecosine[exact]);
+	self->vely = FixedMul (self->Speed, finesine[exact]);
 
-	// change slope
-	dist = P_AproxDistance (dest->x - self->x, dest->y - self->y);
-	dist /= self->Speed;
+	if (!(self->flags3 & (MF3_FLOORHUGGER|MF3_CEILINGHUGGER)))
+	{
+		// change slope
+		dist = P_AproxDistance (dest->x - self->x, dest->y - self->y);
+		dist /= self->Speed;
 
-	if (dist < 1)
-	{
-		dist = 1;
-	}
-	if (dest->height >= 56*FRACUNIT)
-	{
-		slope = (dest->z+40*FRACUNIT - self->z) / dist;
-	}
-	else
-	{
-		slope = (dest->z + self->height*2/3 - self->z) / dist;
-	}
-	if (slope < self->momz)
-	{
-		self->momz -= FRACUNIT/8;
-	}
-	else
-	{
-		self->momz += FRACUNIT/8;
+		if (dist < 1)
+		{
+			dist = 1;
+		}
+		if (dest->height >= 56*FRACUNIT)
+		{
+			slope = (dest->z+40*FRACUNIT - self->z) / dist;
+		}
+		else
+		{
+			slope = (dest->z + self->height*2/3 - self->z) / dist;
+		}
+		if (slope < self->velz)
+		{
+			self->velz -= FRACUNIT/8;
+		}
+		else
+		{
+			self->velz += FRACUNIT/8;
+		}
 	}
 
 	// [BC] Update the thing's position, angle and momentum.

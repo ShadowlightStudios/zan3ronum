@@ -28,7 +28,7 @@ protected:
 class OPLmusicFile : public OPLmusicBlock
 {
 public:
-	OPLmusicFile(FILE *file, char *musiccache, int len);
+	OPLmusicFile(FILE *file, BYTE *musiccache, int len);
 	OPLmusicFile(const OPLmusicFile *source, const char *filename);
 	virtual ~OPLmusicFile();
 
@@ -41,7 +41,7 @@ protected:
 	OPLmusicFile() {}
 	int PlayTick();
 
-	enum { RDosPlay, IMF, DosBox } RawPlayer;
+	enum { RDosPlay, IMF, DosBox1, DosBox2 } RawPlayer;
 	int ScoreLen;
 	int WhichChip;
 };

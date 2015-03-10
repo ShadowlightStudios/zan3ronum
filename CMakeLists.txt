@@ -1,15 +1,27 @@
 cmake_minimum_required( VERSION 2.4 )
+project(Zandronum)
 
-set( ZDOOM_OUTPUT_DIR ${CMAKE_BINARY_DIR} CACHE PATH "Directory where the pk3 files and executable will be created" )
+IF( NOT CMAKE_BUILD_TYPE )
+	SET( CMAKE_BUILD_TYPE Debug CACHE STRING
+		"Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel."
+		FORCE )
+ENDIF( NOT CMAKE_BUILD_TYPE )
+
+set( ZDOOM_OUTPUT_DIR ${CMAKE_BINARY_DIR} CACHE PATH "Directory where zdoom.pk3 and the executable will be created." )
 set( ZDOOM_EXE_NAME "zandronum" CACHE FILEPATH "Name of the executable to create" )
 
+if( CMAKE_COMPILER_IS_GNUCXX )
+	set( PROFILE 0 CACHE BOOL "Enable profiling with gprof for Debug and RelWithDebInfo build types." )
+endif( CMAKE_COMPILER_IS_GNUCXX )
+
+find_package( BZip2 )
 find_package( JPEG )
 find_package( ZLIB )
 
 if( MSVC )
 	# Eliminate unreferenced functions and data
 	# Perform identical COMDAT folding
-	set( REL_LINKER_FLAGS "/opt:ref /opt:icf /nodefaultlib:msvcrt" )
+	set( REL_LINKER_FLAGS "/opt:ref /opt:icf /nodefaultlib:msvcrt /TSAWARE" )
 
 	# String pooling
 	# Function-level linking
@@ -17,10 +29,10 @@ if( MSVC )
 	set( ALL_C_FLAGS "/GF /Gy /GR-" )
 	
 	# Avoid CRT DLL dependancies in release builds
-	set( REL_C_FLAGS "/MT" )
+	set( REL_C_FLAGS "/MT /Oy" )
 
 	# Debug allocations in debug builds
-	set( DEB_C_FLAGS "/D _CRTDBG_MAP_ALLOC" )
+	set( DEB_C_FLAGS "/D _CRTDBG_MAP_ALLOC /MTd /Gm" )
 
 	# Disable warnings for unsecure CRT functions from VC8+
 	if( MSVC_VERSION GREATER 1399 )
@@ -31,9 +43,11 @@ if( MSVC )
 	string(REPLACE "/MD " " " CMAKE_CXX_FLAGS_RELEASE ${CMAKE_CXX_FLAGS_RELEASE} )
 	string(REPLACE "/MD " " " CMAKE_CXX_FLAGS_MINSIZEREL ${CMAKE_CXX_FLAGS_MINSIZEREL} )
 	string(REPLACE "/MD " " " CMAKE_CXX_FLAGS_RELWITHDEBINFO ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} )
+	string(REPLACE "/MDd " " " CMAKE_CXX_FLAGS_DEBUG ${CMAKE_CXX_FLAGS_DEBUG} )
 	string(REPLACE "/MD " " " CMAKE_C_FLAGS_RELEASE ${CMAKE_C_FLAGS_RELEASE} )
 	string(REPLACE "/MD " " " CMAKE_C_FLAGS_MINSIZEREL ${CMAKE_C_FLAGS_MINSIZEREL} )
 	string(REPLACE "/MD " " " CMAKE_C_FLAGS_RELWITHDEBINFO ${CMAKE_C_FLAGS_RELWITHDEBINFO} )
+	string(REPLACE "/MDd " " " CMAKE_C_FLAGS_DEBUG ${CMAKE_C_FLAGS_DEBUG} )
 	string(REPLACE " /GR" " " CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} )
 endif( MSVC )
 
@@ -53,6 +67,13 @@ set( CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} ${REL_C_FLAGS}" )
 set( CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${REL_C_FLAGS}" )
 set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} ${DEB_C_FLAGS} -D_DEBUG" )
 
+if( CMAKE_COMPILER_IS_GNUCXX AND PROFILE )
+	set( CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -pg" )
+	set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -pg" )
+	set( CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -pg" )
+	set( CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -pg" )
+endif( CMAKE_COMPILER_IS_GNUCXX AND PROFILE )
+	
 if( ZLIB_FOUND )
 	message( STATUS "Using system zlib" )
 else( ZLIB_FOUND )
@@ -73,21 +94,25 @@ else( JPEG_FOUND )
 	set( JPEG_LIBRARY jpeg )
 endif( JPEG_FOUND )
 
-set( BZIP2_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bzip2" )
+if( BZIP2_FOUND )
+	message( STATUS "Using system bzip2 library" )
+else( BZIP2_FOUND )
+	message( STATUS "Using internal bzip2 library" )
+	add_subdirectory( bzip2 )
+	set( BZIP2_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bzip2" )
+	set( BZIP2_LIBRARIES bz2 )
+	set( BZIP2_LIBRARY bz2 )
+endif( BZIP2_FOUND)
+
 set( LZMA_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lzma/C" )
 
-add_subdirectory( bzip2 )
 # [BB] Library that allows to map IP addresses to country names.
 add_subdirectory( GeoIP )
 # [BB] Library for the database backend.
 add_subdirectory( sqlite )
-# [BB] Maxim Stepin's hq2x/3x/4x pixel upsampling algorithm as library. Currently only used with VC++.
-if( MSVC )
-  add_subdirectory( hqnx )
-endif( MSVC )
 add_subdirectory( lzma )
 add_subdirectory( tools )
-add_subdirectory( snes_spc )
+add_subdirectory( game-music-emu )
 add_subdirectory( dumb )
 add_subdirectory( gdtoa )
 add_subdirectory( wadsrc )

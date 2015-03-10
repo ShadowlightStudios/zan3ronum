@@ -1,7 +1,7 @@
 #ifndef __W_ZIP
 #define __W_ZIP
 
-#pragma pack(push, 1)
+#pragma pack(1)
 // FZipCentralInfo
 struct FZipEndOfCentralDirectory
 {
@@ -56,13 +56,15 @@ struct FZipLocalFileHeader
 };
 
 
-#pragma pack(pop)
+#pragma pack()
 
 #define ZIP_LOCALFILE	MAKE_ID('P','K',3,4)
 #define ZIP_CENTRALFILE	MAKE_ID('P','K',1,2)
 #define ZIP_ENDOFDIR	MAKE_ID('P','K',5,6)
 
 #define METHOD_STORED	0
+#define METHOD_SHRINK	1
+#define METHOD_IMPLODE	6
 #define METHOD_DEFLATE	8
 #define METHOD_BZIP2	12
 #define METHOD_LZMA		14

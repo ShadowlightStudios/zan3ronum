@@ -16,15 +16,17 @@
 #include "c_console.h"
 
 #include "sdlglvideo.h"
-#include "gl/gl_pch.h"
+#include "gl/system/gl_system.h"
 #include "r_defs.h"
 #include "gl/gl_functions.h"
-#include "gl/gl_struct.h"
-#include "gl/gl_intern.h"
-#include "gl/gl_basic.h"
-#include "gl/gl_texture.h"
-#include "gl/gl_shader.h"
-#include "gl/gl_framebuffer.h"
+//#include "gl/gl_intern.h"
+
+#include "gl/renderer/gl_renderer.h"
+#include "gl/system/gl_framebuffer.h"
+#include "gl/shaders/gl_shader.h"
+#include "gl/utility/gl_templates.h"
+#include "gl/textures/gl_material.h"
+#include "gl/system/gl_cvars.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -59,8 +61,6 @@ CUSTOM_CVAR(Int, gl_vid_multisample, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_
 }
 
 RenderContext gl;
-
-CVAR(Bool, gl_vid_allowsoftware, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG);
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -121,11 +121,15 @@ SDLGLVideo::SDLGLVideo (int parm)
              SDL_GetError( ) );
     }
 	GetContext(gl);
+#ifndef	_WIN32
+	// mouse cursor is visible by default on linux systems, we disable it by default
+	SDL_ShowCursor (0);
+#endif
 }
 
 SDLGLVideo::~SDLGLVideo ()
 {
-	FGLTexture::FlushAll();
+	if (GLRenderer != NULL) GLRenderer->FlushTextures();
 	SDL_Quit( );
 }
 
@@ -196,7 +200,7 @@ DFrameBuffer *SDLGLVideo::CreateFrameBuffer (int width, int height, bool fullscr
 //		flashAmount = 0;
 	}
 	
-	SDLGLFB *fb = new OpenGLFrameBuffer (width, height, 32, 60, fullscreen);
+	SDLGLFB *fb = new OpenGLFrameBuffer (0, width, height, 32, 60, fullscreen);
 	retry = 0;
 	
 	// If we could not create the framebuffer, try again with slightly
@@ -255,8 +259,8 @@ bool SDLGLVideo::SetResolution (int width, int height, int bits)
 	// FIXME: Is it possible to do this without completely destroying the old
 	// interface?
 #ifndef NO_GL
-	
-	FGLTexture::FlushAll();
+
+	if (GLRenderer != NULL) GLRenderer->FlushTextures();
 	I_ShutdownGraphics();
 
 	Video = new SDLGLVideo(0);
@@ -275,7 +279,7 @@ bool SDLGLVideo::SetResolution (int width, int height, int bits)
 
 // FrameBuffer implementation -----------------------------------------------
 
-SDLGLFB::SDLGLFB (int width, int height, int, int, bool fullscreen)
+SDLGLFB::SDLGLFB (void *, int width, int height, int, int, bool fullscreen)
 	: DFrameBuffer (width, height)
 {
 	static int localmultisample=-1;
@@ -288,7 +292,7 @@ SDLGLFB::SDLGLFB (int width, int height, int, int, bool fullscreen)
 
 	UpdatePending = false;
 	
-	if (!gl.InitHardware(gl_vid_allowsoftware, gl_vid_compatibility, localmultisample))
+	if (!gl.InitHardware(false, gl_vid_compatibility, localmultisample))
 	{
 		vid_renderer = 0;
 		return;
@@ -301,14 +305,14 @@ SDLGLFB::SDLGLFB (int width, int height, int, int, bool fullscreen)
 	if (Screen == NULL)
 		return;
 
-	m_supportsGamma = gl.GetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
+	m_supportsGamma = !!SDL_GetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
 }
 
 SDLGLFB::~SDLGLFB ()
 {
 	if (m_supportsGamma) 
 	{
-		gl.SetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
+		SDL_SetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
 	}
 }
 
@@ -339,7 +343,7 @@ bool SDLGLFB::CanUpdate ()
 
 void SDLGLFB::SetGammaTable(WORD *tbl)
 {
-	gl.SetGammaRamp(&tbl[0], &tbl[256], &tbl[512]);
+	SDL_SetGammaRamp(&tbl[0], &tbl[256], &tbl[512]);
 }
 
 bool SDLGLFB::Lock(bool buffered)

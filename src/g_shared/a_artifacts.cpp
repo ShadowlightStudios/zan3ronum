@@ -30,6 +30,9 @@
 
 static FRandom pr_torch ("Torch");
 
+/* Those are no longer needed, except maybe as reference?
+ * They're not used anywhere in the code anymore, except
+ * MAULATORTICS as redefined in a_minotaur.cpp...
 #define	INVULNTICS (30*TICRATE)
 #define	INVISTICS (60*TICRATE)
 #define	INFRATICS (120*TICRATE)
@@ -39,6 +42,7 @@ static FRandom pr_torch ("Torch");
 #define SPEEDTICS (45*TICRATE)
 #define MAULATORTICS (25*TICRATE)
 #define	TIMEFREEZE_TICS	( 12 * TICRATE )
+*/
 
 // [BC] New Skulltag power duration defines.
 #define	TRANSLUCENCY_TICS		( 45 * TICRATE )
@@ -71,9 +75,13 @@ bool APowerupGiver::Use (bool pickup)
 	{
 		power->BlendColor = BlendColor;
 	}
-	if (mode != NAME_None)
+	if (Mode != NAME_None)
 	{
-		power->mode = mode;
+		power->Mode = Mode;
+	}
+	if (Strength != 0)
+	{
+		power->Strength = Strength;
 	}
 
 	power->ItemFlags |= ItemFlags & (IF_ALWAYSPICKUP|IF_ADDITIVETIME);
@@ -95,7 +103,8 @@ void APowerupGiver::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
 	arc << PowerupType;
-	arc << EffectTics << BlendColor << mode;
+	arc << EffectTics << BlendColor << Mode;
+	arc << Strength;
 }
 
 // Powerup -------------------------------------------------------------------
@@ -128,7 +137,8 @@ void APowerup::Tick ()
 void APowerup::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << EffectTics << BlendColor << mode;
+	arc << EffectTics << BlendColor << Mode;
+	arc << Strength;
 }
 
 //===========================================================================
@@ -142,13 +152,7 @@ PalEntry APowerup::GetBlend ()
 	if (EffectTics <= BLINKTHRESHOLD && !(EffectTics & 8))
 		return 0;
 
-	if (BlendColor == INVERSECOLOR ||
-		BlendColor == GOLDCOLOR ||
-		// [BC] HAX!
-		BlendColor == REDCOLOR ||
-		BlendColor == GREENCOLOR) 
-		return 0;
-
+	if (IsSpecialColormap(BlendColor)) return 0;
 	return BlendColor;
 }
 
@@ -177,38 +181,23 @@ void APowerup::DoEffect ()
 
 	if (EffectTics > 0)
 	{
-		int oldcolormap = Owner->player->fixedcolormap;
-		if (EffectTics > BLINKTHRESHOLD || (EffectTics & 8))
+		int Colormap = GetSpecialColormap(BlendColor);
+
+		if (Colormap != NOFIXEDCOLORMAP)
 		{
-			// [BC] Apply the colormap to the player's body, also.
-			if (BlendColor == INVERSECOLOR)
+			if (EffectTics > BLINKTHRESHOLD || (EffectTics & 8))
 			{
-				Owner->player->fixedcolormap = INVERSECOLORMAP;
-				Owner->lFixedColormap = INVERSECOLORMAP;
+				Owner->player->fixedcolormap = Colormap;
+				// [BC] Apply the colormap to the player's body, also.
+				Owner->lFixedColormap = Colormap;
 			}
-			else if (BlendColor == GOLDCOLOR)
+			else if (Owner->player->fixedcolormap == Colormap)	
 			{
-				Owner->player->fixedcolormap = GOLDCOLORMAP;
-				Owner->lFixedColormap = GOLDCOLORMAP;
+				// only unset if the fixed colormap comes from this item
+				Owner->player->fixedcolormap = NOFIXEDCOLORMAP;
+				// [BB] Also unset the colormap of the player's body.
+				Owner->lFixedColormap = NOFIXEDCOLORMAP;
 			}
-			else if (BlendColor == REDCOLOR)
-			{
-				Owner->player->fixedcolormap = REDCOLORMAP;
-				Owner->lFixedColormap = REDCOLORMAP;
-			}
-			else if (BlendColor == GREENCOLOR)
-			{
-				Owner->player->fixedcolormap = GREENCOLORMAP;
-				Owner->lFixedColormap = GREENCOLORMAP;
-			}
-		}
-		else if ((BlendColor == INVERSECOLOR && Owner->player->fixedcolormap == INVERSECOLORMAP) || 
-				 (BlendColor == GOLDCOLOR && Owner->player->fixedcolormap == GOLDCOLORMAP) ||
-				 (BlendColor == REDCOLOR && Owner->player->fixedcolormap == REDCOLORMAP) ||
-				 (BlendColor == GREENCOLOR && Owner->player->fixedcolormap == GREENCOLORMAP))
-		{
-			Owner->player->fixedcolormap = 0;
-			Owner->lFixedColormap = 0;
 		}
 	}
 }
@@ -221,6 +210,12 @@ void APowerup::DoEffect ()
 
 void APowerup::EndEffect ()
 {
+	int colormap = GetSpecialColormap(BlendColor);
+
+	if (colormap != NOFIXEDCOLORMAP && Owner && Owner->player && Owner->player->fixedcolormap == colormap)
+	{ // only unset if the fixed colormap comes from this item
+		Owner->player->fixedcolormap = NOFIXEDCOLORMAP;
+	}
 }
 
 //===========================================================================
@@ -275,19 +270,21 @@ bool APowerup::HandlePickup (AInventory *item)
 			power->ItemFlags |= IF_PICKUPGOOD;
 			return true;
 		}
-		// If it's not blinking yet, you can't replenish the power unless the
-		// powerup is required to be picked up.
-		if (EffectTics > BLINKTHRESHOLD && !(power->ItemFlags & IF_ALWAYSPICKUP))
-		{
-			return true;
-		}
-		// Only increase the EffectTics, not decrease it.
-		// Color also gets transferred only when the new item has an effect.
+		// Color gets transferred if the new item has an effect.
+
+		// Increase the effect's duration.
 		if (power->ItemFlags & IF_ADDITIVETIME) 
 		{
 			EffectTics += power->EffectTics;
 			BlendColor = power->BlendColor;
 		}
+		// If it's not blinking yet, you can't replenish the power unless the
+		// powerup is required to be picked up.
+		else if (EffectTics > BLINKTHRESHOLD && !(power->ItemFlags & IF_ALWAYSPICKUP))
+		{
+			return true;
+		}
+		// Reset the effect duration.
 		else if (power->EffectTics > EffectTics)
 		{
 			EffectTics = power->EffectTics;
@@ -373,13 +370,17 @@ IMPLEMENT_CLASS (APowerInvulnerable)
 
 void APowerInvulnerable::InitEffect ()
 {
+	Super::InitEffect();
 	Owner->effects &= ~FX_RESPAWNINVUL;
 	Owner->flags2 |= MF2_INVULNERABLE;
-	if (mode == NAME_None)
+	if (Mode == NAME_None)
 	{
-		mode = (ENamedName)RUNTIME_TYPE(Owner)->Meta.GetMetaInt(APMETA_InvulMode);
+		Mode = (ENamedName)RUNTIME_TYPE(Owner)->Meta.GetMetaInt(APMETA_InvulMode);
 	}
-	if (mode == NAME_Reflective) Owner->flags2 |= MF2_REFLECTIVE;
+	if (Mode == NAME_Reflective)
+	{
+		Owner->flags2 |= MF2_REFLECTIVE;
+	}
 }
 
 //===========================================================================
@@ -397,7 +398,7 @@ void APowerInvulnerable::DoEffect ()
 		return;
 	}
 
-	if (mode == NAME_Ghost)
+	if (Mode == NAME_Ghost)
 	{
 		if (!(Owner->flags & MF_SHADOW))
 		{
@@ -444,6 +445,8 @@ void APowerInvulnerable::DoEffect ()
 
 void APowerInvulnerable::EndEffect ()
 {
+	Super::EndEffect();
+
 	if (Owner == NULL)
 	{
 		return;
@@ -467,7 +470,7 @@ void APowerInvulnerable::EndEffect ()
 		else
 			Owner->RenderStyle = STYLE_None;
 	}
-	if (mode == NAME_Ghost)
+	if (Mode == NAME_Ghost)
 	{
 		Owner->flags2 &= ~MF2_NONSHOOTABLE;
 		if (!(Owner->flags & MF_SHADOW))
@@ -478,16 +481,16 @@ void APowerInvulnerable::EndEffect ()
 			Owner->alpha = OPAQUE;
 		}
 	}
-	else if (mode == NAME_Reflective)
+	else if (Mode == NAME_Reflective)
 	{
 		Owner->flags2 &= ~MF2_REFLECTIVE;
 	}
 
 	if (Owner->player != NULL)
 	{
-		Owner->player->fixedcolormap = 0;
+		Owner->player->fixedcolormap = NOFIXEDCOLORMAP;
 		// [BB] Additionally clear lFixedColormap.
-		Owner->lFixedColormap = 0;
+		Owner->lFixedColormap = NOFIXEDCOLORMAP;
 	}
 }
 
@@ -502,7 +505,7 @@ int APowerInvulnerable::AlterWeaponSprite (vissprite_t *vis)
 	int changed = Inventory == NULL ? false : Inventory->AlterWeaponSprite(vis);
 	if (Owner != NULL)
 	{
-		if (mode == NAME_Ghost && !(Owner->flags & MF_SHADOW))
+		if (Mode == NAME_Ghost && !(Owner->flags & MF_SHADOW))
 		{
 			fixed_t wp_alpha = MIN<fixed_t>(FRACUNIT/4 + Owner->alpha*3/4, FRACUNIT);
 			if (wp_alpha != FIXED_MAX) vis->alpha = wp_alpha;
@@ -539,6 +542,7 @@ bool APowerStrength::HandlePickup (AInventory *item)
 
 void APowerStrength::InitEffect ()
 {
+	Super::InitEffect();
 }
 
 //===========================================================================
@@ -563,7 +567,7 @@ void APowerStrength::Tick ()
 
 PalEntry APowerStrength::GetBlend ()
 {
-	// slowly fade the berzerk out
+	// slowly fade the berserk out
 	int cnt = 12 - (EffectTics >> 6);
 
 	if (cnt > 0)
@@ -579,21 +583,10 @@ PalEntry APowerStrength::GetBlend ()
 
 IMPLEMENT_CLASS (APowerInvisibility)
 
-//===========================================================================
-//
-// APowerInvisibility :: CommonInit
-//
-// stuff that's done for all subclasses
-//
-//===========================================================================
-
-void APowerInvisibility::CommonInit()
-{
-	Owner->flags |= MF_SHADOW;
-	// transfer seeker missile blocking (but only if the owner does not already have this flag
-	if (!(Owner->flags5 & MF5_CANTSEEK) && (flags5 & MF5_CANTSEEK)) Owner->flags5 |= MF5_CANTSEEK;
-	else flags5 &= ~MF5_CANTSEEK;
-}
+// Invisibility flag combos
+#define INVISIBILITY_FLAGS1	(MF_SHADOW)
+#define INVISIBILITY_FLAGS3	(MF3_GHOST)
+#define INVISIBILITY_FLAGS5	(MF5_CANTSEEK)
 
 //===========================================================================
 //
@@ -603,9 +596,22 @@ void APowerInvisibility::CommonInit()
 
 void APowerInvisibility::InitEffect ()
 {
-	CommonInit();
-	Owner->alpha = FRACUNIT/5;
-	Owner->RenderStyle = STYLE_OptFuzzy;
+	Super::InitEffect();
+	// This used to call CommonInit(), which used to contain all the code that's repeated every
+	// tic, plus the following code that needs to happen once and only once.
+	// The CommonInit() code has been moved to DoEffect(), so this now ends with a call to DoEffect(),
+	// and DoEffect() no longer needs to call InitEffect(). CommonInit() has been removed for being redundant.
+	if (Owner != NULL)
+	{
+		flags &= ~(Owner->flags  & INVISIBILITY_FLAGS1);
+		Owner->flags  |= flags & INVISIBILITY_FLAGS1;
+		flags3 &= ~(Owner->flags3 & INVISIBILITY_FLAGS3);
+		Owner->flags3 |= flags3 & INVISIBILITY_FLAGS3;
+		flags5 &= ~(Owner->flags5 & INVISIBILITY_FLAGS5);
+		Owner->flags5 |= flags5 & INVISIBILITY_FLAGS5;
+
+		DoEffect();
+	}
 }
 
 //===========================================================================
@@ -618,7 +624,32 @@ void APowerInvisibility::DoEffect ()
 	Super::DoEffect();
 	// Due to potential interference with other PowerInvisibility items
 	// the effect has to be refreshed each tic.
-	InitEffect();
+	fixed_t ts = Strength * (special1 + 1); if (ts > FRACUNIT) ts = FRACUNIT;
+	Owner->alpha = clamp<fixed_t>((OPAQUE - ts), 0, OPAQUE);
+	switch (Mode)
+	{
+	case (NAME_Fuzzy):
+		Owner->RenderStyle = STYLE_OptFuzzy;
+		break;
+	case (NAME_Opaque):
+		Owner->RenderStyle = STYLE_Normal;
+		break;
+	case (NAME_Additive):
+		Owner->RenderStyle = STYLE_Add;
+		break;
+	case (NAME_Stencil):
+		Owner->RenderStyle = STYLE_Stencil;
+		break;
+	case (NAME_None):
+	case (NAME_Cumulative):
+	case (NAME_Translucent):
+		Owner->RenderStyle = STYLE_Translucent;
+		break;
+	default: // Something's wrong
+		Owner->RenderStyle = STYLE_Normal;
+		Owner->alpha = OPAQUE;
+		break;
+	}
 }
 
 //===========================================================================
@@ -629,11 +660,13 @@ void APowerInvisibility::DoEffect ()
 
 void APowerInvisibility::EndEffect ()
 {
+	Super::EndEffect();
 	if (Owner != NULL)
 	{
-		if (flags5 & MF5_CANTSEEK) Owner->flags5 &= ~MF5_CANTSEEK;
-		Owner->flags &= ~MF_SHADOW;
-		Owner->flags3 &= ~MF3_GHOST;
+		Owner->flags  &= ~(flags  & INVISIBILITY_FLAGS1);
+		Owner->flags3 &= ~(flags3 & INVISIBILITY_FLAGS3);
+		Owner->flags5 &= ~(flags5 & INVISIBILITY_FLAGS5);
+
 		// [BC] If the owner is a spectating player, don't make him visible!
 		if (( Owner->player == NULL ) || ( Owner->player->bSpectating == false ))
 			Owner->RenderStyle = STYLE_Normal;
@@ -649,7 +682,7 @@ void APowerInvisibility::EndEffect ()
 		{
 			if (item->IsKindOf(RUNTIME_CLASS(APowerInvisibility)) && item != this)
 			{
-				static_cast<APowerInvisibility*>(item)->InitEffect();
+				static_cast<APowerInvisibility*>(item)->DoEffect();
 			}
 			item = item->Inventory;
 		}
@@ -665,82 +698,61 @@ void APowerInvisibility::EndEffect ()
 int APowerInvisibility::AlterWeaponSprite (vissprite_t *vis)
 {
 	int changed = Inventory == NULL ? false : Inventory->AlterWeaponSprite(vis);
-
 	// Blink if the powerup is wearing off
 	if (changed == 0 && EffectTics < 4*32 && !(EffectTics & 8))
 	{
 		vis->RenderStyle = STYLE_Normal;
+		vis->alpha = OPAQUE;
 		return 1;
 	}
 	else if (changed == 1)
 	{
 		// something else set the weapon sprite back to opaque but this item is still active.
-		vis->alpha = FRACUNIT/5;
-		vis->RenderStyle = STYLE_OptFuzzy;
+		fixed_t ts = Strength * (special1 + 1); if (ts > FRACUNIT) ts = FRACUNIT;
+		vis->alpha = clamp<fixed_t>((OPAQUE - ts), 0, OPAQUE);
+		switch (Mode)
+		{
+		case (NAME_Fuzzy):
+			vis->RenderStyle = STYLE_OptFuzzy;
+			break;
+		case (NAME_Opaque):
+			vis->RenderStyle = STYLE_Normal;
+			break;
+		case (NAME_Additive):
+			vis->RenderStyle = STYLE_Add;
+			break;
+		case (NAME_Stencil):
+			vis->RenderStyle = STYLE_Stencil;
+			break;
+		case (NAME_None):
+		case (NAME_Cumulative):
+		case (NAME_Translucent):
+		default:
+			vis->RenderStyle = STYLE_Translucent;
+			break;
+		}
+	}
+	// Handling of Strife-like cumulative invisibility powerups, the weapon itself shouldn't become invisible
+	if ((vis->alpha < TRANSLUC25 && special1 > 0) || (vis->alpha == 0))
+	{
+		vis->alpha = clamp<fixed_t>((OPAQUE - Strength), 0, OPAQUE);
+		vis->colormap = SpecialColormaps[INVERSECOLORMAP].Colormap;
 	}
 	return -1;	// This item is valid so another one shouldn't reset the translucency
 }
 
-// Ghost Powerup (Heretic's version of invisibility) -------------------------
-
-IMPLEMENT_CLASS (APowerGhost)
-
 //===========================================================================
 //
-// APowerGhost :: InitEffect
+// APowerInvisibility :: HandlePickup
+//
+// If the player already has the first stage of a cumulative powerup, getting 
+// it again increases the player's alpha. (But shouldn't this be in Use()?)
 //
 //===========================================================================
 
-void APowerGhost::InitEffect ()
+bool APowerInvisibility::HandlePickup (AInventory *item)
 {
-	CommonInit();
-	Owner->flags3 |= MF3_GHOST;
-	Owner->alpha = HR_SHADOW;
-	Owner->RenderStyle = STYLE_Translucent;
-}
-
-//===========================================================================
-//
-// APowerGhost :: AlterWeaponSprite
-//
-//===========================================================================
-
-int APowerGhost::AlterWeaponSprite (vissprite_t *vis)
-{
-	int changed = Inventory == NULL ? false : Inventory->AlterWeaponSprite(vis);
-
-	// Blink if the powerup is wearing off
-	if (changed == 0 && EffectTics < 4*32 && !(EffectTics & 8))
-	{
-		vis->RenderStyle = STYLE_Normal;
-		return 1;
-	}
-	else if (changed == 1)
-	{
-		// something else set the weapon sprite back to opaque but this item is still active.
-		vis->alpha = HR_SHADOW;
-		vis->RenderStyle = STYLE_Translucent;
-	}
-	return -1;	// This item is valid so another one shouldn't reset the translucency
-}
-
-// Shadow Powerup (Strife's version of invisibility) -------------------------
-
-IMPLEMENT_CLASS (APowerShadow)
-
-//===========================================================================
-//
-// APowerShadow :: HandlePickup
-//
-// If the player already has the first stage of the powerup, getting it
-// again makes them completely invisible. Special1 tracks which stage we
-// are in, initially 0.
-//
-//===========================================================================
-
-bool APowerShadow::HandlePickup (AInventory *item)
-{
-	if (special1 == 0 && item->GetClass() == GetClass())
+	if (Mode == NAME_Cumulative && ((Strength * special1) < FRACUNIT) && item->GetClass() == GetClass())
 	{
 		APowerup *power = static_cast<APowerup *>(item);
 		if (power->EffectTics == 0)
@@ -755,54 +767,11 @@ bool APowerShadow::HandlePickup (AInventory *item)
 			EffectTics = power->EffectTics;
 			BlendColor = power->BlendColor;
 		}
-		special1 = 1;	// Go to stage 2.
+		special1++;	// increases power
 		power->ItemFlags |= IF_PICKUPGOOD;
 		return true;
 	}
 	return Super::HandlePickup (item);
-}
-
-//===========================================================================
-//
-// APowerShadow :: InitEffect
-//
-//===========================================================================
-
-void APowerShadow::InitEffect ()
-{
-	CommonInit();
-	Owner->alpha = special1 == 0 ? TRANSLUC25 : 0;
-	Owner->RenderStyle = STYLE_Translucent;
-}
-
-//===========================================================================
-//
-// APowerShadow :: AlterWeaponSprite
-//
-//===========================================================================
-
-int APowerShadow::AlterWeaponSprite (vissprite_t *vis)
-{
-	int changed = Inventory == NULL ? false : Inventory->AlterWeaponSprite(vis);
-
-	// Blink if the powerup is wearing off
-	if (changed == 0 && EffectTics < 4*32 && !(EffectTics & 8))
-	{
-		vis->RenderStyle = STYLE_Normal;
-		return 1;
-	}
-	else if (changed == 1)
-	{
-		// something else set the weapon sprite back to opaque but this item is still active.
-		vis->alpha = TRANSLUC25;
-		vis->RenderStyle = STYLE_Translucent;
-	}
-	if (special1 == 1)
-	{
-		vis->alpha = TRANSLUC25;
-		vis->colormap = InverseColormap;
-	}
-	return -1;	// This item is valid so another one shouldn't reset the translucency
 }
 
 // Ironfeet Powerup ----------------------------------------------------------
@@ -820,16 +789,27 @@ void APowerIronFeet::AbsorbDamage (int damage, FName damageType, int &newdamage)
 	if (damageType == NAME_Drowning)
 	{
 		newdamage = 0;
-		if (Owner->player != NULL)
-		{
-			Owner->player->mo->ResetAirSupply ();
-		}
 	}
 	else if (Inventory != NULL)
 	{
 		Inventory->AbsorbDamage (damage, damageType, newdamage);
 	}
 }
+
+//===========================================================================
+//
+// APowerIronFeet :: DoEffect
+//
+//===========================================================================
+
+void APowerIronFeet::DoEffect ()
+{
+	if (Owner->player != NULL)
+	{
+		Owner->player->mo->ResetAirSupply ();
+	}
+}
+
 
 // Strife Environment Suit Powerup -------------------------------------------
 
@@ -886,11 +866,11 @@ void APowerLightAmp::DoEffect ()
 	{
 		if (EffectTics > BLINKTHRESHOLD || (EffectTics & 8))
 		{	
-			Owner->player->fixedcolormap = 1;
+			Owner->player->fixedlightlevel = 1;
 		}
 		else
 		{
-			Owner->player->fixedcolormap = 0;
+			Owner->player->fixedlightlevel = -1;
 		}
 	}
 }
@@ -903,9 +883,10 @@ void APowerLightAmp::DoEffect ()
 
 void APowerLightAmp::EndEffect ()
 {
+	Super::EndEffect();
 	if (Owner != NULL && Owner->player != NULL && Owner->player->fixedcolormap < NUMCOLORMAPS)
 	{
-		Owner->player->fixedcolormap = 0;
+		Owner->player->fixedlightlevel = -1;
 	}
 }
 
@@ -950,22 +931,22 @@ void APowerTorch::DoEffect ()
 		{
 			if (NewTorch != 0)
 			{
-				if (Owner->player->fixedcolormap + NewTorchDelta > 7
-					|| Owner->player->fixedcolormap + NewTorchDelta < 1
-					|| NewTorch == Owner->player->fixedcolormap)
+				if (Owner->player->fixedlightlevel + NewTorchDelta > 7
+					|| Owner->player->fixedlightlevel + NewTorchDelta < 0
+					|| NewTorch == Owner->player->fixedlightlevel)
 				{
 					NewTorch = 0;
 				}
 				else
 				{
-					Owner->player->fixedcolormap += NewTorchDelta;
+					Owner->player->fixedlightlevel += NewTorchDelta;
 				}
 			}
 			else
 			{
 				NewTorch = (pr_torch() & 7) + 1;
-				NewTorchDelta = (NewTorch == Owner->player->fixedcolormap) ?
-					0 : ((NewTorch > Owner->player->fixedcolormap) ? 1 : -1);
+				NewTorchDelta = (NewTorch == Owner->player->fixedlightlevel) ?
+					0 : ((NewTorch > Owner->player->fixedlightlevel) ? 1 : -1);
 			}
 		}
 	}
@@ -995,13 +976,14 @@ void APowerFlight::Serialize (FArchive &arc)
 
 void APowerFlight::InitEffect ()
 {
+	Super::InitEffect();
 	Owner->flags2 |= MF2_FLY;
 	Owner->flags |= MF_NOGRAVITY;
 	if (Owner->z <= Owner->floorz)
 	{
-		Owner->momz = 4*FRACUNIT;	// thrust the player in the air a bit
+		Owner->velz = 4*FRACUNIT;	// thrust the player in the air a bit
 	}
-	if (Owner->momz <= -35*FRACUNIT)
+	if (Owner->velz <= -35*FRACUNIT)
 	{ // stop falling scream
 		S_StopSound (Owner, CHAN_VOICE);
 	}
@@ -1036,6 +1018,7 @@ void APowerFlight::Tick ()
 
 void APowerFlight::EndEffect ()
 {
+	Super::EndEffect();
 	if (Owner == NULL || Owner->player == NULL)
 	{
 		return;
@@ -1060,6 +1043,12 @@ void APowerFlight::EndEffect ()
 
 bool APowerFlight::DrawPowerup (int x, int y)
 {
+	// If this item got a valid icon use that instead of the default spinning wings.
+	if (Icon.isValid())
+	{
+		return Super::DrawPowerup(x, y);
+	}
+
 	if (EffectTics > BLINKTHRESHOLD || !(EffectTics & 16))
 	{
 		FTextureID picnum = TexMan.CheckForTexture ("SPFLY0", FTexture::TEX_MiscPatch);
@@ -1116,6 +1105,8 @@ void APowerWeaponLevel2::InitEffect ()
 {
 	AWeapon *weapon, *sister;
 
+	Super::InitEffect();
+
 	if (Owner->player == NULL)
 		return;
 
@@ -1152,6 +1143,7 @@ void APowerWeaponLevel2::EndEffect ()
 {
 	player_t *player = Owner != NULL ? Owner->player : NULL;
 
+	Super::EndEffect();
 	if (player != NULL)
 	{
 
@@ -1238,15 +1230,15 @@ void APowerSpeed::DoEffect ()
 	if (Inventory != NULL && Inventory->GetSpeedFactor() > FRACUNIT)
 		return;
 
-	if ( gameinfo.gametype != GAME_Doom )
+	if (P_AproxDistance (Owner->velx, Owner->vely) <= 12*FRACUNIT)
 	{
-		if (P_AproxDistance (Owner->momx, Owner->momy) <= 12*FRACUNIT)
+		if (P_AproxDistance (Owner->velx, Owner->vely) <= 12*FRACUNIT)
 			return;
 	}
 	// [BC] Skulltag powerups, such as the turbosphere, require to move at least SOME to
 	// create a speed trail.
-	else if (( Owner->momx == 0 ) &&
-			 ( Owner->momy == 0 ))
+	else if (( Owner->velx == 0 ) &&
+			 ( Owner->vely == 0 ))
 	{
 		return;
 	}
@@ -1289,6 +1281,8 @@ void APowerTargeter::Travelled ()
 void APowerTargeter::InitEffect ()
 {
 	player_t *player;
+
+	Super::InitEffect();
 
 	if ((player = Owner->player) == NULL)
 		return;
@@ -1341,6 +1335,7 @@ void APowerTargeter::DoEffect ()
 
 void APowerTargeter::EndEffect ()
 {
+	Super::EndEffect();
 	if (Owner != NULL && Owner->player != NULL)
 	{
 		P_SetPsprite (Owner->player, ps_targetcenter, NULL);
@@ -1372,6 +1367,8 @@ IMPLEMENT_CLASS (APowerFrightener)
 
 void APowerFrightener::InitEffect ()
 {
+	Super::InitEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
@@ -1386,6 +1383,8 @@ void APowerFrightener::InitEffect ()
 
 void APowerFrightener::EndEffect ()
 {
+	Super::EndEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
@@ -1410,11 +1409,13 @@ void APowerTimeFreezer::InitEffect( )
 {
 	ULONG	ulIdx;
 
+	Super::InitEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
 	// When this powerup is in effect, pause the music.
-	S_PauseSound( false );
+	S_PauseSound( false, false );
 
 	// Give the player and his teammates the power to move when time is frozen.
 	Owner->player->cheats |= CF_TIMEFREEZE;
@@ -1487,6 +1488,8 @@ void APowerTimeFreezer::EndEffect( )
 {
 	ULONG	ulIdx;
 
+	Super::EndEffect();
+
 	// Allow other actors to move about freely once again.
 	level.flags2 &= ~LEVEL2_FROZEN;
 
@@ -1520,14 +1523,14 @@ void APowerTimeFreezer::EndEffect( )
 			continue;
 		}
 
-		S_ResumeSound( );
+		S_ResumeSound( false );
 		break;
 	}
 
 	// Reset the player's view colormap, as well as the colormap that's applied to
 	// his body.
-	Owner->player->fixedcolormap = 0;
-	Owner->lFixedColormap = 0;
+	Owner->player->fixedcolormap = NOFIXEDCOLORMAP;
+	Owner->lFixedColormap = NOFIXEDCOLORMAP;
 }
 
 // Damage powerup ------------------------------------------------------
@@ -1542,6 +1545,8 @@ IMPLEMENT_CLASS( APowerDamage)
 
 void APowerDamage::InitEffect( )
 {
+	Super::InitEffect();
+
 	// Use sound channel 5 to avoid interference with other actions.
 	if (Owner != NULL) S_Sound(Owner, 5, SeeSound, 1.0f, ATTN_NONE);
 }
@@ -1554,6 +1559,7 @@ void APowerDamage::InitEffect( )
 
 void APowerDamage::EndEffect( )
 {
+	Super::EndEffect();
 	// Use sound channel 5 to avoid interference with other actions.
 	if (Owner != NULL) S_Sound(Owner, 5, DeathSound, 1.0f, ATTN_NONE);
 }
@@ -1592,7 +1598,10 @@ void APowerDamage::ModifyDamage(int damage, FName damageType, int &newdamage, bo
 
 // Quarter damage powerup ------------------------------------------------------
 
-IMPLEMENT_CLASS( APowerProtection)
+IMPLEMENT_CLASS(APowerProtection)
+
+#define PROTECTION_FLAGS3	(MF3_NORADIUSDMG | MF3_DONTMORPH | MF3_DONTSQUASH | MF3_DONTBLAST | MF3_NOTELEOTHER)
+#define PROTECTION_FLAGS5	(MF5_NOPAIN | MF5_DONTRIP)
 
 //===========================================================================
 //
@@ -1602,8 +1611,21 @@ IMPLEMENT_CLASS( APowerProtection)
 
 void APowerProtection::InitEffect( )
 {
-	// Use sound channel 5 to avoid interference with other actions.
-	if (Owner != NULL) S_Sound(Owner, 5, SeeSound, 1.0f, ATTN_NONE);
+	Super::InitEffect();
+
+	if (Owner != NULL)
+	{
+		S_Sound(Owner, CHAN_AUTO, SeeSound, 1.0f, ATTN_NONE);
+
+		// Transfer various protection flags if owner does not already have them.
+		// If the owner already has the flag, clear it from the powerup.
+		// If the powerup still has a flag set, add it to the owner.
+		flags3 &= ~(Owner->flags3 & PROTECTION_FLAGS3);
+		Owner->flags3 |= flags3 & PROTECTION_FLAGS3;
+
+		flags5 &= ~(Owner->flags5 & PROTECTION_FLAGS5);
+		Owner->flags5 |= flags5 & PROTECTION_FLAGS5;
+	}
 }
 
 //===========================================================================
@@ -1614,8 +1636,13 @@ void APowerProtection::InitEffect( )
 
 void APowerProtection::EndEffect( )
 {
-	// Use sound channel 5 to avoid interference with other actions.
-	if (Owner != NULL) S_Sound(Owner, 5, DeathSound, 1.0f, ATTN_NONE);
+	Super::EndEffect();
+	if (Owner != NULL)
+	{
+		S_Sound(Owner, CHAN_AUTO, DeathSound, 1.0f, ATTN_NONE);
+		Owner->flags3 &= ~(flags3 & PROTECTION_FLAGS3);
+		Owner->flags5 &= ~(flags5 & PROTECTION_FLAGS5);
+	}
 }
 
 //===========================================================================
@@ -1629,27 +1656,30 @@ void APowerProtection::ModifyDamage(int damage, FName damageType, int &newdamage
 	static const fixed_t def = FRACUNIT/4;
 	if (passive && damage > 0)
 	{
-		const fixed_t * pdf = NULL;
-		DmgFactors * df = GetClass()->ActorInfo->DamageFactors;
+		const fixed_t *pdf = NULL;
+		DmgFactors *df = GetClass()->ActorInfo->DamageFactors;
 		if (df != NULL && df->CountUsed() != 0)
 		{
 			pdf = df->CheckKey(damageType);
-			if (pdf== NULL && damageType != NAME_None) pdf = df->CheckKey(NAME_None);
+			if (pdf == NULL && damageType != NAME_None) pdf = df->CheckKey(NAME_None);
 		}
 		else pdf = &def;
 
 		if (pdf != NULL)
 		{
 			damage = newdamage = FixedMul(damage, *pdf);
-			if (Owner != NULL && *pdf < FRACUNIT) S_Sound(Owner, 5, ActiveSound, 1.0f, ATTN_NONE);
+			if (Owner != NULL && *pdf < FRACUNIT) S_Sound(Owner, CHAN_AUTO, ActiveSound, 1.0f, ATTN_NONE);
 		}
 	}
-	if (Inventory != NULL) Inventory->ModifyDamage(damage, damageType, newdamage, passive);
+	if (Inventory != NULL)
+	{
+		Inventory->ModifyDamage(damage, damageType, newdamage, passive);
+	}
 }
 
 // Drain rune -------------------------------------------------------
 
-IMPLEMENT_CLASS( APowerDrain)
+IMPLEMENT_CLASS(APowerDrain)
 
 //===========================================================================
 //
@@ -1659,6 +1689,8 @@ IMPLEMENT_CLASS( APowerDrain)
 
 void APowerDrain::InitEffect( )
 {
+	Super::InitEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
@@ -1674,6 +1706,8 @@ void APowerDrain::InitEffect( )
 
 void APowerDrain::EndEffect( )
 {
+	Super::EndEffect();
+
 	// Nothing to do if there's no owner.
 	if (Owner != NULL && Owner->player != NULL)
 	{
@@ -1685,7 +1719,7 @@ void APowerDrain::EndEffect( )
 
 // Regeneration rune -------------------------------------------------------
 
-IMPLEMENT_CLASS( APowerRegeneration)
+IMPLEMENT_CLASS(APowerRegeneration)
 
 //===========================================================================
 //
@@ -1695,6 +1729,8 @@ IMPLEMENT_CLASS( APowerRegeneration)
 
 void APowerRegeneration::InitEffect( )
 {
+	Super::InitEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
@@ -1710,6 +1746,7 @@ void APowerRegeneration::InitEffect( )
 
 void APowerRegeneration::EndEffect( )
 {
+	Super::EndEffect();
 	// Nothing to do if there's no owner.
 	if (Owner != NULL && Owner->player != NULL)
 	{
@@ -1720,7 +1757,7 @@ void APowerRegeneration::EndEffect( )
 
 // High jump rune -------------------------------------------------------
 
-IMPLEMENT_CLASS( APowerHighJump)
+IMPLEMENT_CLASS(APowerHighJump)
 
 //===========================================================================
 //
@@ -1730,6 +1767,8 @@ IMPLEMENT_CLASS( APowerHighJump)
 
 void APowerHighJump::InitEffect( )
 {
+	Super::InitEffect();
+
 	if (Owner== NULL || Owner->player == NULL)
 		return;
 
@@ -1745,6 +1784,7 @@ void APowerHighJump::InitEffect( )
 
 void APowerHighJump::EndEffect( )
 {
+	Super::EndEffect();
 	// Nothing to do if there's no owner.
 	if (Owner != NULL && Owner->player != NULL)
 	{
@@ -1753,9 +1793,47 @@ void APowerHighJump::EndEffect( )
 	}
 }
 
+// Double firing speed rune ---------------------------------------------
+
+IMPLEMENT_CLASS(APowerDoubleFiringSpeed)
+
+//===========================================================================
+//
+// APowerDoubleFiringSpeed :: InitEffect
+//
+//===========================================================================
+
+void APowerDoubleFiringSpeed::InitEffect( )
+{
+	Super::InitEffect();
+
+	if (Owner== NULL || Owner->player == NULL)
+		return;
+
+	// Give the player the power to shoot twice as fast.
+	Owner->player->cheats |= CF_DOUBLEFIRINGSPEED;
+}
+
+//===========================================================================
+//
+// APowerDoubleFiringSpeed :: EndEffect
+//
+//===========================================================================
+
+void APowerDoubleFiringSpeed::EndEffect( )
+{
+	Super::EndEffect();
+	// Nothing to do if there's no owner.
+	if (Owner != NULL && Owner->player != NULL)
+	{
+		// Take away the shooting twice as fast power.
+		Owner->player->cheats &= ~CF_DOUBLEFIRINGSPEED;
+	}
+}
+
 // Morph powerup ------------------------------------------------------
 
-IMPLEMENT_CLASS( APowerMorph)
+IMPLEMENT_CLASS(APowerMorph)
 
 //===========================================================================
 //
@@ -1778,6 +1856,8 @@ void APowerMorph::Serialize (FArchive &arc)
 
 void APowerMorph::InitEffect( )
 {
+	Super::InitEffect();
+
 	if (Owner != NULL && Owner->player != NULL && PlayerClass != NAME_None)
 	{
 		player_t *realplayer = Owner->player;	// Remember the identity of the player
@@ -1805,6 +1885,8 @@ void APowerMorph::InitEffect( )
 
 void APowerMorph::EndEffect( )
 {
+	Super::EndEffect();
+
 	// Abort if owner already destroyed
 	if (Owner == NULL)
 	{
@@ -1907,6 +1989,8 @@ IMPLEMENT_CLASS( APowerPossessionArtifact )
 
 void APowerPossessionArtifact::InitEffect( )
 {
+	Super::InitEffect();
+
 	// Flag the player as carrying the possession artifact.
 	Owner->player->cheats2 |= CF2_POSSESSIONARTIFACT;
 
@@ -1947,6 +2031,8 @@ void APowerPossessionArtifact::DoEffect( )
 
 void APowerPossessionArtifact::EndEffect( )
 {
+	Super::EndEffect();
+
 	// Nothing to do if there's no owner.
 	if (( Owner == NULL ) || ( Owner->player == NULL ))
 	{
@@ -1969,6 +2055,8 @@ IMPLEMENT_CLASS( APowerTerminatorArtifact )
 
 void APowerTerminatorArtifact::InitEffect( )
 {
+	Super::InitEffect();
+
 	// Nothing to do if there's no owner.
 	if (( Owner == NULL ) || ( Owner->player == NULL ))
 		return;
@@ -2006,6 +2094,8 @@ void APowerTerminatorArtifact::DoEffect( )
 
 void APowerTerminatorArtifact::EndEffect( )
 {
+	Super::EndEffect();
+
 	// Nothing to do if there's no owner.
 	if (( Owner == NULL ) || ( Owner->player == NULL ))
 	{
@@ -2048,10 +2138,13 @@ IMPLEMENT_CLASS( APowerTranslucency )
 EXTERN_CVAR (Bool, r_drawtrans)
 void APowerTranslucency::InitEffect( )
 {
+	Super::InitEffect();
+
 	// [BC] If r_drawtrans is false, then just give the same effect as partial invisibility.
 	if ( r_drawtrans == false )
 	{
-		CommonInit();
+		// [BB] Check if the CommonInit removal needs any changes here.
+		//CommonInit();
 		Owner->alpha = FRACUNIT/5;
 		Owner->RenderStyle = STYLE_OptFuzzy;
 	}
@@ -2140,12 +2233,7 @@ void ARune::Serialize (FArchive &arc)
 
 PalEntry ARune::GetBlend ()
 {
-	if (BlendColor == INVERSECOLOR ||
-		BlendColor == GOLDCOLOR ||
-		// [BC] HAX!
-		BlendColor == REDCOLOR ||
-		BlendColor == GREENCOLOR) 
-		return 0;
+	if (IsSpecialColormap(BlendColor)) return 0;
 
 	return BlendColor;
 }
@@ -2174,26 +2262,10 @@ void ARune::DoEffect ()
 	}
 
 	// [BC] Apply the colormap to the player's body, also.
-	if (BlendColor == INVERSECOLOR)
+	if (IsSpecialColormap(BlendColor))
 	{
-		Owner->player->fixedcolormap = INVERSECOLORMAP;
-		Owner->lFixedColormap = INVERSECOLORMAP;
-	}
-	else if (BlendColor == GOLDCOLOR)
-	{
-		Owner->player->fixedcolormap = GOLDCOLORMAP;
-		Owner->lFixedColormap = GOLDCOLORMAP;
-	}
-	// [BC] HAX!
-	else if (BlendColor == REDCOLOR)
-	{
-		Owner->player->fixedcolormap = REDCOLORMAP;
-		Owner->lFixedColormap = REDCOLORMAP;
-	}
-	else if (BlendColor == GREENCOLOR)
-	{
-		Owner->player->fixedcolormap = GREENCOLORMAP;
-		Owner->lFixedColormap = GREENCOLORMAP;
+		Owner->player->fixedcolormap = BlendColor;
+		Owner->lFixedColormap = BlendColor;
 	}
 }
 
@@ -2680,7 +2752,7 @@ void ARuneSpeed25::DoEffect ()
 
 	if ( gameinfo.gametype != GAME_Doom )
 	{
-		if (P_AproxDistance (Owner->momx, Owner->momy) <= 12*FRACUNIT)
+		if (P_AproxDistance (Owner->velx, Owner->vely) <= 12*FRACUNIT)
 			return;
 	}
 
@@ -2726,3 +2798,43 @@ void ARuneSpeed25::EndEffect( )
 	// Take away the speed power.
 	Owner->player->cheats &= ~CF_SPEED25;
 }
+
+// Infinite Ammo Powerup -----------------------------------------------------
+
+IMPLEMENT_CLASS(APowerInfiniteAmmo)
+
+//===========================================================================
+//
+// APowerInfiniteAmmo :: InitEffect
+//
+//===========================================================================
+
+void APowerInfiniteAmmo::InitEffect( )
+{
+	Super::InitEffect();
+
+	if (Owner== NULL || Owner->player == NULL)
+		return;
+
+	// Give the player infinite ammo
+	Owner->player->cheats |= CF_INFINITEAMMO;
+}
+
+//===========================================================================
+//
+// APowerInfiniteAmmo :: EndEffect
+//
+//===========================================================================
+
+void APowerInfiniteAmmo::EndEffect( )
+{
+	Super::EndEffect();
+
+	// Nothing to do if there's no owner.
+	if (Owner != NULL && Owner->player != NULL)
+	{
+		// Take away the limitless ammo
+		Owner->player->cheats &= ~CF_INFINITEAMMO;
+	}
+}
+

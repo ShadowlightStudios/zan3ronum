@@ -118,9 +118,8 @@ static void P_SlopeLineToPoint (int lineid, fixed_t x, fixed_t y, fixed_t z, boo
 //
 //===========================================================================
 
-static void P_CopyPlane (int tag, fixed_t x, fixed_t y, bool copyCeil)
+static void P_CopyPlane (int tag, sector_t *dest, bool copyCeil)
 {
-	sector_t *dest = P_PointInSector (x, y);
 	sector_t *source;
 	int secnum;
 	size_t planeofs;
@@ -142,6 +141,12 @@ static void P_CopyPlane (int tag, fixed_t x, fixed_t y, bool copyCeil)
 		planeofs = myoffsetof(sector_t, floorplane);
 	}
 	*(secplane_t *)((BYTE *)dest + planeofs) = *(secplane_t *)((BYTE *)source + planeofs);
+}
+
+static void P_CopyPlane (int tag, fixed_t x, fixed_t y, bool copyCeil)
+{
+	sector_t *dest = P_PointInSector (x, y);
+	P_CopyPlane(tag, dest, copyCeil);
 }
 
 //===========================================================================
@@ -315,10 +320,10 @@ static void P_SetSlopesFromVertexHeights(FMapThing *firstmt, FMapThing *lastmt)
 			FVector3 vec1, vec2;
 			int vi1, vi2, vi3;
 
-			vi1 = sec->lines[0]->v1 - vertexes;
-			vi2 = sec->lines[0]->v2 - vertexes;
+			vi1 = int(sec->lines[0]->v1 - vertexes);
+			vi2 = int(sec->lines[0]->v2 - vertexes);
 			vi3 = (sec->lines[1]->v1 == sec->lines[0]->v1 || sec->lines[1]->v1 == sec->lines[0]->v2)?
-				sec->lines[1]->v2 - vertexes : sec->lines[1]->v1 - vertexes;
+				int(sec->lines[1]->v2 - vertexes) : int(sec->lines[1]->v1 - vertexes);
 
 			vt1.X = FIXED2FLOAT(vertexes[vi1].x);
 			vt1.Y = FIXED2FLOAT(vertexes[vi1].y);
@@ -462,7 +467,7 @@ void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt)
 static void P_AlignPlane (sector_t *sec, line_t *line, int which)
 {
 	sector_t *refsec;
-	int bestdist;
+	double bestdist;
 	vertex_t *refvert = (*sec->lines)->v1;	// Shut up, GCC
 	int i;
 	line_t **probe;
@@ -471,23 +476,19 @@ static void P_AlignPlane (sector_t *sec, line_t *line, int which)
 		return;
 
 	// Find furthest vertex from the reference line. It, along with the two ends
-	// of the line will define the plane.
+	// of the line, will define the plane.
 	bestdist = 0;
 	for (i = sec->linecount*2, probe = sec->lines; i > 0; i--)
 	{
-		int dist;
+		double dist;
 		vertex_t *vert;
-
-		// Do calculations with only the upper bits, because the lower ones
-		// are all zero, and we would overflow for a lot of distances if we
-		// kept them around.
 
 		if (i & 1)
 			vert = (*probe++)->v2;
 		else
 			vert = (*probe)->v1;
-		dist = abs (((line->v1->y - vert->y) >> FRACBITS) * (line->dx >> FRACBITS) -
-					((line->v1->x - vert->x) >> FRACBITS) * (line->dy >> FRACBITS));
+		dist = fabs((double(line->v1->y) - vert->y) * line->dx -
+					(double(line->v1->x) - vert->x) * line->dy);
 
 		if (dist > bestdist)
 		{
@@ -552,7 +553,6 @@ void P_SetSlopes ()
 		if (lines[i].special == Plane_Align)
 		{
 			lines[i].special = 0;
-			lines[i].id = lines[i].args[2];
 			if (lines[i].backsector != NULL)
 			{
 				// args[0] is for floor, args[1] is for ceiling
@@ -586,6 +586,55 @@ void P_SetSlopes ()
 						else
 							lines[i].backsector->SavedCeilingPlane = lines[i].backsector->ceilingplane;
 					}
+				}
+			}
+		}
+	}
+}
+
+//===========================================================================
+//
+// P_CopySlopes
+//
+//===========================================================================
+
+void P_CopySlopes()
+{
+	for (int i = 0; i < numlines; i++)
+	{
+		if (lines[i].special == Plane_Copy)
+		{
+			// The args are used for the tags of sectors to copy:
+			// args[0]: front floor
+			// args[1]: front ceiling
+			// args[2]: back floor
+			// args[3]: back ceiling
+			// args[4]: copy slopes from one side of the line to the other.
+			lines[i].special = 0;
+			for (int s = 0; s < (lines[i].backsector ? 4 : 2); s++)
+			{
+				if (lines[i].args[s])
+					P_CopyPlane(lines[i].args[s], 
+					(s & 2 ? lines[i].backsector : lines[i].frontsector), s & 1);
+			}
+
+			if (lines[i].backsector != NULL)
+			{
+				if ((lines[i].args[4] & 3) == 1)
+				{
+					lines[i].backsector->floorplane = lines[i].frontsector->floorplane;
+				}
+				else if ((lines[i].args[4] & 3) == 2)
+				{
+					lines[i].frontsector->floorplane = lines[i].backsector->floorplane;
+				}
+				if ((lines[i].args[4] & 12) == 4)
+				{
+					lines[i].backsector->ceilingplane = lines[i].frontsector->ceilingplane;
+				}
+				else if ((lines[i].args[4] & 12) == 8)
+				{
+					lines[i].frontsector->ceilingplane = lines[i].backsector->ceilingplane;
 				}
 			}
 		}

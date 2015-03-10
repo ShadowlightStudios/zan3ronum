@@ -62,7 +62,11 @@
 #include "m_png.h"
 #include "colormatcher.h"
 #include "v_palette.h"
+#include "r_sky.h"
 
+// [BB] Use ZDoom's freelook limit for the sotfware renderer.
+// Note: ZDoom's limit is chosen such that the sky is rendered properly.
+CVAR (Bool, cl_oldfreelooklimit, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 IMPLEMENT_ABSTRACT_CLASS (DCanvas)
 IMPLEMENT_ABSTRACT_CLASS (DFrameBuffer)
@@ -168,11 +172,11 @@ CUSTOM_CVAR (Int, vid_refreshrate, 0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 	}
 }
 
-CUSTOM_CVAR (Float, dimamount, 0.2f, CVAR_ARCHIVE)
+CUSTOM_CVAR (Float, dimamount, -1.f, CVAR_ARCHIVE)
 {
-	if (self < 0.f)
+	if (self < 0.f && self != -1.f)
 	{
-		self = 0.f;
+		self = -1.f;
 	}
 	else if (self > 1.f)
 	{
@@ -296,14 +300,24 @@ void DCanvas::FlatFill (int left, int top, int right, int bottom, FTexture *src,
 void DCanvas::Dim (PalEntry color)
 {
 	PalEntry dimmer;
-	float amount = dimamount;
+	float amount;
+
+	if (dimamount >= 0)
+	{
+		dimmer = PalEntry(dimcolor);
+		amount = dimamount;
+	}
+	else
+	{
+		dimmer = gameinfo.dimcolor;
+		amount = gameinfo.dimamount;
+	}
 
 	if (gameinfo.gametype == GAME_Hexen && gamestate == GS_DEMOSCREEN)
 	{ // On the Hexen title screen, the default dimming is not
 		// enough to make the menus readable.
 		amount = MIN<float> (1.f, amount*2.f);
 	}
-	dimmer = PalEntry(dimcolor);
 	// Add the cvar's dimming on top of the color passed to the function
 	if (color.a != 0)
 	{
@@ -828,7 +842,7 @@ void DFrameBuffer::DrawRateStuff ()
 	// Draws frame time and cumulative fps
 	if (vid_fps)
 	{
-		DWORD ms = I_MSTime ();
+		DWORD ms = I_FPSTime();
 		DWORD howlong = ms - LastMS;
 		if (howlong >= 0)
 		{
@@ -866,7 +880,7 @@ void DFrameBuffer::DrawRateStuff ()
 		// Buffer can be NULL if we're doing hardware accelerated 2D
 		if (buffer != NULL)
 		{
-			buffer += (GetHeight()-1)*GetPitch();
+			buffer += (GetHeight()-1) * GetPitch();
 			
 			for (i = 0; i < tics*2; i += 2)		buffer[i] = 0xff;
 			for ( ; i < 20*2; i += 2)			buffer[i] = 0x00;
@@ -1091,6 +1105,20 @@ bool DFrameBuffer::Begin2D (bool copy3d)
 
 //==========================================================================
 //
+// DFrameBuffer :: DrawBlendingRect
+//
+// In hardware 2D modes, the blending rect needs to be drawn separately
+// from transferring the 3D scene to video memory, because the weapon
+// sprite is drawn on top of that.
+//
+//==========================================================================
+
+void DFrameBuffer::DrawBlendingRect()
+{
+}
+
+//==========================================================================
+//
 // DFrameBuffer :: CreateTexture
 //
 // Creates a native texture for a game texture, if supported.
@@ -1174,6 +1202,83 @@ void DFrameBuffer::WipeCleanup()
 
 //===========================================================================
 //
+// Create texture hitlist
+//
+//===========================================================================
+
+void DFrameBuffer::GetHitlist(BYTE *hitlist)
+{
+	BYTE *spritelist;
+	int i;
+
+	spritelist = new BYTE[sprites.Size()];
+	
+	// Precache textures (and sprites).
+	memset (spritelist, 0, sprites.Size());
+
+	{
+		AActor *actor;
+		TThinkerIterator<AActor> iterator;
+
+		while ( (actor = iterator.Next ()) )
+			spritelist[actor->sprite] = 1;
+	}
+
+	for (i = (int)(sprites.Size () - 1); i >= 0; i--)
+	{
+		if (spritelist[i])
+		{
+			int j, k;
+			for (j = 0; j < sprites[i].numframes; j++)
+			{
+				const spriteframe_t *frame = &SpriteFrames[sprites[i].spriteframes + j];
+
+				for (k = 0; k < 16; k++)
+				{
+					FTextureID pic = frame->Texture[k];
+					if (pic.isValid())
+					{
+						hitlist[pic.GetIndex()] = 1;
+					}
+				}
+			}
+		}
+	}
+
+	delete[] spritelist;
+
+	for (i = numsectors - 1; i >= 0; i--)
+	{
+		hitlist[sectors[i].GetTexture(sector_t::floor).GetIndex()] = 
+			hitlist[sectors[i].GetTexture(sector_t::ceiling).GetIndex()] |= 2;
+	}
+
+	for (i = numsides - 1; i >= 0; i--)
+	{
+		hitlist[sides[i].GetTexture(side_t::top).GetIndex()] =
+		hitlist[sides[i].GetTexture(side_t::mid).GetIndex()] =
+		hitlist[sides[i].GetTexture(side_t::bottom).GetIndex()] |= 1;
+	}
+
+	// Sky texture is always present.
+	// Note that F_SKY1 is the name used to
+	//	indicate a sky floor/ceiling as a flat,
+	//	while the sky texture is stored like
+	//	a wall texture, with an episode dependant
+	//	name.
+
+	if (sky1texture.isValid())
+	{
+		hitlist[sky1texture.GetIndex()] |= 1;
+	}
+	if (sky2texture.isValid())
+	{
+		hitlist[sky2texture.GetIndex()] |= 1;
+	}
+}
+
+//===========================================================================
+//
 // Texture precaching
 //
 //===========================================================================
@@ -1234,7 +1339,60 @@ void DFrameBuffer::WriteSavePic (player_t *player, FILE *file, int width, int he
 	delete pic;
 }
 
+//===========================================================================
+//
+// 
+//
+//===========================================================================
 
+void DFrameBuffer::DrawRemainingPlayerSprites()
+{
+	R_DrawRemainingPlayerSprites();
+}
+
+//===========================================================================
+//
+// notify the renderer that an actor has changed state
+//
+//===========================================================================
+
+void DFrameBuffer::StateChanged(AActor *actor)
+{
+}
+
+//===========================================================================
+//
+// notify the renderer that serialization of the curent level is about to start/end
+//
+//===========================================================================
+
+void DFrameBuffer::StartSerialize(FArchive &arc)
+{
+}
+
+void DFrameBuffer::EndSerialize(FArchive &arc)
+{
+}
+
+//===========================================================================
+//
+// Get max. view angle (renderer specific information so it goes here now)
+//
+//===========================================================================
+#define MAX_DN_ANGLE	56		// Max looking down angle
+#define MAX_UP_ANGLE	32		// Max looking up angle
+
+int DFrameBuffer::GetMaxViewPitch(bool down)
+{
+	// [BB] The user can restore ZDoom's freelook limit.
+	return down? MAX_DN_ANGLE*ANGLE_1 : -( cl_oldfreelooklimit ? MAX_UP_ANGLE : 56 )*ANGLE_1;
+}
+
+//===========================================================================
+//
+// 
+//
+//===========================================================================
 
 FNativePalette::~FNativePalette()
 {
@@ -1260,6 +1418,11 @@ CCMD(clean)
 bool V_DoModeSetup (int width, int height, int bits)
 {
 	DFrameBuffer *buff = I_SetMode (width, height, screen);
+	int ratio;
+	int cwidth;
+	int cheight;
+	// [BB] Changed to float.
+	float cx1, cy1, cx2, cy2;
 
 	if (buff == NULL)
 	{
@@ -1274,40 +1437,33 @@ bool V_DoModeSetup (int width, int height, int bits)
 	// if D3DFB is being used for the display.
 	FFont::StaticPreloadFonts();
 
+	ratio = CheckRatio (width, height);
+	if (ratio & 4)
 	{
-		int ratio;
-		int cwidth;
-		int cheight;
-		float cx1, cy1, cx2, cy2;
-
-		ratio = CheckRatio (width, height);
-		if (ratio & 4)
-		{
-			cwidth = width;
-			cheight = height * BaseRatioSizes[ratio][3] / 48;
-		}
-		else
-		{
-			cwidth = width * BaseRatioSizes[ratio][3] / 48;
-			cheight = height;
-		}
-		// [BB] ST uses float accuracy for CleanXfac and CleanYfac. This is necessary at least for the proper display of medals under 1024x768.
-		// Use whichever pair of cwidth/cheight or width/height that produces less difference
-		// between CleanXfac and CleanYfac.
-		cx1 = MAX(cwidth / 320.f, 1.f);
-		cy1 = MAX(cheight / 200.f, 1.f);
-		cx2 = MAX(width / 320.f, 1.f);
-		cy2 = MAX(height / 200.f, 1.f);
-		if (abs(cx1 - cy1) <= abs(cx2 - cy2))
-		{ // e.g. 640x360 looks better with this.
-			CleanXfac = cx1;
-			CleanYfac = cy1;
-		}
-		else
-		{ // e.g. 720x480 looks better with this.
-			CleanXfac = cx2;
-			CleanYfac = cy2;
-		}
+		cwidth = width;
+		cheight = height * BaseRatioSizes[ratio][3] / 48;
+	}
+	else
+	{
+		cwidth = width * BaseRatioSizes[ratio][3] / 48;
+		cheight = height;
+	}
+	// [BB] ST uses float accuracy for CleanXfac and CleanYfac. This is necessary at least for the proper display of medals under 1024x768.
+	// Use whichever pair of cwidth/cheight or width/height that produces less difference
+	// between CleanXfac and CleanYfac.
+	cx1 = MAX(cwidth / 320.f, 1.f);
+	cy1 = MAX(cheight / 200.f, 1.f);
+	cx2 = MAX(width / 320.f, 1.f);
+	cy2 = MAX(height / 200.f, 1.f);
+	if (abs(cx1 - cy1) <= abs(cx2 - cy2))
+	{ // e.g. 640x360 looks better with this.
+		CleanXfac = cx1;
+		CleanYfac = cy1;
+	}
+	else
+	{ // e.g. 720x480 looks better with this.
+		CleanXfac = cx2;
+		CleanYfac = cy2;
 	}
 /* [BB] This causes the ugly vertical menu scaling.
 	if (CleanXfac > 1 && CleanYfac > 1 && CleanXfac != CleanYfac)
@@ -1325,6 +1481,32 @@ bool V_DoModeSetup (int width, int height, int bits)
 	assert(CleanWidth >= 320);
 	assert(CleanHeight >= 200);
 */
+
+	if (width < 800 || width >= 960)
+	{
+		if (cx1 < cx2)
+		{
+			// Special case in which we don't need to scale down.
+			CleanXfac_1 = 
+			CleanYfac_1 = cx1;
+		}
+		else
+		{
+			// [BB] Rounding down is necessary here.
+			CleanXfac_1 = MAX(int(floor(CleanXfac)) - 1, 1);
+			CleanYfac_1 = MAX(int(floor(CleanYfac)) - 1, 1);
+		}
+		CleanWidth_1 = width / CleanXfac_1;
+		CleanHeight_1 = height / CleanYfac_1;
+	}
+	else // if the width is between 800 and 960 the ratio between the screensize and CleanXFac-1 becomes too large.
+	{
+		CleanXfac_1 = int(CleanXfac);
+		CleanYfac_1 = int(CleanYfac);
+		CleanWidth_1 = CleanWidth;
+		CleanHeight_1 = CleanHeight;
+	}
+
 
 	DisplayWidth = width;
 	DisplayHeight = height;
@@ -1433,7 +1615,7 @@ CCMD (vid_setmode)
 
 void V_Init (void) 
 { 
-	char *i;
+	const char *i;
 	int width, height, bits;
 
 	atterm (V_Shutdown);
@@ -1534,6 +1716,15 @@ CUSTOM_CVAR (Bool, vid_nowidescreen, false, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
 	}
 }
 
+CUSTOM_CVAR (Int, vid_aspect, 0, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
+{
+	setsizeneeded = true;
+	if (StatusBar != NULL)
+	{
+		StatusBar->ScreenSizeChanged();
+	}
+}
+
 // Tries to guess the physical dimensions of the screen based on the
 // screen's pixel dimensions. Can return:
 // 0: 4:3
@@ -1542,6 +1733,11 @@ CUSTOM_CVAR (Bool, vid_nowidescreen, false, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
 // 4: 5:4
 int CheckRatio (int width, int height)
 {
+	if ((vid_aspect >=1) && (vid_aspect <=4))
+	{
+		// [SP] User wants to force aspect ratio; let them.
+		return vid_aspect == 3? 0: int(vid_aspect);
+	}
 	if (vid_nowidescreen)
 	{
 		if (!vid_tft)
@@ -1586,3 +1782,14 @@ const int BaseRatioSizes[5][4] =
 	{  960, 600, 0,                   48 },
 	{  960, 640, (int)(6.5*FRACUNIT), 48*15/16 }	//  5:4   320,      213.3333, multiplied by three
 };
+
+void IVideo::DumpAdapters ()
+{
+	Printf("Multi-monitor support unavailable.\n");
+}
+
+CCMD(vid_listadapters)
+{
+	if (Video != NULL)
+		Video->DumpAdapters();
+}

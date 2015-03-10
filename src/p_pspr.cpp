@@ -86,13 +86,12 @@ static FRandom pr_gunshot ("GunShot");
 //
 //---------------------------------------------------------------------------
 
-void P_SetPsprite (player_t *player, int position, FState *state)
+void P_SetPsprite (player_t *player, int position, FState *state, bool nofunction)
 {
 	pspdef_t *psp;
 
-	if (position == ps_weapon)
-	{
-		// A_WeaponReady will re-set these as needed
+	if (position == ps_weapon && !nofunction)
+	{ // A_WeaponReady will re-set these as needed
 		player->cheats &= ~(CF_WEAPONREADY | CF_WEAPONREADYALT | CF_WEAPONBOBBING | CF_WEAPONSWITCHOK);
 	}
 
@@ -105,6 +104,19 @@ void P_SetPsprite (player_t *player, int position, FState *state)
 			break;
 		}
 		psp->state = state;
+
+		if (state->sprite != SPR_FIXED)
+		{ // okay to change sprite and/or frame
+			if (!state->GetSameFrame())
+			{ // okay to change frame
+				psp->frame = state->GetFrame();
+			}
+			if (state->sprite != SPR_NOCHANGE)
+			{ // okay to change sprite
+				psp->sprite = state->sprite;
+			}
+		}
+
 
 		if (sv_fastweapons >= 2 && position == ps_weapon)
 			psp->tics = state->ActionFunc == NULL? 0 : 1;
@@ -123,7 +135,7 @@ void P_SetPsprite (player_t *player, int position, FState *state)
 		}
 
 		// [BB] Some action functions rely on the fact that ReadyWeapon is not NULL.
-		if (player->mo != NULL && player->ReadyWeapon)
+		if (!nofunction && player->mo != NULL && player->ReadyWeapon)
 		{
 			if (state->CallAction(player->mo, player->ReadyWeapon))
 			{
@@ -134,40 +146,6 @@ void P_SetPsprite (player_t *player, int position, FState *state)
 			}
 		}
 
-		state = psp->state->GetNextState();
-	} while (!psp->tics); // An initial state of 0 could cycle through.
-}
-
-//---------------------------------------------------------------------------
-//
-// PROC P_SetPspriteNF
-//
-// Identical to P_SetPsprite, without calling the action function
-//---------------------------------------------------------------------------
-
-void P_SetPspriteNF (player_t *player, int position, FState *state)
-{
-	pspdef_t *psp;
-
-	psp = &player->psprites[position];
-	do
-	{
-		if (state == NULL)
-		{ // Object removed itself.
-			psp->state = NULL;
-			break;
-		}
-		psp->state = state;
-		psp->tics = state->GetTics(); // could be 0
-
-		if (state->GetMisc1())
-		{ // Set coordinates.
-			psp->sx = state->GetMisc1()<<FRACBITS;
-		}
-		if (state->GetMisc2())
-		{
-			psp->sy = state->GetMisc2()<<FRACBITS;
-		}
 		state = psp->state->GetNextState();
 	} while (!psp->tics); // An initial state of 0 could cycle through.
 }
@@ -237,7 +215,7 @@ void P_BringUpWeapon (player_t *player)
 //
 //---------------------------------------------------------------------------
 
-void P_FireWeapon (player_t *player)
+void P_FireWeapon (player_t *player, FState *state)
 {
 	AWeapon *weapon;
 
@@ -272,7 +250,11 @@ void P_FireWeapon (player_t *player)
 	}
 
 	weapon->bAltFire = false;
-	P_SetPsprite (player, ps_weapon, weapon->GetAtkState(!!player->refire));
+	if (state == NULL)
+	{
+		state = weapon->GetAtkState(!!player->refire);
+	}
+	P_SetPsprite (player, ps_weapon, state);
 	if (!(weapon->WeaponFlags & WIF_NOALERT))
 	{
 		P_NoiseAlert (player->mo, player->mo, false);
@@ -285,7 +267,7 @@ void P_FireWeapon (player_t *player)
 //
 //---------------------------------------------------------------------------
 
-void P_FireWeaponAlt (player_t *player)
+void P_FireWeaponAlt (player_t *player, FState *state)
 {
 	AWeapon *weapon;
 
@@ -316,8 +298,12 @@ void P_FireWeaponAlt (player_t *player)
 	}
 	weapon->bAltFire = true;
 
+	if (state == NULL)
+	{
+		state = weapon->GetAltAtkState(!!player->refire);
+	}
 
-	P_SetPsprite (player, ps_weapon, weapon->GetAltAtkState(!!player->refire));
+	P_SetPsprite (player, ps_weapon, state);
 	if (!(weapon->WeaponFlags & WIF_NOALERT))
 	{
 		P_NoiseAlert (player->mo, player->mo, false);
@@ -522,7 +508,7 @@ void P_CheckWeaponFire (player_t *player)
 		if (!player->attackdown || !(weapon->WeaponFlags & WIF_NOAUTOFIRE))
 		{
 			player->attackdown = true;
-			P_FireWeapon (player);
+			P_FireWeapon (player, NULL);
 			return;
 		}
 	}
@@ -531,7 +517,7 @@ void P_CheckWeaponFire (player_t *player)
 		if (!player->attackdown || !(weapon->WeaponFlags & WIF_NOAUTOFIRE))
 		{
 			player->attackdown = true;
-			P_FireWeaponAlt (player);
+			P_FireWeaponAlt (player, NULL);
 			return;
 		}
 	}
@@ -578,7 +564,15 @@ void P_CheckWeaponSwitch (player_t *player)
 //
 //---------------------------------------------------------------------------
 
-DEFINE_ACTION_FUNCTION(AInventory, A_ReFire)
+DEFINE_ACTION_FUNCTION_PARAMS(AInventory, A_ReFire)
+{
+	ACTION_PARAM_START(1)
+	ACTION_PARAM_STATE(state, 0);
+
+	A_ReFire(self, state);
+}
+
+void A_ReFire(AActor *self, FState *state)
 {
 	player_t *player = self->player;
 
@@ -591,14 +585,14 @@ DEFINE_ACTION_FUNCTION(AInventory, A_ReFire)
 		&& player->PendingWeapon == WP_NOCHANGE && player->health)
 	{
 		player->refire++;
-		P_FireWeapon (player);
+		P_FireWeapon (player, state);
 	}
 	else if ((player->cmd.ucmd.buttons&BT_ALTATTACK)
 		&& player->ReadyWeapon->bAltFire
 		&& player->PendingWeapon == WP_NOCHANGE && player->health)
 	{
 		player->refire++;
-		P_FireWeaponAlt (player);
+		P_FireWeaponAlt (player, state);
 	}
 	else
 	{
@@ -712,9 +706,9 @@ DEFINE_ACTION_FUNCTION(AInventory, A_Raise)
 	{
 		return;
 	}
-	// [BB] COMPATF_OLD_WEAPON_SWITCH also restores the original weapon switch cancellation behavior.
-	// [CK] Changed to now be separate from COMPATF_OLD_WEAPON_SWITCH
-	if (player->PendingWeapon != WP_NOCHANGE && !( compatflags2 & COMPATF2_FULL_WEAPON_LOWER ))
+	// [BB] ZACOMPATF_OLD_WEAPON_SWITCH also restores the original weapon switch cancellation behavior.
+	// [CK] Changed to now be separate from ZACOMPATF_OLD_WEAPON_SWITCH
+	if (player->PendingWeapon != WP_NOCHANGE && !( zacompatflags & ZACOMPATF_FULL_WEAPON_LOWER ))
 	{
 		P_SetPsprite (player, ps_weapon, player->ReadyWeapon->GetDownState());
 		return;
@@ -764,7 +758,16 @@ DEFINE_ACTION_FUNCTION(AInventory, A_Raise)
 //
 // A_GunFlash
 //
-DEFINE_ACTION_FUNCTION(AInventory, A_GunFlash)
+DEFINE_ACTION_FUNCTION_PARAMS(AInventory, A_GunFlash)
+{
+	ACTION_PARAM_START(1)
+	ACTION_PARAM_STATE(flash, 0);
+
+	// [BB] Zandronum needs A_GunFlash in a_doomweaps, so I moved the code into a function.
+	A_GunFlash(self, flash);
+}
+
+void A_GunFlash(AActor *self, FState *flash)
 {
 	player_t *player = self->player;
 
@@ -787,9 +790,11 @@ DEFINE_ACTION_FUNCTION(AInventory, A_GunFlash)
 			player->mo->PlayAttacking2 ();
 	}
 
-	FState * flash=NULL;
-	if (player->ReadyWeapon->bAltFire) flash = player->ReadyWeapon->FindState(NAME_AltFlash);
-	if (flash == NULL) flash = player->ReadyWeapon->FindState(NAME_Flash);
+	if (flash == NULL)
+	{
+		if (player->ReadyWeapon->bAltFire) flash = player->ReadyWeapon->FindState(NAME_AltFlash);
+		if (flash == NULL) flash = player->ReadyWeapon->FindState(NAME_Flash);
+	}
 	P_SetPsprite (player, ps_flash, flash);
 }
 
@@ -807,21 +812,23 @@ DEFINE_ACTION_FUNCTION(AInventory, A_GunFlash)
 
 angle_t P_BulletSlope (AActor *mo, AActor **pLineTarget)
 {
-	static const int angdiff[15] = { -1<<26, 1<<26, 0,
-		-AUTOAIM_MINANGLE, AUTOAIM_MINANGLE, -AUTOAIM_MINANGLE << 1, AUTOAIM_MINANGLE << 1,
-		-AUTOAIM_MINANGLE * 3, AUTOAIM_MINANGLE * 3, -AUTOAIM_MINANGLE << 2, AUTOAIM_MINANGLE << 2,
-		-AUTOAIM_MINANGLE * 5, AUTOAIM_MINANGLE * 5, -AUTOAIM_MINANGLE * 6, AUTOAIM_MINANGLE * 6 }; // [CK] New angles
+	static const int angdiff[15] = {
+		AUTOAIM_MINANGLE * -1, AUTOAIM_MINANGLE * 1, AUTOAIM_MINANGLE * -2, AUTOAIM_MINANGLE * 2,
+		AUTOAIM_MINANGLE * -3, AUTOAIM_MINANGLE * 3, AUTOAIM_MINANGLE * -4, AUTOAIM_MINANGLE * 4,
+		AUTOAIM_MINANGLE * -5, AUTOAIM_MINANGLE * 5, AUTOAIM_MINANGLE * -6, AUTOAIM_MINANGLE * 6,
+		-1<<26, 1<<26, 0 }; // [CK] New angles
 	int i;
 	angle_t an;
 	angle_t pitch;
 	AActor *linetarget;
+	int endIndex = zacompatflags & ZACOMPATF_AUTOAIM ? 12 : 0; // [CK/TP] Our ending index depends on compatflags.
 
 	// [Spleen]
 	UNLAGGED_Reconcile( mo );
 	UNLAGGED_AddReconciliationBlocker( );
 
 	// see which target is to be aimed at
-	i = compatflags2 & COMPATF2_AUTOAIM ? 2 : 14; // [CK] Our starting index depends on compatflags.
+	i = 14; // [TP/CK] Now 14
 	do
 	{
 		an = mo->angle + angdiff[i];
@@ -833,7 +840,7 @@ angle_t P_BulletSlope (AActor *mo, AActor **pLineTarget)
 		{
 			break;
 		}
-	} while (linetarget == NULL && --i >= 0);
+	} while (linetarget == NULL && --i >= endIndex); // [TP] 0 changed to endIndex
 	if (pLineTarget != NULL)
 	{
 		*pLineTarget = linetarget;
@@ -985,5 +992,15 @@ void P_MovePsprites (player_t *player)
 
 FArchive &operator<< (FArchive &arc, pspdef_t &def)
 {
-	return arc << def.state << def.tics << def.sx << def.sy;
+	arc << def.state << def.tics << def.sx << def.sy;
+	if (SaveVersion >= 2295)
+	{
+		arc << def.sprite << def.frame;
+	}
+	else
+	{
+		def.sprite = def.state->sprite;
+		def.frame = def.state->Frame;
+	}
+	return arc;
 }

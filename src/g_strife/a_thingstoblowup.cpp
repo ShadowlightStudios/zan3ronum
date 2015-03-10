@@ -74,10 +74,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Explode512)
 	{
 		self->target->player->extralight = 5;
 	}
-	if (self->z <= self->floorz + (512<<FRACBITS))
-	{
-		P_HitFloor (self);
-	}
+	P_CheckSplash(self, 512<<FRACBITS);
 
 	// Strife didn't do this next part, but it looks good
 	self->RenderStyle = STYLE_Add;
@@ -90,7 +87,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightGoesOut)
 	vertex_t *spot;
 	fixed_t newheight;
 
-	sec->lightlevel = 0;
+	sec->SetLightLevel(0);
 
 	newheight = sec->FindLowestFloorSurrounding (&spot);
 	sec->floorplane.d = sec->floorplane.PointToDist (spot, newheight);
@@ -101,9 +98,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightGoesOut)
 		if (foo != NULL)
 		{
 			int t = pr_lightout() & 15;
-			foo->momx = (t - (pr_lightout() & 7)) << FRACBITS;
-			foo->momy = (pr_lightout.Random2() & 7) << FRACBITS;
-			foo->momz = (7 + (pr_lightout() & 3)) << FRACBITS;
+			foo->velx = (t - (pr_lightout() & 7)) << FRACBITS;
+			foo->vely = (pr_lightout.Random2() & 7) << FRACBITS;
+			foo->velz = (7 + (pr_lightout() & 3)) << FRACBITS;
 		}
 	}
 }

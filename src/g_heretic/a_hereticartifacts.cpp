@@ -24,11 +24,11 @@ bool AArtiTomeOfPower::Use (bool pickup)
 {
 	if (Owner->player->morphTics && (Owner->player->MorphStyle & MORPH_UNDOBYTOMEOFPOWER))
 	{ // Attempt to undo chicken
-		if (!P_UndoPlayerMorph (Owner->player, Owner->player))
+		if (!P_UndoPlayerMorph (Owner->player, Owner->player, MORPH_UNDOBYTOMEOFPOWER))
 		{ // Failed
 			if (!(Owner->player->MorphStyle & MORPH_FAILNOTELEFRAG))
 			{
-				P_DamageMobj (Owner, NULL, NULL, 1000000, NAME_Telefrag);
+				P_DamageMobj (Owner, NULL, NULL, TELEFRAG_DAMAGE, NAME_Telefrag);
 			}
 		}
 		else
@@ -51,10 +51,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_TimeBomb)
 	self->RenderStyle = STYLE_Add;
 	self->alpha = FRACUNIT;
 	P_RadiusAttack (self, self->target, 128, 128, self->DamageType, true);
-	if (self->z <= self->floorz + (128<<FRACBITS))
-	{
-		P_HitFloor (self);
-	}
+	P_CheckSplash(self, 128<<FRACBITS);
 }
 
 class AArtiTimeBomb : public AInventory

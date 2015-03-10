@@ -2053,8 +2053,8 @@ static bool R_SetBlendFunc (int op, fixed_t fglevel, fixed_t bglevel, int flags)
 {
 	// r_drawtrans is a seriously bad thing to turn off. I wonder if I should
 	// just remove it completely.
-	// [BB] DF2_FORCE_ALPHA overrides the r_drawtrans setting.
-	if (!(r_drawtrans || (dmflags2 & DF2_FORCE_ALPHA) ) || (op == STYLEOP_Add && fglevel == FRACUNIT && bglevel == 0 && !(flags & STYLEF_InvertSource)))
+	// [BB] ZADF_FORCE_ALPHA overrides the r_drawtrans setting.
+	if (!(r_drawtrans || (zadmflags & ZADF_FORCE_ALPHA) ) || (op == STYLEOP_Add && fglevel == FRACUNIT && bglevel == 0 && !(flags & STYLEF_InvertSource)))
 	{
 		if (flags & STYLEF_ColorIsFixed)
 		{
@@ -2228,7 +2228,7 @@ ESPSResult R_SetPatchStyle (FRenderStyle style, fixed_t alpha, int translation, 
 	if (translation != 0)
 	{
 		FRemapTable *table = TranslationToTable(translation);
-		if (table != NULL)
+		if (table != NULL && !table->Inactive)
 		{
 			dc_translation = table->Remap;
 		}
@@ -2252,7 +2252,7 @@ ESPSResult R_SetPatchStyle (FRenderStyle style, fixed_t alpha, int translation, 
 		hcolfunc_post4 = rt_shaded4cols;
 		dc_color = fixedcolormap ? fixedcolormap[APART(color)] : basecolormap->Maps[APART(color)];
 		dc_colormap = (basecolormap = &ShadeFakeColormap[16-alpha])->Maps;
-		if (fixedlightlev && !fixedcolormap)
+		if (fixedlightlev >= 0 && fixedcolormap == NULL)
 		{
 			dc_colormap += fixedlightlev;
 		}

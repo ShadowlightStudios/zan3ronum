@@ -37,7 +37,7 @@ void APigPlayer::MorphPlayerThink ()
 	{
 		return;
 	}
-	if(!(momx | momy) && pr_pigplayerthink() < 64)
+	if(!(velx | vely) && pr_pigplayerthink() < 64)
 	{ // Snout sniff
 		if (player->ReadyWeapon != NULL)
 		{
@@ -75,7 +75,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SnoutAttack)
 	damage = 3+(pr_snoutattack()&3);
 	angle = player->mo->angle;
 	slope = P_AimLineAttack(player->mo, angle, MELEERANGE, &linetarget);
-	puff = P_LineAttack(player->mo, angle, MELEERANGE, slope, damage, NAME_Melee, "SnoutPuff", true);
+	puff = P_LineAttack(player->mo, angle, MELEERANGE, slope, damage, NAME_Melee, "SnoutPuff", true, &linetarget);
 	S_Sound(player->mo, CHAN_VOICE, "PigActive", 1, ATTN_NORM);
 
 	// [Dusk] clients aren't properly aware of linetarget, thus they stop here.
@@ -111,6 +111,6 @@ DEFINE_ACTION_FUNCTION(AActor, A_PigPain)
 	CALL_ACTION(A_Pain, self);
 	if (self->z <= self->floorz)
 	{
-		self->momz = FRACUNIT*7/2;
+		self->velz = FRACUNIT*7/2;
 	}
 }

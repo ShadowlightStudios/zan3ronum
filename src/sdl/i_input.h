@@ -4,16 +4,5 @@
 void I_PutInClipboard (const char *str);
 FString I_GetFromClipboard (bool use_primary_selection);
 
-struct GUIDName
-{
-        GUID ID;
-        char *Name;
-};
-
-extern TArray<GUIDName> JoystickNames;
-extern char *JoyAxisNames[8];
-
-extern void DI_EnumJoy ();
-
 #endif
 

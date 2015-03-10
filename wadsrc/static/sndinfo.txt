@@ -50,6 +50,13 @@ misc/icebreak			icebrk1a
 // Retail Doom and Strife use 200.
 $rolloff * 200 1200
 
+// Marine's Best Friend -- not just for marines anymore!
+dog/active			dsdgact
+dog/attack			dsdgatk
+dog/death			dsdgdth
+dog/pain			dsdgpain
+dog/sight			dsdgsit
+
 // [BB] Connect sound for Zandronum.
 zandronum/connect   cnnctsnd
 
@@ -212,6 +219,9 @@ weapons/plasmax			dsfirxpl
 weapons/bfgf			dsbfg
 weapons/bfgx			dsrxplod
 weapons/railgf			railgf1
+weapons/grbnce          dsbounce
+weapons/grenlx			dsgrnexp
+weapons/grenlf			dsglaunc
 
 // Problem: weapons/rocklx needs to be unlimited but
 // is also used for the MAP30 brain explosion.
@@ -548,6 +558,10 @@ $playersound	player	male	*jump		plrjmp
 $playersound	player	male	*burndeath	hedat1
 
 $playeralias	chicken male	*usefail	chicken/peck
+$PlayerAlias   	Chicken Male   	*Grunt   	chicken/pain
+$PlayerAlias   	Chicken Male   	*Land      	chicken/pain
+$PlayerAlias   	Chicken Male   	*Jump      	chicken/active
+$PlayerAlias   	Chicken Male   	*EvilLaugh 	chicken/active
 
 chicken/sight			chicpai
 chicken/pain			chicpai
@@ -890,6 +904,14 @@ $playeralias	mage	male	*puzzfail	PuzzleFailMage
 $playersound	mage	male	*jump		mgjump
 
 $playeralias	pig		male	*usefail	PigActive1
+$PlayerAlias   	Pig     Male   	*UseFail   	PigActive1
+$playeralias   	Pig     Male   	*PuzzFail   PigActive2
+$PlayerAlias   	Pig     Male   	*Grunt   	PigActive1
+$PlayerAlias   	Pig     Male   	*Land      	PigActive2
+$PlayerAlias   	Pig     Male   	*Jump      	PigActive1
+$PlayerAlias   	Pig     Male   	*Poison   	PigActive2
+$PlayerAlias   	Pig     Male   	*Falling   	PigPain
+$PlayerAlias   	Pig     Male   	*Splat   	PigDeath
 
 $alias world/drip		Ambient10
 $alias world/watersplash	WaterSplash
@@ -1077,6 +1099,7 @@ switches/knob		dsswknob
 switches/keycard	dskeycrd
 switches/stone		dsswston
 switches/bolt		dsswbolt
+switches/boltback	dsempty
 switches/scanner	dsswscan
 switches/fool		dsdifool
 switches/valve		dsvalve
@@ -1114,6 +1137,7 @@ misc/teleport		dstelept
 misc/swish		dsswish
 misc/meathit		dsmeatht
 misc/metalhit		dsmtalht
+misc/pcrush			dspcrush
 misc/gibbed			dsslop
 misc/explosion			dsexplod
 misc/reactor			dsreactr

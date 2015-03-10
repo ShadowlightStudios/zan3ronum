@@ -59,6 +59,8 @@ struct sfxinfo_t
 	WORD		bSingular:1;
 	WORD		bTentative:1;
 
+	int			LoopStart;				// -1 means no specific loop defined
+
 	unsigned int link;
 	enum { NO_LINK = 0xffffffff };
 
@@ -169,7 +171,6 @@ struct FSoundChan : public FISoundChannel
 {
 	FSoundChan	*NextChan;	// Next channel in this list.
 	FSoundChan **PrevChan;	// Previous channel in this list.
-	sfxinfo_t	*SfxInfo;	// Sound information.
 	FSoundID	SoundID;	// Sound ID of playing sound.
 	FSoundID	OrgID;		// Sound ID of sound used to start this channel.
 	float		Volume;
@@ -219,6 +220,7 @@ void S_CacheSound (sfxinfo_t *sfx);
 // Start sound for thing at <ent>
 void S_Sound (int channel, FSoundID sfxid, float volume, float attenuation);
 void S_Sound (AActor *ent, int channel, FSoundID sfxid, float volume, float attenuation);
+void S_SoundMinMaxDist (AActor *ent, int channel, FSoundID sfxid, float volume, float mindist, float maxdist);
 void S_Sound (const FPolyObj *poly, int channel, FSoundID sfxid, float volume, float attenuation);
 void S_Sound (const sector_t *sec, int channel, FSoundID sfxid, float volume, float attenuation);
 void S_Sound (fixed_t x, fixed_t y, fixed_t z, int channel, FSoundID sfxid, float volume, float attenuation);
@@ -262,6 +264,7 @@ void S_Sound (fixed_t x, fixed_t y, fixed_t z, int channel, FSoundID sfxid, floa
 #define CHAN_FORGETTABLE		4	// internal: Forget channel data when sound stops.
 #define CHAN_JUSTSTARTED		512	// internal: Sound has not been updated yet.
 #define CHAN_ABSTIME			1024// internal: Start time is absolute and does not depend on current time.
+#define CHAN_VIRTUAL			2048// internal: Channel is currently virtual
 
 // sound attenuation values
 #define ATTN_NONE				0.f	// full volume the entire level
@@ -276,6 +279,7 @@ void S_CacheRandomSound (sfxinfo_t *sfx);
 bool S_CheckSingular (int sound_id);
 
 // [BB]
+bool S_IsMusicPaused ( void );
 void S_StopSoundID (int sound_id, int channel);
 
 // Stops a sound emanating from one of an emitter's channels.
@@ -322,8 +326,9 @@ int S_GetMusic (char **name);
 void S_StopMusic (bool force);
 
 // Stop and resume music, during game PAUSE.
-void S_PauseSound (bool notmusic);
-void S_ResumeSound ();
+void S_PauseSound (bool notmusic, bool notsfx);
+void S_ResumeSound (bool notsfx);
+void S_SetSoundPaused (int state);
 
 //
 // Updates music & sounds
@@ -356,6 +361,7 @@ void S_UnloadSound (sfxinfo_t *sfx);
 sfxinfo_t *S_LoadSound(sfxinfo_t *sfx);
 unsigned int S_GetMSLength(FSoundID sound);
 void S_ParseMusInfo();
+bool S_ParseTimeTag(const char *tag, bool *as_samples, unsigned int *time);
 
 // [BC]
 const char	*S_GetName( LONG lSoundID );

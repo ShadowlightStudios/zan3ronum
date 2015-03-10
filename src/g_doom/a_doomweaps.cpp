@@ -21,6 +21,7 @@ static FRandom pr_fireshotgun2 ("FireSG2");
 static FRandom pr_fireplasma ("FirePlasma");
 static FRandom pr_firerail ("FireRail");
 static FRandom pr_bfgspray ("BFGSpray");
+static FRandom pr_oldbfg ("OldBFG");
 
 //
 // A_Punch
@@ -58,7 +59,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_Punch)
 
 	angle += pr_punch.Random2() << 18;
 	pitch = P_AimLineAttack (self, angle, MELEERANGE, &linetarget);
-	P_LineAttack (self, angle, MELEERANGE, pitch, damage, NAME_Melee, NAME_BulletPuff, true);
+
+	P_LineAttack (self, angle, MELEERANGE, pitch, damage, NAME_Melee, NAME_BulletPuff, true, &linetarget);
 
 	// [BC] Apply spread.
 	if (( self->player ) && ( self->player->cheats & CF_SPREAD ))
@@ -114,7 +116,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePistol)
 {
 	// [BB] A_FirePistol is only kept to stay compatible with Dehacked.
 	A_CustomFireBullets( self, angle_t( 5.6 * ANGLE_1), angle_t( 0 * ANGLE_1), 1, 5, PClass::FindClass("BulletPuff"), true, 0, false );
-	CALL_ACTION ( A_GunFlash, self );
+	A_GunFlash ( self );
 /*
 	bool accurate;
 
@@ -187,9 +189,19 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePistol)
 //
 // A_Saw
 //
+enum SAW_Flags
+{
+	SF_NORANDOM = 1,
+	SF_RANDOMLIGHTMISS = 2,
+	SF_RANDOMLIGHTHIT = 4,
+	SF_NOUSEAMMOMISS = 8,
+	SF_NOUSEAMMO = 16,
+};
+
 DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 {
-	angle_t 	angle;
+	angle_t angle;
+	angle_t slope;
 	player_t *player;
 	AActor *linetarget;
 
@@ -200,11 +212,16 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 		return;
 	}
 	
-	ACTION_PARAM_START(4);
+	ACTION_PARAM_START(9);
 	ACTION_PARAM_SOUND(fullsound, 0);
 	ACTION_PARAM_SOUND(hitsound, 1);
 	ACTION_PARAM_INT(damage, 2);
 	ACTION_PARAM_CLASS(pufftype, 3);
+	ACTION_PARAM_INT(Flags, 4);
+	ACTION_PARAM_FIXED(Range, 5);
+	ACTION_PARAM_ANGLE(Spread_XY, 6);
+	ACTION_PARAM_ANGLE(Spread_Z, 7);
+	ACTION_PARAM_FIXED(LifeSteal, 8);
 
 
 
@@ -213,34 +230,31 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 		return;
 	}
 
-	AWeapon *weapon = self->player->ReadyWeapon;
-	if (weapon != NULL)
-	{
-		if (!weapon->DepleteAmmo (weapon->bAltFire))
-			return;
-	}
-
 	if (pufftype == NULL) pufftype = PClass::FindClass(NAME_BulletPuff);
 	if (damage == 0) damage = 2;
-	
-	damage *= (pr_saw()%10+1);
-	angle = self->angle;
-	angle += pr_saw.Random2() << 18;
+
+	if (!(Flags & SF_NORANDOM))
+		damage *= (pr_saw()%10+1);
 	
 	// use meleerange + 1 so the puff doesn't skip the flash (i.e. plays all states)
-	P_LineAttack (self, angle, MELEERANGE+1,
-				  P_AimLineAttack (self, angle, MELEERANGE+1, &linetarget), damage,
-				  GetDefaultByType(pufftype)->DamageType, pufftype);
+	if (Range == 0) Range = MELEERANGE+1;
+
+	angle = self->angle + (pr_saw.Random2() * (Spread_XY / 255));
+	slope = P_AimLineAttack (self, angle, Range, &linetarget) + (pr_saw.Random2() * (Spread_Z / 255));
+
+	P_LineAttack (self, angle, Range,
+				  slope, damage,
+				  NAME_None, pufftype);
 
 	// [BC] Apply spread.
 	if ( player->cheats & CF_SPREAD )
 	{
-		P_LineAttack( self, angle + ( ANGLE_45 / 3 ), MELEERANGE + 1,
-					  P_AimLineAttack( self, angle + ( ANGLE_45 / 3 ), MELEERANGE + 1, &linetarget ), damage,
+		P_LineAttack( self, angle + ( ANGLE_45 / 3 ), Range,
+					  P_AimLineAttack( self, angle + ( ANGLE_45 / 3 ), Range, &linetarget ), damage,
 					  NAME_None, pufftype );
 
-		P_LineAttack( self, angle - ( ANGLE_45 / 3 ), MELEERANGE + 1,
-					  P_AimLineAttack( self, angle - ( ANGLE_45 / 3 ), MELEERANGE + 1, &linetarget ), damage,
+		P_LineAttack( self, angle - ( ANGLE_45 / 3 ), Range,
+					  P_AimLineAttack( self, angle - ( ANGLE_45 / 3 ), Range, &linetarget ), damage,
 					  NAME_None, pufftype );
 	}
 
@@ -250,12 +264,23 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 	else
 		self->player->ulConsecutiveHits = 0;
 
+	AWeapon *weapon = self->player->ReadyWeapon;
+	if ((weapon != NULL) && !(Flags & SF_NOUSEAMMO) && !(!linetarget && (Flags & SF_NOUSEAMMOMISS)))
+	{
+		if (!weapon->DepleteAmmo (weapon->bAltFire))
+			return;
+	}
+
 	// [BC] If we're the server, tell clients that a weapon is being fired.
 //	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 //		SERVERCOMMANDS_WeaponSound( ULONG( player - players ), linetarget ? hitsound : fullsound, ULONG( player - players ), SVCF_SKIPTHISCLIENT );
 
 	if (!linetarget)
 	{
+		if ((Flags & SF_RANDOMLIGHTMISS) && (pr_saw() > 64))
+		{
+			player->extralight = !player->extralight;
+		}
 		S_Sound (self, CHAN_WEAPON, fullsound, 1, ATTN_NORM);
 
 		// [BC] If we're the server, tell clients to play the saw sound.
@@ -263,6 +288,27 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName( fullsound ), 1, ATTN_NORM );
 		return;
 	}
+
+	if (Flags & SF_RANDOMLIGHTHIT)
+	{
+		int randVal = pr_saw();
+		if (randVal < 64)
+		{
+			player->extralight = 0;
+		}
+		else if (randVal < 160)
+		{
+			player->extralight = 1;
+		}
+		else
+		{
+			player->extralight = 2;
+		}
+	}
+
+	if (LifeSteal)
+		P_GiveBody (self, (damage * LifeSteal) >> FRACBITS);
+
 	S_Sound (self, CHAN_WEAPON, hitsound, 1, ATTN_NORM);
 	// [BC] If we're the server, tell clients to play the saw sound.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -302,7 +348,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireShotgun)
 {
 	// [BB] A_FireShotgun is only kept to stay compatible with Dehacked.
 	A_CustomFireBullets( self, angle_t( 5.6 * ANGLE_1), angle_t( 0 * ANGLE_1), 7, 5, PClass::FindClass("BulletPuff"), true, 0, false );
-	CALL_ACTION ( A_GunFlash, self );
+	A_GunFlash ( self );
 /*
 	int i;
 	player_t *player;
@@ -376,7 +422,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireShotgun2)
 {
 	// [BB] A_FireShotgun2 is only kept to stay compatible with Dehacked.
 	A_CustomFireBullets( self, angle_t( 11.2 * ANGLE_1), angle_t( 7.1 * ANGLE_1), 20, 5, PClass::FindClass("BulletPuff"), true, 0, false );
-	CALL_ACTION ( A_GunFlash, self );
+	A_GunFlash ( self );
 /*
 	int 		i;
 	angle_t 	angle;
@@ -490,7 +536,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CloseShotgun2)
 	// [BB] Clients only do this for "their" player.
 	if ( NETWORK_IsConsolePlayerOrSpiedByConsolePlayerOrNotInClientMode( self->player ) )
 		S_Sound (self, CHAN_WEAPON, "weapons/sshotc", 1, ATTN_NORM);
-	CALL_ACTION(A_ReFire, self);
+	A_ReFire (self);
 
 	// [BC] If we're the server, tell clients that a weapon is being fired.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( self->player ))
@@ -703,9 +749,9 @@ IMPLEMENT_CLASS ( AGrenade )
 
 bool AGrenade::FloorBounceMissile( secplane_t &plane )
 {
-	fixed_t bouncemomx = momx / 4;
-	fixed_t bouncemomy = momy / 4;
-	fixed_t bouncemomz = FixedMul (momz, (fixed_t)(-0.6*FRACUNIT));
+	fixed_t bouncemomx = velx / 4;
+	fixed_t bouncemomy = vely / 4;
+	fixed_t bouncemomz = FixedMul (velz, (fixed_t)(-0.6*FRACUNIT));
 /*
 	if (abs (bouncemomz) < (FRACUNIT/2))
 	{
@@ -716,9 +762,9 @@ bool AGrenade::FloorBounceMissile( secplane_t &plane )
 */
 		if (!Super::FloorBounceMissile (plane))
 		{
-			momx = bouncemomx;
-			momy = bouncemomy;
-			momz = bouncemomz;
+			velx = bouncemomx;
+			vely = bouncemomy;
+			velz = bouncemomz;
 			return false;
 		}
 //	}
@@ -1030,4 +1076,50 @@ DEFINE_ACTION_FUNCTION(AActor, A_BFGsound)
 		// Tell all the bots that a weapon was fired.
 		BOTS_PostWeaponFiredEvent( ULONG( self->player - players ), BOTEVENT_FIREDBFG, BOTEVENT_ENEMY_FIREDBFG, BOTEVENT_PLAYER_FIREDBFG );
 	}
+}
+
+//
+// A_FireOldBFG
+//
+// This function emulates Doom's Pre-Beta BFG
+// By Lee Killough 6/6/98, 7/11/98, 7/19/98, 8/20/98
+//
+// This code may not be used in other mods without appropriate credit given.
+// Code leeches will be telefragged.
+
+DEFINE_ACTION_FUNCTION(AActor, A_FireOldBFG)
+{
+	const PClass * plasma[] = {PClass::FindClass("PlasmaBall1"), PClass::FindClass("PlasmaBall2")};
+	AActor * mo = NULL;
+
+	player_t *player;
+
+	if (NULL == (player = self->player))
+	{
+		return;
+	}
+
+	AWeapon *weapon = self->player->ReadyWeapon;
+	if (weapon != NULL)
+	{
+		if (!weapon->DepleteAmmo (weapon->bAltFire))
+			return;
+	}
+	self->player->extralight = 2;
+
+	// Save values temporarily
+	angle_t SavedPlayerAngle = self->angle;
+	fixed_t SavedPlayerPitch = self->pitch;
+	bool doesautoaim = !(self->player->ReadyWeapon->WeaponFlags & WIF_NOAUTOAIM);
+	self->player->ReadyWeapon->WeaponFlags |= WIF_NOAUTOAIM; // No autoaiming that gun
+	for (int i = 0; i < 2; i++) // Spawn two plasma balls in sequence
+    {
+		self->angle += ((pr_oldbfg()&127) - 64) * (ANG90/768);
+		self->pitch += ((pr_oldbfg()&127) - 64) * (ANG90/640);
+		mo = P_SpawnPlayerMissile (self, plasma[i]);
+		// Restore saved values
+		self->angle = SavedPlayerAngle;
+		self->pitch = SavedPlayerPitch;
+    }
+	if (doesautoaim) self->player->ReadyWeapon->WeaponFlags &= ~WIF_NOAUTOAIM; // Restore autoaim setting
 }

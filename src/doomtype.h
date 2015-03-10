@@ -44,12 +44,6 @@
 
 // Since this file is included by everything, it seems an appropriate place
 // to check the NOASM/USEASM macros.
-#if defined(__APPLE__)
-// The assembly code needs to be tweaked for Mach-O before enabled on Macs.
-#ifndef NOASM
-#define NOASM
-#endif
-#endif
 
 // There are three assembly-related macros:
 //
@@ -168,18 +162,32 @@ typedef struct
 struct PalEntry
 {
 	PalEntry () {}
-	PalEntry (DWORD argb) { *(DWORD *)this = argb; }
-	operator DWORD () const { return *(DWORD *)this; }
-	PalEntry &operator= (DWORD other) { *(DWORD *)this = other; return *this; }
+	PalEntry (uint32 argb) { d = argb; }
+	operator uint32 () const { return d; }
+	PalEntry &operator= (uint32 other) { d = other; return *this; }
 	PalEntry InverseColor() const { PalEntry nc; nc.a = a; nc.r = 255 - r; nc.g = 255 - g; nc.b = 255 - b; return nc; }
 #ifdef __BIG_ENDIAN__
 	PalEntry (BYTE ir, BYTE ig, BYTE ib) : a(0), r(ir), g(ig), b(ib) {}
 	PalEntry (BYTE ia, BYTE ir, BYTE ig, BYTE ib) : a(ia), r(ir), g(ig), b(ib) {}
-	BYTE a,r,g,b;
+	union
+	{
+		struct
+		{
+			BYTE a,r,g,b;
+		};
+		uint32 d;
+	};
 #else
 	PalEntry (BYTE ir, BYTE ig, BYTE ib) : b(ib), g(ig), r(ir), a(0) {}
 	PalEntry (BYTE ia, BYTE ir, BYTE ig, BYTE ib) : b(ib), g(ig), r(ir), a(ia) {}
-	BYTE b,g,r,a;
+	union
+	{
+		struct
+		{
+			BYTE b,g,r,a;
+		};
+		uint32 d;
+	};
 #endif
 };
 
@@ -199,5 +207,21 @@ template <typename T, size_t N>
 char ( &_ArraySizeHelper( T (&array)[N] ))[N];
 
 #define countof( array ) (sizeof( _ArraySizeHelper( array ) ))
+
+// Auto-registration sections for GCC.
+// Apparently, you cannot do string concatenation inside section attributes.
+#ifdef __MACH__
+#define SECTION_AREG "__DATA,areg"
+#define SECTION_CREG "__DATA,creg"
+#define SECTION_GREG "__DATA,greg"
+#define SECTION_MREG "__DATA,mreg"
+#define SECTION_YREG "__DATA,yreg"
+#else
+#define SECTION_AREG "areg"
+#define SECTION_CREG "creg"
+#define SECTION_GREG "greg"
+#define SECTION_MREG "mreg"
+#define SECTION_YREG "yreg"
+#endif
 
 #endif

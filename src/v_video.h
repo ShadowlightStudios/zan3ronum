@@ -46,6 +46,7 @@
 // [BC] Make CleanX/Yfac floats in Skulltag.
 // [BB] This is at least needed to display the medals at the correct position.
 extern float CleanXfac, CleanYfac;
+extern int CleanWidth_1, CleanHeight_1, CleanXfac_1, CleanYfac_1;
 extern int CleanWidth, CleanHeight;
 extern int DisplayWidth, DisplayHeight, DisplayBits;
 
@@ -84,6 +85,7 @@ enum
 	DTA_320x200,		// bool: scale texture size and position to fit on a virtual 320x200 screen
 	DTA_Bottom320x200,	// bool: same as DTA_320x200 but centers virtual screen on bottom for 1280x1024 targets
 	DTA_CleanNoMove,	// bool: like DTA_Clean but does not reposition output position
+	DTA_CleanNoMove_1,	// bool: like DTA_CleanNoMove, but uses Clean[XY]fac_1 instead
 	DTA_FlipX,			// bool: flip image horizontally	//FIXME: Does not work with DTA_Window(Left|Right)
 	DTA_ShadowColor,	// color of shadow
 	DTA_ShadowAlpha,	// alpha of shadow
@@ -92,8 +94,8 @@ enum
 	DTA_VirtualHeight,	// pretend the canvas is this tall
 	DTA_TopOffset,		// override texture's top offset
 	DTA_LeftOffset,		// override texture's left offset
-	DTA_CenterOffset,	// override texture's left and top offsets and set them for the texture's middle
-	DTA_CenterBottomOffset,// override texture's left and top offsets and set them for the texture's bottom middle
+	DTA_CenterOffset,	// bool: override texture's left and top offsets and set them for the texture's middle
+	DTA_CenterBottomOffset,// bool: override texture's left and top offsets and set them for the texture's bottom middle
 	DTA_WindowLeft,		// don't draw anything left of this column (on source, not dest)
 	DTA_WindowRight,	// don't draw anything at or to the right of this column (on source, not dest)
 	DTA_ClipTop,		// don't draw anything above this row (on dest, not source)
@@ -106,6 +108,19 @@ enum
 	DTA_RenderStyle,	// same as render style for actors
 	DTA_ColorOverlay,	// DWORD: ARGB to overlay on top of image; limited to black for software
 	DTA_BilinearFilter,	// bool: apply bilinear filtering to the image
+	DTA_SpecialColormap,// pointer to FSpecialColormapParameters (likely to be forever hardware-only)
+	DTA_ColormapStyle,	// pointer to FColormapStyle (hardware-only)
+	DTA_Fullscreen,		// Draw image fullscreen (same as DTA_VirtualWidth/Height with graphics size.)
+
+	// floating point duplicates of some of the above:
+	DTA_DestWidthF,
+	DTA_DestHeightF,
+	DTA_TopOffsetF,
+	DTA_LeftOffsetF,
+	DTA_VirtualWidthF,
+	DTA_VirtualHeightF,
+	DTA_WindowLeftF,
+	DTA_WindowRightF,
 
 	// For DrawText calls:
 	DTA_TextLen,		// stop after this many characters, even if \0 not hit
@@ -196,14 +211,51 @@ public:
 	// Text drawing functions -----------------------------------------------
 
 	// 2D Texture drawing
-	void STACK_ARGS DrawTexture (FTexture *img, int x, int y, int tags, ...);
+	void STACK_ARGS DrawTexture (FTexture *img, double x, double y, int tags, ...);
 	void FillBorder (FTexture *img);	// Fills the border around a 4:3 part of the screen on non-4:3 displays
-	void VirtualToRealCoords(fixed_t &x, fixed_t &y, fixed_t &w, fixed_t &h, int vwidth, int vheight, bool vbottom=false, bool handleaspect=true) const;
+	void VirtualToRealCoords(double &x, double &y, double &w, double &h, double vwidth, double vheight, bool vbottom=false, bool handleaspect=true) const;
+
+	// Code that uses these (i.e. SBARINFO) should probably be evaluated for using doubles all around instead.
+	void VirtualToRealCoordsFixed(fixed_t &x, fixed_t &y, fixed_t &w, fixed_t &h, int vwidth, int vheight, bool vbottom=false, bool handleaspect=true) const;
 	void VirtualToRealCoordsInt(int &x, int &y, int &w, int &h, int vwidth, int vheight, bool vbottom=false, bool handleaspect=true) const;
 
 	// 2D Text drawing
 	void STACK_ARGS DrawText (FFont *font, int normalcolor, int x, int y, const char *string, ...);
 	void STACK_ARGS DrawChar (FFont *font, int normalcolor, int x, int y, BYTE character, ...);
+
+	struct DrawParms
+	{
+		double x, y;
+		double texwidth;
+		double texheight;
+		double destwidth;
+		double destheight;
+		double virtWidth;
+		double virtHeight;
+		double windowleft;
+		double windowright;
+		int dclip;
+		int uclip;
+		int lclip;
+		int rclip;
+		double top;
+		double left;
+		fixed_t alpha;
+		uint32 fillcolor;
+		FRemapTable *remap;
+		const BYTE *translation;
+		uint32 colorOverlay;
+		INTBOOL alphaChannel;
+		INTBOOL flipX;
+		fixed_t shadowAlpha;
+		int shadowColor;
+		INTBOOL keepratio;
+		INTBOOL masked;
+		INTBOOL bilinear;
+		FRenderStyle style;
+		struct FSpecialColormap *specialcolormap;
+		struct FColormapStyle *colormapstyle;
+	};
 
 protected:
 	BYTE *Buffer;
@@ -212,41 +264,9 @@ protected:
 	int Pitch;
 	int LockCount;
 
-	struct DrawParms
-	{
-		fixed_t x, y;
-		int texwidth;
-		int texheight;
-		int windowleft;
-		int windowright;
-		int dclip;
-		int uclip;
-		int lclip;
-		int rclip;
-		fixed_t destwidth;
-		fixed_t destheight;
-		int top;
-		int left;
-		fixed_t alpha;
-		int fillcolor;
-		FRemapTable *remap;
-		const BYTE *translation;
-		DWORD colorOverlay;
-		INTBOOL alphaChannel;
-		INTBOOL flipX;
-		fixed_t shadowAlpha;
-		int shadowColor;
-		int virtWidth;
-		int virtHeight;
-		INTBOOL keepratio;
-		INTBOOL masked;
-		INTBOOL bilinear;
-		FRenderStyle style;
-	};
-
 	bool ClipBox (int &left, int &top, int &width, int &height, const BYTE *&src, const int srcpitch) const;
-	virtual void STACK_ARGS DrawTextureV (FTexture *img, int x, int y, uint32 tag, va_list tags);
-	bool ParseDrawTextureTags (FTexture *img, int x, int y, uint32 tag, va_list tags, DrawParms *parms, bool hw) const;
+	virtual void STACK_ARGS DrawTextureV (FTexture *img, double x, double y, uint32 tag, va_list tags);
+	bool ParseDrawTextureTags (FTexture *img, double x, double y, uint32 tag, va_list tags, DrawParms *parms, bool hw) const;
 
 	DCanvas() {}
 
@@ -347,7 +367,7 @@ public:
 	// Tells the device to recreate itself with the new setting from vid_refreshrate.
 	virtual void NewRefreshRate ();
 
-	// Set the rect defining the area effected by blending.
+	// Set the rect defining the area affected by blending.
 	virtual void SetBlendingRect (int x1, int y1, int x2, int y2);
 
 	// render 3D view
@@ -356,16 +376,32 @@ public:
 	// renders view to a savegame picture
 	virtual void WriteSavePic (player_t *player, FILE *file, int width, int height);
 
+	// draws player sprites with hardware acceleration (only useful for software rendering)
+	virtual void DrawRemainingPlayerSprites();
+
+	// notifies the renderer that an actor has changed state.
+	virtual void StateChanged(AActor *actor);
+
+	// notify the renderer that serialization of the curent level is about to start/end
+	virtual void StartSerialize(FArchive &arc);
+	virtual void EndSerialize(FArchive &arc);
+
+	virtual int GetMaxViewPitch(bool down);
+
 	bool Accel2D;	// If true, 2D drawing can be accelerated.
 
 	// Begin 2D drawing operations. This is like Update, but it doesn't end
 	// the scene, and it doesn't present the image yet. If you are going to
 	// be covering the entire screen with 2D elements, then pass false to
-	// avoid copying the software bufferer to the screen.
+	// avoid copying the software buffer to the screen.
 	// Returns true if hardware-accelerated 2D has been entered, false if not.
 	virtual bool Begin2D(bool copy3d);
 
 	// DrawTexture calls after Begin2D use native textures.
+
+	// Draws the blending rectangle over the viewwindow if in hardware-
+	// accelerated 2D mode.
+	virtual void DrawBlendingRect();
 
 	// Create a native texture from a game texture.
 	virtual FNativeTexture *CreateTexture(FTexture *gametex, bool wrapping);
@@ -374,6 +410,7 @@ public:
 	virtual FNativePalette *CreatePalette(FRemapTable *remap);
 
 	// Precaches or unloads a texture
+	virtual void GetHitlist(BYTE *hitlist);
 	virtual void PrecacheTexture(FTexture *tex, int cache);
 
 	// Screen wiping
@@ -381,6 +418,8 @@ public:
 	virtual void WipeEndScreen();
 	virtual bool WipeDo(int ticks);
 	virtual void WipeCleanup();
+
+	uint32 GetLastFPS() const { return LastCount; }
 
 #ifdef _WIN32
 	virtual void PaletteChanged () = 0;
@@ -394,7 +433,7 @@ protected:
 	DFrameBuffer () {}
 
 private:
-	DWORD LastMS, LastSec, FrameCount, LastCount, LastTic;
+	uint32 LastMS, LastSec, FrameCount, LastCount, LastTic;
 };
 
 
@@ -465,6 +504,7 @@ extern "C" void ASM_PatchPitch (void);
 #endif
 
 int CheckRatio (int width, int height);
+static inline int CheckRatio (double width, double height) { return CheckRatio(int(width), int(height)); }
 extern const int BaseRatioSizes[5][4];
 
 extern int currentrenderer;

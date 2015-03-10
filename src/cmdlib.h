@@ -3,14 +3,6 @@
 #ifndef __CMDLIB__
 #define __CMDLIB__
 
-#ifdef _MSC_VER
-#pragma warning(disable : 4244)     // MIPS
-#pragma warning(disable : 4136)     // X86
-#pragma warning(disable : 4051)     // ALPHA
-
-#pragma warning(disable : 4018)     // signed/unsigned mismatch
-#pragma warning(disable : 4305)     // truncate from double to float
-#endif
 
 #include "doomtype.h"
 
@@ -26,6 +18,7 @@
 
 int		Q_filelength (FILE *f);
 bool FileExists (const char *filename);
+bool DirEntryExists (const char *pathname);
 
 extern	FString progdir;
 

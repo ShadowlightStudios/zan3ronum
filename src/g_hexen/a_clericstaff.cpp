@@ -46,9 +46,9 @@ int ACStaffMissile::DoSpecialDamage (AActor *target, int damage)
 
 DEFINE_ACTION_FUNCTION(AActor, A_CStaffCheck)
 {
-	AActor *pmo;
+	APlayerPawn *pmo;
 	int damage;
-	int newLife;
+	int newLife, max;
 	angle_t angle;
 	int slope;
 	int i;
@@ -63,13 +63,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffCheck)
 
 	pmo = player->mo;
 	damage = 20+(pr_staffcheck()&15);
+	max = pmo->GetMaxHealth();
 	for (i = 0; i < 3; i++)
 	{
 		angle = pmo->angle+i*(ANG45/16);
-		slope = P_AimLineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), &linetarget, 0, false, true);
+		slope = P_AimLineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), &linetarget, 0, ALF_CHECK3D);
 		if (linetarget)
 		{
-			P_LineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), slope, damage, NAME_Melee, PClass::FindClass ("CStaffPuff"));
+			P_LineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), slope, damage, NAME_Melee, PClass::FindClass ("CStaffPuff"), false, &linetarget);
 			pmo->angle = R_PointToAngle2 (pmo->x, pmo->y, 
 				linetarget->x, linetarget->y);
 			if (((linetarget->player && (!linetarget->IsTeammate (pmo) || level.teamdamage != 0))|| linetarget->flags3&MF3_ISMONSTER)
@@ -79,7 +80,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffCheck)
 				if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( !CLIENTDEMO_IsPlaying( )))
 				{
 					newLife = player->health+(damage>>3);
-					newLife = newLife > 100 ? 100 : newLife;
+					newLife = newLife > max ? max : newLife;
 					if (newLife > player->health)
 					{
 						pmo->health = player->health = newLife;
@@ -98,10 +99,10 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffCheck)
 			break;
 		}
 		angle = pmo->angle-i*(ANG45/16);
-		slope = P_AimLineAttack (player->mo, angle, fixed_t(1.5*MELEERANGE), &linetarget, 0, false, true);
+		slope = P_AimLineAttack (player->mo, angle, fixed_t(1.5*MELEERANGE), &linetarget, 0, ALF_CHECK3D);
 		if (linetarget)
 		{
-			P_LineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), slope, damage, NAME_Melee, PClass::FindClass ("CStaffPuff"));
+			P_LineAttack (pmo, angle, fixed_t(1.5*MELEERANGE), slope, damage, NAME_Melee, PClass::FindClass ("CStaffPuff"), false, &linetarget);
 			pmo->angle = R_PointToAngle2 (pmo->x, pmo->y, 
 				linetarget->x, linetarget->y);
 			if ((linetarget->player && (!linetarget->IsTeammate (pmo) || level.teamdamage != 0)) || linetarget->flags3&MF3_ISMONSTER)
@@ -110,7 +111,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffCheck)
 				if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( !CLIENTDEMO_IsPlaying( )))
 				{
 					newLife = player->health+(damage>>4);
-					newLife = newLife > 100 ? 100 : newLife;
+					newLife = newLife > max ? max : newLife;
 					pmo->health = player->health = newLife;
 				}
 
@@ -160,7 +161,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffAttack)
 	mo = P_SpawnPlayerMissile (self, RUNTIME_CLASS(ACStaffMissile), self->angle-(ANG45/15));
 	if (mo)
 	{
-		mo->special2 = 32;
+		mo->WeaveIndexXY = 32;
 
 		// [BC] Clients need to have this information.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -169,7 +170,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffAttack)
 	mo = P_SpawnPlayerMissile (self, RUNTIME_CLASS(ACStaffMissile), self->angle+(ANG45/15));
 	if (mo)
 	{
-		mo->special2 = 0;
+		mo->WeaveIndexXY = 0;
 	}
 
 	// [BC] Apply spread.
@@ -221,19 +222,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CStaffAttack)
 
 DEFINE_ACTION_FUNCTION(AActor, A_CStaffMissileSlither)
 {
-	fixed_t newX, newY;
-	int weaveXY;
-	int angle;
-
-	weaveXY = self->special2;
-	angle = (self->angle+ANG90)>>ANGLETOFINESHIFT;
-	newX = self->x-FixedMul(finecosine[angle], FloatBobOffsets[weaveXY]);
-	newY = self->y-FixedMul(finesine[angle], FloatBobOffsets[weaveXY]);
-	weaveXY = (weaveXY+3)&63;
-	newX += FixedMul(finecosine[angle], FloatBobOffsets[weaveXY]);
-	newY += FixedMul(finesine[angle], FloatBobOffsets[weaveXY]);
-	P_TryMove (self, newX, newY, true);
-	self->special2 = weaveXY;
+	A_Weave(self, 3, 0, FRACUNIT, 0);
 }
 
 //============================================================================
