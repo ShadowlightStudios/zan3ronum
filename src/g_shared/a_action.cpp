@@ -65,7 +65,7 @@ IMPLEMENT_CLASS (ASwitchingDecoration)
 //
 //----------------------------------------------------------------------------
 
-DEFINE_ACTION_FUNCTION(AActor, A_NoBlocking)
+void A_Unblock(AActor *self, bool drop)
 {
 	// [RH] Andy Baker's stealth monsters
 	if (self->flags & MF_STEALTH)
@@ -86,8 +86,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_NoBlocking)
 
 	self->Conversation = NULL;
 
-	// If the self has attached metadata for items to drop, drop those.
-	if (!self->IsKindOf (RUNTIME_CLASS (APlayerPawn)))	// [GRB]
+	// If the actor has attached metadata for items to drop, drop those.
+	if (drop && !self->IsKindOf (RUNTIME_CLASS (APlayerPawn)))	// [GRB]
 	{
 		FDropItem *di = self->GetDropItems();
 
@@ -106,9 +106,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_NoBlocking)
 	}
 }
 
+DEFINE_ACTION_FUNCTION(AActor, A_NoBlocking)
+{
+	A_Unblock(self, true);
+}
+
 DEFINE_ACTION_FUNCTION(AActor, A_Fall)
 {
-	CALL_ACTION(A_NoBlocking, self);
+	A_Unblock(self, true);
 }
 
 //==========================================================================
@@ -171,6 +176,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeath)
 	self->flags2 |= MF2_PUSHABLE|MF2_TELESTOMP|MF2_PASSMOBJ|MF2_SLIDE;
 	self->flags3 |= MF3_CRASHED;
 	self->height = self->GetDefault()->height;
+	// Remove fuzz effects from frozen actors.
+	if (self->RenderStyle.BlendOp >= STYLEOP_Fuzz && self->RenderStyle.BlendOp <= STYLEOP_FuzzOrRevSub)
+	{
+		self->RenderStyle = STYLE_Normal;
+	}
+
 	S_Sound (self, CHAN_BODY, "misc/freeze", 1, ATTN_NORM);
 
 	// [RH] Andy Baker's stealth monsters
@@ -186,7 +197,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeath)
 		self->player->poisoncount = 0;
 		self->player->bonuscount = 0;
 	}
-	else if (self->flags3&MF3_ISMONSTER && self->special)
+	else if (self->flags3 & MF3_ISMONSTER && self->special)
 	{ // Initiate monster death actions
 		LineSpecials [self->special] (NULL, self, false, self->args[0],
 			self->args[1], self->args[2], self->args[3], self->args[4]);
@@ -241,18 +252,19 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeathChunks)
 	int numChunks;
 	AActor *mo;
 	
-	if (self->momx || self->momy || self->momz)
+	if ((self->velx || self->vely || self->velz) && !(self->flags6 & MF6_SHATTERING))
 	{
 		self->tics = 3*TICRATE;
 		return;
 	}
+	self->velx = self->vely = self->velz = 0;
 	S_Sound (self, CHAN_BODY, "misc/icebreak", 1, ATTN_NORM);
 
 	// [RH] In Hexen, this creates a random number of shards (range [24,56])
 	// with no relation to the size of the self shattering. I think it should
 	// base the number of shards on the size of the dead thing, so bigger
 	// things break up into more shards than smaller things.
-	// An self with radius 20 and height 64 creates ~40 chunks.
+	// An actor with radius 20 and height 64 creates ~40 chunks.
 	numChunks = MAX<int> (4, (self->radius>>FRACBITS)*(self->height>>FRACBITS)/32);
 	i = (pr_freeze.Random2()) % (numChunks/4);
 	for (i = MAX (24, numChunks + i); i >= 0; i--)
@@ -264,9 +276,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeathChunks)
 		mo->SetState (mo->SpawnState + (pr_freeze()%3));
 		if (mo)
 		{
-			mo->momz = FixedDiv(mo->z-self->z, self->height)<<2;
-			mo->momx = pr_freeze.Random2 () << (FRACBITS-7);
-			mo->momy = pr_freeze.Random2 () << (FRACBITS-7);
+			mo->velz = FixedDiv(mo->z - self->z, self->height)<<2;
+			mo->velx = pr_freeze.Random2 () << (FRACBITS-7);
+			mo->vely = pr_freeze.Random2 () << (FRACBITS-7);
 			CALL_ACTION(A_IceSetTics, mo); // set a random tic wait
 			mo->RenderStyle = self->RenderStyle;
 			mo->alpha = self->alpha;
@@ -276,9 +288,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeathChunks)
 	{ // attach the player's view to a chunk of ice
 		AActor *head = Spawn("IceChunkHead", self->x, self->y, 
 													self->z + self->player->mo->ViewHeight, ALLOW_REPLACE);
-		head->momz = FixedDiv(head->z-self->z, self->height)<<2;
-		head->momx = pr_freeze.Random2 () << (FRACBITS-7);
-		head->momy = pr_freeze.Random2 () << (FRACBITS-7);
+		head->velz = FixedDiv(head->z - self->z, self->height)<<2;
+		head->velx = pr_freeze.Random2 () << (FRACBITS-7);
+		head->vely = pr_freeze.Random2 () << (FRACBITS-7);
 		head->health = self->health;
 		head->angle = self->angle;
 		if (head->IsKindOf(RUNTIME_CLASS(APlayerPawn)))
@@ -302,7 +314,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FreezeDeathChunks)
 	{
 		CALL_ACTION(A_BossDeath, self);
 	}
-	CALL_ACTION(A_NoBlocking, self);
+	A_Unblock(self, true);
 
 	// [BB] Only destroy the actor if it's not needed for a map reset. Otherwise just hide it.
 	self->HideOrDestroyIfSafe ();

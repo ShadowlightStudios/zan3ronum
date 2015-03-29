@@ -4,9 +4,7 @@
 #include "hardware.h"
 #include "v_video.h"
 #include <SDL.h>
-#include "gl/gl_pch.h"
-
-extern int palette_brightness;
+#include "gl/system/gl_system.h"
 
 EXTERN_CVAR (Float, dimamount)
 EXTERN_CVAR (Color, dimcolor)
@@ -36,7 +34,7 @@ class SDLGLFB : public DFrameBuffer
 	DECLARE_CLASS(SDLGLFB, DFrameBuffer)
 public:
 	// this must have the same parameters as the Windows version, even if they are not used!
-	SDLGLFB (int width, int height, int, int, bool fullscreen); 
+	SDLGLFB (void *hMonitor, int width, int height, int, int, bool fullscreen); 
 	~SDLGLFB ();
 
 	void ForceBuffering (bool force);

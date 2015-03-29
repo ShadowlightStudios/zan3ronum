@@ -69,6 +69,57 @@ extern FWorldGlobalArray ACS_WorldArrays[NUM_WORLDVARS];
 extern SDWORD ACS_GlobalVars[NUM_GLOBALVARS];
 extern FWorldGlobalArray ACS_GlobalArrays[NUM_GLOBALVARS];
 
+#define LIBRARYID_MASK			0xFFF00000
+#define LIBRARYID_SHIFT			20
+
+// Global ACS string table
+#define STRPOOL_LIBRARYID		(INT_MAX >> LIBRARYID_SHIFT)
+#define STRPOOL_LIBRARYID_OR	(STRPOOL_LIBRARYID << LIBRARYID_SHIFT)
+
+class ACSStringPool
+{
+public:
+	ACSStringPool();
+	int AddString(const char *str, const SDWORD *stack, int stackdepth);
+	int AddString(FString &str, const SDWORD *stack, int stackdepth);
+	const char *GetString(int strnum);
+	void LockString(int strnum);
+	void UnlockString(int strnum);
+	void UnlockAll();
+	void MarkString(int strnum);
+	void LockStringArray(const int *strnum, unsigned int count);
+	void UnlockStringArray(const int *strnum, unsigned int count);
+	void MarkStringArray(const int *strnum, unsigned int count);
+	void MarkStringMap(const FWorldGlobalArray &array);
+	void PurgeStrings();
+	void Clear();
+	void Dump() const;
+	void ReadStrings(PNGHandle *png, DWORD id);
+	void WriteStrings(FILE *file, DWORD id) const;
+
+private:
+	int FindString(const char *str, size_t len, unsigned int h, unsigned int bucketnum);
+	int InsertString(FString &str, unsigned int h, unsigned int bucketnum, const SDWORD *stack, int stackdepth);
+	void FindFirstFreeEntry(unsigned int base);
+
+	enum { NUM_BUCKETS = 251 };
+	enum { FREE_ENTRY = 0xFFFFFFFE };	// Stored in PoolEntry's Next field
+	enum { NO_ENTRY = 0xFFFFFFFF };
+	enum { MIN_GC_SIZE = 100 };			// Don't auto-collect until there are this many strings
+	struct PoolEntry
+	{
+		FString Str;
+		unsigned int Hash;
+		unsigned int Next;
+		unsigned int LockCount;
+	};
+	TArray<PoolEntry> Pool;
+	unsigned int PoolBuckets[NUM_BUCKETS];
+	unsigned int FirstFreeEntry;
+};
+extern ACSStringPool GlobalACSStrings;
+
+void P_CollectACSGlobalStrings(const SDWORD *stack, int stackdepth);
 void P_ReadACSVars(PNGHandle *);
 void P_WriteACSVars(FILE*);
 void P_ClearACSVars(bool);
@@ -177,6 +228,11 @@ enum
 	APROP_Dropped		= 18,
 	APROP_Notarget		= 19,
 	APROP_Species		= 20,
+	APROP_NameTag		= 21,
+	APROP_Score			= 22,
+	APROP_Notrigger		= 23,
+	APROP_DamageFactor	= 24,
+	APROP_MasterTID     = 25,
 };	
 
 // [Dusk] Enumeration for GetTeamProperty
@@ -216,15 +272,20 @@ public:
 	int CountTypedScripts( WORD type );
 	DWORD PC2Ofs (int *pc) const { return (DWORD)((BYTE *)pc - Data); }
 	int *Ofs2PC (DWORD ofs) const {	return (int *)(Data + ofs); }
+	int *Jump2PC (DWORD jumpPoint) const { return Ofs2PC(JumpPoints[jumpPoint]); }
 	ACSFormat GetFormat() const { return Format; }
 	ScriptFunction *GetFunction (int funcnum, FBehavior *&module) const;
 	int GetArrayVal (int arraynum, int index) const;
 	void SetArrayVal (int arraynum, int index, int value);
+	inline bool CopyStringToArray(int arraynum, int index, int maxLength, const char * string);
+
 	int FindFunctionName (const char *funcname) const;
 	int FindMapVarName (const char *varname) const;
 	int FindMapArray (const char *arrayname) const;
 	int GetLibraryID () const { return LibraryID; }
 	int *GetScriptAddress (const ScriptPtr *ptr) const { return (int *)(ptr->Address + Data); }
+
+	const char *LookupString (DWORD index) const;
 
 	SDWORD *MapVars[NUM_MAPVARS];
 
@@ -234,6 +295,9 @@ public:
 	static bool StaticCheckAllGood ();
 	static FBehavior *StaticGetModule (int lib);
 	static void StaticSerializeModuleStates (FArchive &arc);
+	static void StaticMarkLevelVarStrings();
+	static void StaticLockLevelVarStrings();
+	static void StaticUnlockLevelVarStrings();
 
 	static const ScriptPtr *StaticFindScript (int script, FBehavior *&module);
 	static const char *StaticLookupString (DWORD index);
@@ -263,6 +327,7 @@ private:
 	TArray<FBehavior *> Imports;
 	DWORD LibraryID;
 	char ModuleName[9];
+	TArray<int> JumpPoints;
 
 	static TArray<FBehavior *> StaticModules;
 
@@ -271,10 +336,13 @@ private:
 	static int STACK_ARGS SortScripts (const void *a, const void *b);
 	void UnencryptStrings ();
 	int FindStringInChunk (DWORD *chunk, const char *varname) const;
-	const char *LookupString (DWORD index) const;
 
 	void SerializeVars (FArchive &arc);
 	void SerializeVarSet (FArchive &arc, SDWORD *vars, int max);
+	void MarkMapVarStrings() const;
+	void LockMapVarStrings() const;
+	void UnlockMapVarStrings() const;
+
 };
 
 class DLevelScript : public DObject
@@ -640,13 +708,20 @@ public:
 		PCD_PRINTBINARY,
 /*350*/	PCD_PRINTHEX,
 		PCD_CALLFUNC,
-		PCD_SAVESTRING,			// [FDARI]
+		PCD_SAVESTRING,			// [FDARI] create string (temporary)
+		PCD_PRINTMAPCHRANGE,	// [FDARI] output range (print part of array)
+		PCD_PRINTWORLDCHRANGE,
+		PCD_PRINTGLOBALCHRANGE,
+		PCD_STRCPYTOMAPCHRANGE,	// [FDARI] input range (copy string to all/part of array)
+		PCD_STRCPYTOWORLDCHRANGE,
+		PCD_STRCPYTOGLOBALCHRANGE,
+
+		PCD_GOTOSTACK,
 		// [BB] We need to fix the number for the new commands!
 		// [CW] Begin team additions.
 		PCD_GETTEAMPLAYERCOUNT,
 		// [CW] End team additions.
-
-/*353*/	PCODE_COMMAND_COUNT
+/*359*/	PCODE_COMMAND_COUNT
 	};
 
 	// Some constants used by ACS scripts
@@ -726,16 +801,6 @@ public:
 		SCRIPT_ModulusBy0,
 	};
 
-	enum 
-	{
-		CHANGELEVEL_KEEPFACING = 1,
-		CHANGELEVEL_RESETINVENTORY = 2,
-		CHANGELEVEL_NOMONSTERS = 4,
-		CHANGELEVEL_CHANGESKILL = 8,
-		CHANGELEVEL_NOINTERMISSION = 16
-	};
-
-
 	DLevelScript (AActor *who, line_t *where, int num, const ScriptPtr *code, FBehavior *module,
 		bool backSide, int arg0, int arg1, int arg2, int always);
 	~DLevelScript ();
@@ -745,6 +810,21 @@ public:
 
 	inline void SetState (EScriptState newstate) { state = newstate; }
 	inline EScriptState GetState () { return state; }
+
+	DLevelScript *GetNext() const { return next; }
+
+	void MarkLocalVarStrings() const
+	{
+		GlobalACSStrings.MarkStringArray(localvars, numlocalvars);
+	}
+	void LockLocalVarStrings() const
+	{
+		GlobalACSStrings.LockStringArray(localvars, numlocalvars);
+	}
+	void UnlockLocalVarStrings() const
+	{
+		GlobalACSStrings.UnlockStringArray(localvars, numlocalvars);
+	}
 
 protected:
 	DLevelScript	*next, *prev;
@@ -777,7 +857,7 @@ protected:
 	int DoSpawnSpot (int type, int spot, int tid, int angle, bool forced);
 	int DoSpawnSpotFacing (int type, int spot, int tid, bool forced);
 	int DoClassifyActor (int tid);
-	int CallFunction(int argCount, int funcIndex, SDWORD *args);
+	int CallFunction(int argCount, int funcIndex, SDWORD *args, const SDWORD *stack, int stackdepth);
 
 	void DoFadeTo (int r, int g, int b, int a, fixed_t time);
 	void DoFadeRange (int r1, int g1, int b1, int a1,
@@ -785,7 +865,7 @@ protected:
 	void DoSetFont (int fontnum);
 	void SetActorProperty (int tid, int property, int value);
 	void DoSetActorProperty (AActor *actor, int property, int value);
-	int GetActorProperty (int tid, int property);
+	int GetActorProperty (int tid, int property, const SDWORD *stack, int stackdepth);
 	int CheckActorProperty (int tid, int property, int value);
 	int GetPlayerInput (int playernum, int inputnum);
 
@@ -833,6 +913,7 @@ private:
 	DLevelScript *Scripts;				// List of all running scripts
 
 	friend class DLevelScript;
+	friend class FBehavior;
 };
 
 // The structure used to control scripts between maps
@@ -862,7 +943,7 @@ bool	ACS_IsScriptClientSide( ULONG ulScript );
 bool	ACS_IsScriptClientSide( const ScriptPtr *pScriptData );
 bool	ACS_IsScriptPukeable( ULONG ulScript );
 int		ACS_GetTranslationIndex( FRemapTable *pTranslation );
-int		ACS_PushAndReturnDynamicString ( const FString &Work );
+int		ACS_PushAndReturnDynamicString ( const FString &Work, const SDWORD *stack, int stackdepth );
 
 // [BL] Export DoClearInv
 void	DoClearInv(AActor *actor);

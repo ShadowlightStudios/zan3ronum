@@ -188,6 +188,33 @@ const char *FMetaTable::GetMetaString (DWORD id) const
 	return meta != NULL ? meta->Value.String : NULL;
 }
 
+CCMD (dumpactors)
+{
+	const char *const filters[32] =
+	{
+		"0:All", "1:Doom", "2:Heretic", "3:DoomHeretic", "4:Hexen", "5:DoomHexen", "6:Raven", "7:IdRaven",
+		"8:Strife", "9:DoomStrife", "10:HereticStrife", "11:DoomHereticStrife", "12:HexenStrife", 
+		"13:DoomHexenStrife", "14:RavenStrife", "15:NotChex", "16:Chex", "17:DoomChex", "18:HereticChex",
+		"19:DoomHereticChex", "20:HexenChex", "21:DoomHexenChex", "22:RavenChex", "23:NotStrife", "24:StrifeChex",
+		"25:DoomStrifeChex", "26:HereticStrifeChex", "27:NotHexen",	"28:HexenStrifeChex", "29:NotHeretic",
+		"30:NotDoom", "31:All",
+	};
+	Printf("%i object class types total\nActor\tEd Num\tSpawnID\tFilter\tSource\n", PClass::m_Types.Size());
+	for (unsigned int i = 0; i < PClass::m_Types.Size(); i++)
+	{
+		PClass *cls = PClass::m_Types[i];
+		if (cls != NULL && cls->ActorInfo != NULL)
+			Printf("%s\t%i\t%i\t%s\t%s\n",
+			cls->TypeName.GetChars(), cls->ActorInfo->DoomEdNum,
+			cls->ActorInfo->SpawnID, filters[cls->ActorInfo->GameFilter & 31],
+			cls->Meta.GetMetaString (ACMETA_Lump));
+		else if (cls != NULL)
+			Printf("%s\tn/a\tn/a\tn/a\tEngine (not an actor type)\n", cls->TypeName.GetChars());
+		else
+			Printf("Type %i is not an object class\n", i);
+	}
+}
+
 CCMD (dumpclasses)
 {
 	// This is by no means speed-optimized. But it's an informational console
@@ -507,6 +534,88 @@ size_t DObject::StaticPointerSubstitution (DObject *old, DObject *notOld)
 	*/
 
 	return changed;
+}
+
+void DObject::SerializeUserVars(FArchive &arc)
+{
+	PSymbolTable *symt;
+	FName varname;
+	DWORD count, j;
+	int *varloc;
+
+	if (SaveVersion < 1933)
+	{
+		return;
+	}
+
+	symt = &GetClass()->Symbols;
+
+	if (arc.IsStoring())
+	{
+		// Write all user variables.
+		for (; symt != NULL; symt = symt->ParentSymbolTable)
+		{
+			for (unsigned i = 0; i < symt->Symbols.Size(); ++i)
+			{
+				PSymbol *sym = symt->Symbols[i];
+				if (sym->SymbolType == SYM_Variable)
+				{
+					PSymbolVariable *var = static_cast<PSymbolVariable *>(sym);
+					if (var->bUserVar)
+					{
+						count = var->ValueType.Type == VAL_Array ? var->ValueType.size : 1;
+						varloc = (int *)(reinterpret_cast<BYTE *>(this) + var->offset);
+
+						arc << var->SymbolName;
+						arc.WriteCount(count);
+						for (j = 0; j < count; ++j)
+						{
+							arc << varloc[j];
+						}
+					}
+				}
+			}
+		}
+		// Write terminator.
+		varname = NAME_None;
+		arc << varname;
+	}
+	else
+	{
+		// Read user variables until 'None' is encountered.
+		arc << varname;
+		while (varname != NAME_None)
+		{
+			PSymbol *sym = symt->FindSymbol(varname, true);
+			DWORD wanted = 0;
+
+			if (sym != NULL && sym->SymbolType == SYM_Variable)
+			{
+				PSymbolVariable *var = static_cast<PSymbolVariable *>(sym);
+
+				if (var->bUserVar)
+				{
+					wanted = var->ValueType.Type == VAL_Array ? var->ValueType.size : 1;
+					varloc = (int *)(reinterpret_cast<BYTE *>(this) + var->offset);
+				}
+			}
+			count = arc.ReadCount();
+			for (j = 0; j < MIN(wanted, count); ++j)
+			{
+				arc << varloc[j];
+			}
+			if (wanted < count)
+			{
+				// Ignore remaining values from archive.
+				for (; j < count; ++j)
+				{
+					int foo;
+					arc << foo;
+				}
+			}
+			arc << varname;
+		}
+	}
 }
 
 void DObject::Serialize (FArchive &arc)

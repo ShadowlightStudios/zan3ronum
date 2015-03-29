@@ -39,6 +39,8 @@
 class FConfigFile;
 class APlayerPawn;
 
+extern bool CheckCheatmode (bool printmsg = true);
+
 void C_ExecCmdLineParams ();
 
 // Add commands to the console as if they were typed in. Can handle wait
@@ -59,6 +61,7 @@ void C_SetAlias (const char *name, const char *cmd);
 
 // build a single string out of multiple strings
 FString BuildString (int argc, char **argv);
+FString BuildString (int argc, FString *argv);
 
 // Class that can parse command lines
 class FCommandLine
@@ -140,8 +143,8 @@ struct FButtonStatus
 	BYTE bWentUp;			// Button went up this tic
 	BYTE padTo16Bytes;
 
-	void PressKey (int keynum);
-	void ReleaseKey (int keynum);
+	bool PressKey (int keynum);		// Returns true if this key caused the button to be pressed.
+	bool ReleaseKey (int keynum);	// Returns true if this key is no longer pressed.
 	void ResetTriggers () { bWentDown = bWentUp = false; }
 };
 
@@ -160,5 +163,6 @@ void ResetButtonStates ();		// Same as above, but also clear bDown
 
 extern unsigned int MakeKey (const char *s);
 extern unsigned int MakeKey (const char *s, size_t len);
+extern unsigned int SuperFastHash (const char *data, size_t len);
 
 #endif //__C_DISPATCH_H__

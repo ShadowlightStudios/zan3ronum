@@ -215,7 +215,6 @@ void FMapInfoParser::ParseGameInfo()
 			{
 				// border = {size, offset, tr, t, tl, r, l ,br, b, bl};
 				char *graphics[8] = {DoomBorder.tr, DoomBorder.t, DoomBorder.tl, DoomBorder.r, DoomBorder.l, DoomBorder.br, DoomBorder.b, DoomBorder.bl};
-				sc.MustGetToken('{');
 				sc.MustGetToken(TK_IntConst);
 				DoomBorder.offset = sc.Number;
 				sc.MustGetToken(',');
@@ -232,7 +231,21 @@ void FMapInfoParser::ParseGameInfo()
 					if(len < 8) // end with a null byte if the string is less than 8 chars.
 						graphics[i][len] = 0;
 				}
-				sc.MustGetToken('}');
+			}
+		}
+		else if(nextKey.CompareNoCase("armoricons") == 0)
+		{
+			sc.MustGetToken(TK_StringConst);
+			strncpy(gameinfo.ArmorIcon1, sc.String, 8);
+			gameinfo.ArmorIcon1[8] = 0;
+			if (sc.CheckToken(','))
+			{
+				sc.MustGetToken(TK_FloatConst);
+				gameinfo.Armor2Percent = FLOAT2FIXED(sc.Float);
+				sc.MustGetToken(',');
+				sc.MustGetToken(TK_StringConst);
+				strncpy(gameinfo.ArmorIcon2, sc.String, 8);
+				gameinfo.ArmorIcon2[8] = 0;
 			}
 		}
 		// Insert valid keys here.
@@ -253,6 +266,7 @@ void FMapInfoParser::ParseGameInfo()
 		GAMEINFOKEY_INT(defKickback, "defKickback")
 		GAMEINFOKEY_CSTRING(SkyFlatName, "SkyFlatName", 8)
 		GAMEINFOKEY_STRING(translator, "translator")
+		GAMEINFOKEY_COLOR(pickupcolor, "pickupcolor")
 		GAMEINFOKEY_COLOR(defaultbloodcolor, "defaultbloodcolor")
 		GAMEINFOKEY_COLOR(defaultbloodparticlecolor, "defaultbloodparticlecolor")
 		GAMEINFOKEY_STRING(backpacktype, "backpacktype")
@@ -260,6 +274,15 @@ void FMapInfoParser::ParseGameInfo()
 		GAMEINFOKEY_STRING(intermissionMusic, "intermissionMusic")
 		GAMEINFOKEY_BOOL(noloopfinalemusic, "noloopfinalemusic")
 		GAMEINFOKEY_BOOL(drawreadthis, "drawreadthis")
+		GAMEINFOKEY_BOOL(intermissioncounter, "intermissioncounter")
+		GAMEINFOKEY_COLOR(dimcolor, "dimcolor")
+		GAMEINFOKEY_FLOAT(dimamount, "dimamount")
+		GAMEINFOKEY_INT(definventorymaxamount, "definventorymaxamount")
+		GAMEINFOKEY_INT(defaultrespawntime, "defaultrespawntime")
+		GAMEINFOKEY_INT(defaultrespawntime, "defaultrespawntime")
+		GAMEINFOKEY_INT(defaultdropstyle, "defaultdropstyle")
+		GAMEINFOKEY_CSTRING(Endoom, "endoom", 8)
+		GAMEINFOKEY_INT(player5start, "player5start")
 		else
 		{
 			// ignore unkown keys.

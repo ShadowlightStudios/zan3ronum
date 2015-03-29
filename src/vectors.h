@@ -67,7 +67,7 @@ struct TVector2
 	}
 
 	TVector2 (double a, double b)
-		: X(a), Y(b)
+		: X(vec_t(a)), Y(vec_t(b))
 	{
 	}
 
@@ -242,12 +242,14 @@ struct TVector2
 		return *this * len;
 	}
 
-	// Scales this vector into a unit vector
-	void MakeUnit()
+	// Scales this vector into a unit vector. Returns the old length
+	double MakeUnit()
 	{
-		double len = Length();
-		if (len != 0) len = 1 / len;
-		*this *= len;
+		double len, ilen;
+		len = ilen = Length();
+		if (ilen != 0) ilen = 1 / ilen;
+		*this *= ilen;
+		return len;
 	}
 
 	// Dot product
@@ -1229,8 +1231,5 @@ typedef TVector3<float>		FVector3;
 typedef TRotator<float>		FRotator;
 typedef TMatrix3x3<float>	FMatrix3x3;
 typedef TAngle<float>		FAngle;
-
-#define FLOAT2FIXED(f)		fixed_t((f) * float(65536))
-#define FIXED2FLOAT(f)		(float(f) / float(65536))
 
 #endif

@@ -10,6 +10,7 @@
 #include "gl/wglext.h"
 */
 
+#include "win32iface.h"
 #include "hardware.h"
 #include "v_video.h"
 #include "tarray.h"
@@ -18,7 +19,6 @@ extern IVideo *Video;
 
 
 extern BOOL AppActive;
-extern int palette_brightness;
 
 EXTERN_CVAR (Float, dimamount)
 EXTERN_CVAR (Color, dimcolor)
@@ -26,8 +26,7 @@ EXTERN_CVAR (Color, dimcolor)
 EXTERN_CVAR(Int, vid_defwidth);
 EXTERN_CVAR(Int, vid_defheight);
 EXTERN_CVAR(Int, vid_renderer);
-
-EXTERN_CVAR(Bool, gl_vid_allowsoftware);
+EXTERN_CVAR(Int, vid_adapter);
 
 extern HINSTANCE g_hInst;
 extern HWND Window;
@@ -48,6 +47,7 @@ public:
 	bool GoFullscreen(bool yes);
 	DFrameBuffer *CreateFrameBuffer (int width, int height, bool fs, DFrameBuffer *old);
 	virtual bool SetResolution (int width, int height, int bits);
+	void DumpAdapters();
 
 protected:
 	struct ModeInfo
@@ -72,6 +72,11 @@ protected:
 	int m_DisplayWidth, m_DisplayHeight, m_DisplayBits, m_DisplayHz;
 	HMODULE hmRender;
 
+	char m_DisplayDeviceBuffer[CCHDEVICENAME];
+	char *m_DisplayDeviceName;
+	HMONITOR m_hMonitor;
+
+	void GetDisplayDeviceName();
 	void MakeModesList();
 	void AddMode(int x, int y, int bits, int baseHeight, int refreshHz);
 	void FreeModes();
@@ -88,7 +93,9 @@ class Win32GLFrameBuffer : public BaseWinFB
 
 public:
 	Win32GLFrameBuffer() {}
-	Win32GLFrameBuffer(int width, int height, int bits, int refreshHz, bool fullscreen);
+	// Actually, hMonitor is a HMONITOR, but it's passed as a void * as there
+    // look to be some cross-platform bits in the way.
+	Win32GLFrameBuffer(void *hMonitor, int width, int height, int bits, int refreshHz, bool fullscreen);
 	virtual ~Win32GLFrameBuffer();
 
 	// unused but must be defined
@@ -128,6 +135,8 @@ protected:
 	bool m_Fullscreen;
 	int m_Width, m_Height, m_Bits, m_RefreshHz;
 	int m_Lock;
+	char m_displayDeviceNameBuffer[CCHDEVICENAME];
+	char *m_displayDeviceName;
 
 	friend class Win32GLVideo;
 

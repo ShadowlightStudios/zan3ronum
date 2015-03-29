@@ -123,10 +123,18 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_VileTarget)
 //
 // A_VileAttack
 //
-DEFINE_ACTION_FUNCTION(AActor, A_VileAttack)
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_VileAttack)
 {		
+	ACTION_PARAM_START(6);
+	ACTION_PARAM_SOUND(snd,0);
+	ACTION_PARAM_INT(dmg,1);
+	ACTION_PARAM_INT(blastdmg,2);
+	ACTION_PARAM_INT(blastrad,3);
+	ACTION_PARAM_FIXED(thrust,4);
+	ACTION_PARAM_NAME(dmgtype,5);
+
 	AActor *fire, *target;
-	int an;
+	angle_t an;
 		
 	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
 		( CLIENTDEMO_IsPlaying( )))
@@ -142,17 +150,15 @@ DEFINE_ACTION_FUNCTION(AActor, A_VileAttack)
 	if (!P_CheckSight (self, target, 0) )
 		return;
 
-	S_Sound (self, CHAN_WEAPON, "vile/stop", 1, ATTN_NORM);
-	P_TraceBleed (20, target);
-	P_DamageMobj (target, self, self, 20, NAME_None);
-	target->momz = 1000 * FRACUNIT / target->Mass;
+	S_Sound (self, CHAN_WEAPON, snd, 1, ATTN_NORM);
+	P_TraceBleed (dmg, target);
+	P_DamageMobj (target, self, self, dmg, NAME_None);
 		
 	// [BC] Tell clients to play the arch-vile sound on their end.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "vile/stop", 1, ATTN_NORM );
 
 	an = self->angle >> ANGLETOFINESHIFT;
-
 	fire = self->tracer;
 
 	if (fire != NULL)
@@ -166,6 +172,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_VileAttack)
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_MoveThingExact( fire, CM_X|CM_Y|CM_Z );
 
-		P_RadiusAttack (fire, self, 70, 70, NAME_Fire, false);
+		P_RadiusAttack (fire, self, blastdmg, blastrad, dmgtype, false);
 	}
+	target->velz = Scale(thrust, 1000, target->Mass);
 }

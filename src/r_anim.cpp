@@ -179,7 +179,7 @@ void R_InitPicAnims (void)
 			if (pic1 == pic2)
 			{
 				// This animation only has one frame. Skip it. (Doom aborted instead.)
-				Printf ("Animation %s in ANIMATED has only one frame", anim_p + 10);
+				Printf ("Animation %s in ANIMATED has only one frame\n", anim_p + 10);
 				continue;
 			}
 
@@ -202,7 +202,7 @@ void R_InitPicAnims (void)
 			// [RH] Allow for backward animations as well as forward.
 			if (pic1 > pic2)
 			{
-				swap (pic1, pic2);
+				swapvalues (pic1, pic2);
 				animtype = FAnimDef::ANIM_Backward;
 			}
 
@@ -335,7 +335,7 @@ static void R_InitAnimDefs ()
 
 					if (sc.CheckFloat())
 					{
-						static_cast<FWarpTexture*>(warper)->SetSpeed(sc.Float);
+						static_cast<FWarpTexture*>(warper)->SetSpeed(float(sc.Float));
 					}
 
 					// No decals on warping textures, by default.
@@ -404,6 +404,17 @@ static void R_InitAnimDefs ()
 			else if (sc.Compare ("animatedDoor"))
 			{
 				P_ParseAnimatedDoor (sc);
+			}
+			else if (sc.Compare("skyoffset"))
+			{
+				sc.MustGetString ();
+				FTextureID picnum = TexMan.CheckForTexture (sc.String, FTexture::TEX_Wall, texflags);
+				sc.MustGetNumber();
+				if (picnum.Exists())
+				{
+					FTexture *tex = TexMan[picnum];
+					tex->SkyOffset = sc.Number;
+				}
 			}
 			else
 			{
@@ -537,7 +548,7 @@ static void ParseRangeAnim (FScanner &sc, FTextureID picnum, int usetype, bool m
 	{
 		type = FAnimDef::ANIM_Backward;
 		TexMan[framenum]->bNoDecals = TexMan[picnum]->bNoDecals;
-		swap (framenum, picnum);
+		swapvalues (framenum, picnum);
 	}
 	if (sc.GetString())
 	{
@@ -834,6 +845,6 @@ void R_UpdateAnimations (DWORD mstime)
 
 	// Scroll the sky
 	double ms = (double)mstime * FRACUNIT;
-	sky1pos = fixed_t(fmod (ms * level.skyspeed1, double(TexMan[sky1texture]->GetWidth() << FRACBITS)));
-	sky2pos = fixed_t(fmod (ms * level.skyspeed2, double(TexMan[sky2texture]->GetWidth() << FRACBITS)));
+	sky1pos = ms * level.skyspeed1;
+	sky2pos = ms * level.skyspeed2;
 }

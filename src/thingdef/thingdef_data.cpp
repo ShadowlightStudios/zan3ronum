@@ -92,6 +92,7 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF, NOLIFTDROP, AActor, flags),
 	DEFINE_FLAG(MF, STEALTH, AActor, flags),
 	DEFINE_FLAG(MF, ICECORPSE, AActor, flags),
+
 	DEFINE_FLAG(MF2, DONTREFLECT, AActor, flags2),
 	DEFINE_FLAG(MF2, WINDTHRUST, AActor, flags2),
 	DEFINE_FLAG(MF2, DONTSEEKINVISIBLE, AActor, flags2),
@@ -121,6 +122,7 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF2, DORMANT, AActor, flags2),
 	DEFINE_FLAG(MF2, SEEKERMISSILE, AActor, flags2),
 	DEFINE_FLAG(MF2, REFLECTIVE, AActor, flags2),
+
 	DEFINE_FLAG(MF3, FLOORHUGGER, AActor, flags3),
 	DEFINE_FLAG(MF3, CEILINGHUGGER, AActor, flags3),
 	DEFINE_FLAG(MF3, NORADIUSDMG, AActor, flags3),
@@ -142,13 +144,14 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF3, DONTGIB, AActor, flags3),
 	DEFINE_FLAG(MF3, NOBLOCKMONST, AActor, flags3),
 	DEFINE_FLAG(MF3, FULLVOLDEATH, AActor, flags3),
-	DEFINE_FLAG(MF3, CANBOUNCEWATER, AActor, flags3),
-	DEFINE_FLAG(MF3, NOWALLBOUNCESND, AActor, flags3),
+	DEFINE_FLAG(MF3, AVOIDMELEE, AActor, flags3),
+	DEFINE_FLAG(MF3, SCREENSEEKER, AActor, flags3),
 	DEFINE_FLAG(MF3, FOILINVUL, AActor, flags3),
 	DEFINE_FLAG(MF3, NOTELEOTHER, AActor, flags3),
 	DEFINE_FLAG(MF3, BLOODLESSIMPACT, AActor, flags3),
 	DEFINE_FLAG(MF3, NOEXPLODEFLOOR, AActor, flags3),
 	DEFINE_FLAG(MF3, PUFFONACTORS, AActor, flags3),
+
 	DEFINE_FLAG(MF4, QUICKTORETALIATE, AActor, flags4),
 	DEFINE_FLAG(MF4, NOICEDEATH, AActor, flags4),
 	DEFINE_FLAG(MF4, RANDOMIZE, AActor, flags4),
@@ -168,22 +171,20 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF4, NOSPLASHALERT, AActor, flags4),
 	DEFINE_FLAG(MF4, SYNCHRONIZED, AActor, flags4),
 	DEFINE_FLAG(MF4, NOTARGETSWITCH, AActor, flags4),
-	DEFINE_FLAG(MF4, DONTHURTSPECIES, AActor, flags4),
+	DEFINE_FLAG(MF4, DONTHARMCLASS, AActor, flags4),
+	DEFINE_FLAG2(MF4_DONTHARMCLASS, DONTHURTSPECIES, AActor, flags4), // Deprecated name as an alias
 	DEFINE_FLAG(MF4, SHIELDREFLECT, AActor, flags4),
 	DEFINE_FLAG(MF4, DEFLECT, AActor, flags4),
 	DEFINE_FLAG(MF4, ALLOWPARTICLES, AActor, flags4),
 	DEFINE_FLAG(MF4, EXTREMEDEATH, AActor, flags4),
 	DEFINE_FLAG(MF4, NOEXTREMEDEATH, AActor, flags4),
 	DEFINE_FLAG(MF4, FRIGHTENED, AActor, flags4),
-	DEFINE_FLAG(MF4, NOBOUNCESOUND, AActor, flags4),
 	DEFINE_FLAG(MF4, NOSKIN, AActor, flags4),
 	DEFINE_FLAG(MF4, BOSSDEATH, AActor, flags4),
 
 	DEFINE_FLAG(MF5, FASTER, AActor, flags5),
 	DEFINE_FLAG(MF5, FASTMELEE, AActor, flags5),
 	DEFINE_FLAG(MF5, NODROPOFF, AActor, flags5),
-	DEFINE_FLAG(MF5, BOUNCEONACTORS, AActor, flags5),
-	DEFINE_FLAG(MF5, EXPLODEONWATER, AActor, flags5),
 	DEFINE_FLAG(MF5, NODAMAGE, AActor, flags5),
 	DEFINE_FLAG(MF5, BLOODSPLATTER, AActor, flags5),
 	DEFINE_FLAG(MF5, OLDRADIUSDMG, AActor, flags5),
@@ -212,12 +213,25 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF6, NOBOSSRIP, AActor, flags6),
 	DEFINE_FLAG(MF6, THRUSPECIES, AActor, flags6),
 	DEFINE_FLAG(MF6, MTHRUSPECIES, AActor, flags6),
+	DEFINE_FLAG(MF6, FORCEPAIN, AActor, flags6),
+	DEFINE_FLAG(MF6, NOFEAR, AActor, flags6),
+	DEFINE_FLAG(MF6, BUMPSPECIAL, AActor, flags6),
+	DEFINE_FLAG(MF6, DONTHARMSPECIES, AActor, flags6),
+	DEFINE_FLAG(MF6, STEPMISSILE, AActor, flags6),
+	DEFINE_FLAG(MF6, NOTELEFRAG, AActor, flags6),
+	DEFINE_FLAG(MF6, TOUCHY, AActor, flags6),
+	DEFINE_FLAG(MF6, CANJUMP, AActor, flags6),
+	DEFINE_FLAG(MF6, JUMPDOWN, AActor, flags6),
+	DEFINE_FLAG(MF6, VULNERABLE, AActor, flags6),
+	DEFINE_FLAG(MF6, NOTRIGGER, AActor, flags6),
+	DEFINE_FLAG(MF6, ADDITIVEPOISONDAMAGE, AActor, flags6),
+	DEFINE_FLAG(MF6, ADDITIVEPOISONDURATION, AActor, flags6),
+	DEFINE_FLAG(MF6, BLOCKEDBYSOLIDACTORS, AActor, flags6),
 
 	// [BC] New DECORATE flag defines here.
 	DEFINE_FLAG(STFL, BLUETEAM, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, REDTEAM, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, USESPECIAL, AActor, ulSTFlags),
-	DEFINE_FLAG(STFL, BUMPSPECIAL, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, BASEHEALTH, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, SUPERHEALTH, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, BASEARMOR, AActor, ulSTFlags),
@@ -242,6 +256,20 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(RF, FORCEYBILLBOARD, AActor, renderflags),
 	DEFINE_FLAG(RF, FORCEXYBILLBOARD, AActor, renderflags),
 
+	// Bounce flags
+	DEFINE_FLAG2(BOUNCE_Walls, BOUNCEONWALLS, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_Floors, BOUNCEONFLOORS, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_Ceilings, BOUNCEONCEILINGS, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_Actors, ALLOWBOUNCEONACTORS, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_AutoOff, BOUNCEAUTOOFF, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_HereticType, BOUNCELIKEHERETIC, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_CanBounceWater, CANBOUNCEWATER, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_NoWallSound, NOWALLBOUNCESND, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_Quiet, NOBOUNCESOUND, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_AllActors, BOUNCEONACTORS, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_ExplodeOnWater, EXPLODEONWATER, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_MBF, MBFBOUNCER, AActor, BounceFlags),
+
 	// Deprecated flags. Handling must be performed in HandleDeprecatedFlags
 	DEFINE_DEPRECATED_FLAG(FIREDAMAGE),
 	DEFINE_DEPRECATED_FLAG(ICEDAMAGE),
@@ -253,9 +281,15 @@ static FFlagDef ActorFlags[]=
 	DEFINE_DEPRECATED_FLAG(HERETICBOUNCE),
 	DEFINE_DEPRECATED_FLAG(HEXENBOUNCE),
 	DEFINE_DEPRECATED_FLAG(DOOMBOUNCE),
-	// [BB] ST supports NONETID and ALLOWCLIENTSPAWN.
-	//DEFINE_DUMMY_FLAG(NONETID),
-	//DEFINE_DUMMY_FLAG(ALLOWCLIENTSPAWN),
+
+	// [BB] ST supports these flags.
+	/*
+// Various Skulltag flags that are quite irrelevant to ZDoom
+	DEFINE_DUMMY_FLAG(NONETID),				// netcode-based
+	DEFINE_DUMMY_FLAG(ALLOWCLIENTSPAWN),	// netcode-based
+	DEFINE_DUMMY_FLAG(CLIENTSIDEONLY),	    // netcode-based
+	DEFINE_DUMMY_FLAG(EXPLODEONDEATH),	    // seems useless
+	*/
 };
 
 static FFlagDef InventoryFlags[] =
@@ -266,7 +300,6 @@ static FFlagDef InventoryFlags[] =
 	DEFINE_FLAG(IF, UNDROPPABLE, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, INVBAR, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, HUBPOWER, AInventory, ItemFlags),
-	DEFINE_FLAG(IF, INTERHUBSTRIP, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, ALWAYSPICKUP, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, FANCYPICKUPSOUND, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, BIGPOWERUP, AInventory, ItemFlags),
@@ -274,11 +307,12 @@ static FFlagDef InventoryFlags[] =
 	DEFINE_FLAG(IF, IGNORESKILL, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, ADDITIVETIME, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, NOATTENPICKUPSOUND, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, PERSISTENTPOWER, AInventory, ItemFlags),
 	// [BB] New ST flags.
 	DEFINE_FLAG(IF, FORCERESPAWNINSURVIVAL, AInventory, ItemFlags),
 
 	DEFINE_DEPRECATED_FLAG(PICKUPFLASH),
-
+	DEFINE_DEPRECATED_FLAG(INTERHUBSTRIP),
 };
 
 static FFlagDef WeaponFlags[] =
@@ -296,22 +330,30 @@ static FFlagDef WeaponFlags[] =
 	DEFINE_FLAG(WIF, POWERED_UP, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF, STAFF2_KICKBACK, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF_BOT, EXPLOSIVE, AWeapon, WeaponFlags),
-	DEFINE_FLAG2(WIF_BOT_MELEE, MELEEWEAPON, AWeapon, WeaponFlags),
+	DEFINE_FLAG(WIF, MELEEWEAPON, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF_BOT, BFG, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF, CHEATNOTWEAPON, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF, NO_AUTO_SWITCH, AWeapon, WeaponFlags),
+	DEFINE_FLAG(WIF, AMMO_CHECKBOTH, AWeapon, WeaponFlags),
+	DEFINE_FLAG(WIF, NOAUTOAIM, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF, ALLOW_WITH_RESPAWN_INVUL, AWeapon, WeaponFlags), // [BB] Marks weapons that can be used while respawn invulnerability is active.
 	DEFINE_FLAG(WIF, NOLMS, AWeapon, WeaponFlags), // [BB] Marks weapons that are not given to the player in LMS.
-	DEFINE_FLAG(WIF, NOAUTOAIM, AWeapon, WeaponFlags), // [BB] If the level allows freelook, this weapon behaves as if CVAR autoaim was 0.
 };
 
-static const struct { const PClass *Type; FFlagDef *Defs; int NumDefs; } FlagLists[] =
+static FFlagDef PlayerPawnFlags[] =
 {
-	{ RUNTIME_CLASS(AActor), 		ActorFlags,		sizeof(ActorFlags)/sizeof(FFlagDef) },
-	{ RUNTIME_CLASS(AInventory), 	InventoryFlags,	sizeof(InventoryFlags)/sizeof(FFlagDef) },
-	{ RUNTIME_CLASS(AWeapon), 		WeaponFlags,	sizeof(WeaponFlags)/sizeof(FFlagDef) }
+	// PlayerPawn flags
+	DEFINE_FLAG(PPF, NOTHRUSTWHENINVUL, APlayerPawn, PlayerFlags),
 };
-#define NUM_FLAG_LISTS 3
+
+static const struct FFlagList { const PClass *Type; FFlagDef *Defs; int NumDefs; } FlagLists[] =
+{
+	{ RUNTIME_CLASS(AActor), 		ActorFlags,		countof(ActorFlags) },
+	{ RUNTIME_CLASS(AInventory), 	InventoryFlags,	countof(InventoryFlags) },
+	{ RUNTIME_CLASS(AWeapon), 		WeaponFlags,	countof(WeaponFlags) },
+	{ RUNTIME_CLASS(APlayerPawn),	PlayerPawnFlags,countof(PlayerPawnFlags) },
+};
+#define NUM_FLAG_LISTS (countof(FlagLists))
 
 //==========================================================================
 //
@@ -351,7 +393,7 @@ static FFlagDef *FindFlag (FFlagDef *flags, int numflags, const char *flag)
 FFlagDef *FindFlag (const PClass *type, const char *part1, const char *part2)
 {
 	FFlagDef *def;
-	int i;
+	size_t i;
 
 	if (part2 == NULL)
 	{ // Search all lists
@@ -390,6 +432,24 @@ FFlagDef *FindFlag (const PClass *type, const char *part1, const char *part2)
 
 //==========================================================================
 //
+// Gets the name of an actor flag 
+//
+//==========================================================================
+
+const char *GetFlagName(int flagnum, int flagoffset)
+{
+	for(unsigned i = 0; i < countof(ActorFlags); i++)
+	{
+		if (ActorFlags[i].flagbit == flagnum && ActorFlags[i].structoffset == flagoffset)
+		{
+			return ActorFlags[i].name;
+		}
+	}
+	return "(unknown)";	// return something printable
+}
+
+//==========================================================================
+//
 // Find a property by name using a binary search
 //
 //==========================================================================
@@ -424,7 +484,7 @@ FPropertyInfo *FindProperty(const char * string)
 //
 //==========================================================================
 
-AFuncDesc * FindFunction(const char * string)
+AFuncDesc *FindFunction(const char * string)
 {
 	int min = 0, max = AFTable.Size()-1;
 
@@ -451,7 +511,7 @@ AFuncDesc * FindFunction(const char * string)
 
 //==========================================================================
 //
-// Find a varIABLE by name using a binary search
+// Find a variable by name using a binary search
 //
 //==========================================================================
 
@@ -531,7 +591,6 @@ static int STACK_ARGS varcmp(const void * a, const void * b)
 	return stricmp(A->name, B->name);
 }
 
-
 //==========================================================================
 //
 // Initialization
@@ -541,18 +600,18 @@ static int STACK_ARGS varcmp(const void * a, const void * b)
 void InitThingdef()
 {
 	// Sort the flag lists
-	for (int i = 0; i < NUM_FLAG_LISTS; ++i)
+	for (size_t i = 0; i < NUM_FLAG_LISTS; ++i)
 	{
 		qsort (FlagLists[i].Defs, FlagLists[i].NumDefs, sizeof(FFlagDef), flagcmp);
 	}
 
 	// Create a sorted list of properties
 	{
-		TAutoSegIterator<FPropertyInfo *, &GRegHead, &GRegTail> probe;
+		FAutoSegIterator probe(GRegHead, GRegTail);
 
-		while (++probe != NULL)
+		while (*++probe != NULL)
 		{
-			properties.Push(probe);
+			properties.Push((FPropertyInfo *)*probe);
 		}
 		properties.ShrinkToFit();
 		qsort(&properties[0], properties.Size(), sizeof(properties[0]), propcmp);
@@ -560,11 +619,11 @@ void InitThingdef()
 
 	// Create a sorted list of native action functions
 	{
-		TAutoSegIterator<AFuncDesc *, &ARegHead, &ARegTail> probe;
+		FAutoSegIterator probe(ARegHead, ARegTail);
 
-		while (++probe != NULL)
+		while (*++probe != NULL)
 		{
-			AFTable.Push(*probe);
+			AFTable.Push(*(AFuncDesc *)*probe);
 		}
 		AFTable.ShrinkToFit();
 		qsort(&AFTable[0], AFTable.Size(), sizeof(AFTable[0]), funccmp);
@@ -572,13 +631,14 @@ void InitThingdef()
 
 	// Create a sorted list of native variables
 	{
-		TAutoSegIterator<FVariableInfo *, &MRegHead, &MRegTail> probe;
+		FAutoSegIterator probe(MRegHead, MRegTail);
 
-		while (++probe != NULL)
+		while (*++probe != NULL)
 		{
-			variables.Push(probe);
+			variables.Push((FVariableInfo *)*probe);
 		}
 		variables.ShrinkToFit();
 		qsort(&variables[0], variables.Size(), sizeof(variables[0]), varcmp);
 	}
 }
+

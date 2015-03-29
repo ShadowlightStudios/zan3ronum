@@ -117,7 +117,7 @@ protected:
 	void Free ();
 };
 
-static struct AmbientSound
+struct FAmbientSound
 {
 	unsigned	type;		// type of ambient sound
 	int			periodmin;	// # of tics between repeats
@@ -125,7 +125,8 @@ static struct AmbientSound
 	float		volume;		// relative volume of sound
 	float		attenuation;
 	FString		sound;		// Logical name of sound to play
-} *Ambients[256];
+};
+TMap<int, FAmbientSound> Ambients;
 
 enum SICommands
 {
@@ -288,6 +289,7 @@ float S_GetMusicVolume (const char *music)
 }
 
 //==========================================================================
+
 //
 // S_HashSounds
 //
@@ -512,6 +514,7 @@ int S_AddSoundLump (const char *logicalname, int lump)
 	newsfx.Rolloff.RolloffType = ROLLOFF_Doom;
 	newsfx.Rolloff.MinDistance = 0;
 	newsfx.Rolloff.MaxDistance = 0;
+	newsfx.LoopStart = -1;
 
 	return (int)S_sfx.Push (newsfx);
 }
@@ -839,15 +842,7 @@ static void S_ClearSoundData()
 		S_UnloadSound(&S_sfx[i]);
 	}
 	S_sfx.Clear();
-
-	for(i = 0; i < countof(Ambients); i++)
-	{
-		if (Ambients[i] != NULL)
-		{
-			delete Ambients[i];
-			Ambients[i] = NULL;
-		}
-	}
+	Ambients.Clear();
 	while (MusicVolumes != NULL)
 	{
 		FMusicVolume *me = MusicVolumes;
@@ -970,23 +965,10 @@ static void S_AddSNDINFO (int lump)
 				// $ambient <num> <logical name> [point [atten] | surround | [world]]
 				//			<continuous | random <minsecs> <maxsecs> | periodic <secs>>
 				//			<volume>
-				AmbientSound *ambient, dummy;
+				FAmbientSound *ambient;
 
 				sc.MustGetNumber ();
-				if (sc.Number < 0 || sc.Number > 255)
-				{
-					Printf ("Bad ambient index (%d)\n", sc.Number);
-					ambient = &dummy;
-				}
-				else if (Ambients[sc.Number] == NULL)
-				{
-					ambient = new AmbientSound;
-					Ambients[sc.Number] = ambient;
-				}
-				else
-				{
-					ambient = Ambients[sc.Number];
-				}
+				ambient = &Ambients[sc.Number];
 				ambient->type = 0;
 				ambient->periodmin = 0;
 				ambient->periodmax = 0;
@@ -1008,7 +990,7 @@ static void S_AddSNDINFO (int lump)
 
 					if (IsFloat (sc.String))
 					{
-						attenuation = atof (sc.String);
+						attenuation = (float)atof (sc.String);
 						sc.MustGetString ();
 						if (attenuation > 0)
 						{
@@ -1062,7 +1044,7 @@ static void S_AddSNDINFO (int lump)
 				}
 
 				sc.MustGetFloat ();
-				ambient->volume = sc.Float;
+				ambient->volume = (float)sc.Float;
 				if (ambient->volume > 1)
 					ambient->volume = 1;
 				else if (ambient->volume < 0)
@@ -1171,7 +1153,7 @@ static void S_AddSNDINFO (int lump)
 				S_sfx[sfx].NearLimit = MIN(MAX(sc.Number, 0), 255);
 				if (sc.CheckFloat())
 				{
-					S_sfx[sfx].LimitRange = sc.Float * sc.Float;
+					S_sfx[sfx].LimitRange = float(sc.Float * sc.Float);
 				}
 				}
 				break;
@@ -1210,7 +1192,7 @@ static void S_AddSNDINFO (int lump)
 				sc.MustGetString();
 				sfx = S_FindSoundTentative(sc.String);
 				sc.MustGetFloat();
-				S_sfx[sfx].Volume = sc.Float;
+				S_sfx[sfx].Volume = (float)sc.Float;
 				}
 				break;
 
@@ -1254,9 +1236,9 @@ static void S_AddSNDINFO (int lump)
 					}
 					sc.MustGetFloat();
 				}
-				rolloff->MinDistance = sc.Float;
+				rolloff->MinDistance = (float)sc.Float;
 				sc.MustGetFloat();
-				rolloff->MaxDistance = sc.Float;
+				rolloff->MaxDistance = (float)sc.Float;
 				break;
 			  }
 
@@ -1300,7 +1282,7 @@ static void S_AddSNDINFO (int lump)
 				FString musname (sc.String);
 				sc.MustGetFloat();
 				FMusicVolume *mv = (FMusicVolume *)M_Malloc (sizeof(*mv) + musname.Len());
-				mv->Volume = sc.Float;
+				mv->Volume = (float)sc.Float;
 				strcpy (mv->MusicName, musname);
 				mv->Next = MusicVolumes;
 				MusicVolumes = mv;
@@ -1369,18 +1351,15 @@ static void S_AddSNDINFO (int lump)
 
 static void S_AddBloodSFX (int lumpnum)
 {
-	char name[13];
-	FMemLump sfxlump = Wads.ReadLump (lumpnum);
+	FMemLump sfxlump = Wads.ReadLump(lumpnum);
 	const FBloodSFX *sfx = (FBloodSFX *)sfxlump.GetMem();
-	int rawlump = Wads.CheckNumForName (sfx->RawName, ns_bloodraw);
+	int rawlump = Wads.CheckNumForName(sfx->RawName, ns_bloodraw);
 	int sfxnum;
 
 	if (rawlump != -1)
 	{
-		Wads.GetLumpName (name, lumpnum);
-		name[8] = 0;
-		strcat (name, ".SFX");
-		sfxnum = S_AddSound (name, rawlump);
+		const char *name = Wads.GetLumpFullName(lumpnum);
+		sfxnum = S_AddSound(name, rawlump);
 		if (sfx->Format == 5)
 		{
 			S_sfx[sfxnum].bForce22050 = true;
@@ -1390,6 +1369,17 @@ static void S_AddBloodSFX (int lumpnum)
 			S_sfx[sfxnum].bForce11025 = true;
 		}
 		S_sfx[sfxnum].bLoadRAW = true;
+		S_sfx[sfxnum].LoopStart = LittleLong(sfx->LoopStart);
+		// Make an ambient sound out of it, whether it has a loop point
+		// defined or not. (Because none of the standard Blood ambient
+		// sounds are explicitly defined as looping.)
+		FAmbientSound *ambient = &Ambients[Wads.GetLumpIndexNum(lumpnum)];
+		ambient->type = CONTINUOUS;
+		ambient->periodmin = 0;
+		ambient->periodmax = 0;
+		ambient->volume = 1;
+		ambient->attenuation = 1;
+		ambient->sound = name;
 	}
 }
 
@@ -1804,6 +1794,100 @@ int S_FindSkinnedSoundEx (AActor *actor, const char *name, const char *extendedn
 
 //==========================================================================
 //
+// S_ParseTimeTag
+//
+// Passed the value of a loop point tag, converts it to numbers.
+//
+// This may be of the form 00:00:00.00 (HH:MM:SS.ss) to specify by play
+// time. Various parts may be left off. The only requirement is that it
+// contain a colon. e.g. To start the loop at 20 seconds in, you can use
+// ":20", "0:20", "00:00:20", ":20.0", etc. Values after the decimal are
+// fractions of a second.
+//
+// If you don't include a colon but just have a raw number, then it's
+// the number of PCM samples at which to loop.
+//
+// Returns true if the tag made sense, false if not.
+//
+//==========================================================================
+
+bool S_ParseTimeTag(const char *tag, bool *as_samples, unsigned int *time)
+{
+	const char *bit = tag;
+	char ms[3] = { 0 };
+	unsigned int times[3] = { 0 };
+	int ms_pos = 0, time_pos = 0;
+	bool pcm = true, in_ms = false;
+
+	for (bit = tag; *bit != '\0'; ++bit)
+	{
+		if (*bit >= '0' && *bit <= '9')
+		{
+			if (in_ms)
+			{
+				// Ignore anything past three fractional digits.
+				if (ms_pos < 3)
+				{
+					ms[ms_pos++] = *bit - '0';
+				}
+			}
+			else
+			{
+				times[time_pos] = times[time_pos] * 10 + *bit - '0';
+			}
+		}
+		else if (*bit == ':')
+		{
+			if (in_ms)
+			{ // If we already specified milliseconds, we can't take any more parts.
+				return false;
+			}
+			pcm = false;
+			if (++time_pos == countof(times))
+			{ // Time too long. (Seriously, starting the loop days in?)
+				return false;
+			}
+		}
+		else if (*bit == '.')
+		{
+			if (pcm || in_ms)
+			{ // It doesn't make sense to have fractional PCM values.
+			  // It also doesn't make sense to have more than one dot.
+				return false;
+			}
+			in_ms = true;
+		}
+		else
+		{ // Anything else: We don't understand this.
+			return false;
+		}
+	}
+	if (pcm)
+	{
+		*as_samples = true;
+		*time = times[0];
+	}
+	else
+	{
+		unsigned int mytime = 0;
+
+		// Add in hours, minutes, and seconds
+		for (int i = 0; i <= time_pos; ++i)
+		{
+			mytime = mytime * 60 + times[i];
+		}
+
+		// Add in milliseconds
+		mytime = mytime * 1000 + ms[0] * 100 + ms[1] * 10 + ms[2];
+
+		*as_samples = false;
+		*time = mytime;
+	}
+	return true;
+}
+
+//==========================================================================
+//
 // CCMD soundlist
 //
 //==========================================================================
@@ -1927,25 +2011,59 @@ public:
 protected:
 	bool bActive;
 private:
-	void SetTicker (struct AmbientSound *ambient);
+	void SetTicker (struct FAmbientSound *ambient);
 	int NextCheck;
 };
 
 IMPLEMENT_CLASS (AAmbientSound)
+
+//==========================================================================
+//
+// AmbientSound :: Serialize
+//
+//==========================================================================
 
 void AAmbientSound::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
 	arc << bActive;
 	
-	int checktime = NextCheck - gametic;
-	arc << checktime;
-	if (arc.IsLoading ())
+	if (SaveVersion < 1902)
 	{
-		NextCheck = checktime + gametic;
+		arc << NextCheck;
+		NextCheck += gametic;
+		if (NextCheck < 0) NextCheck = INT_MAX;
+	}
+	else
+	{
+		if (arc.IsStoring())
+		{
+			if (NextCheck != INT_MAX)
+			{
+				int checktime = NextCheck - gametic;
+				arc << checktime;
+			}
+			else
+			{
+				arc << NextCheck;
+			}
+		}
+		else
+		{
+			arc << NextCheck;
+			if (NextCheck != INT_MAX)
+			{
+				NextCheck += gametic;
+			}
+		}
 	}
 }
 
+//==========================================================================
+//
+// AmbientSound :: Tick
+//
+//==========================================================================
 
 void AAmbientSound::Tick ()
 {
@@ -1954,22 +2072,47 @@ void AAmbientSound::Tick ()
 	if (!bActive || gametic < NextCheck)
 		return;
 
-	AmbientSound *ambient = Ambients[args[0]];
-
-	// [BC] Break out if the ambient sound is invalid.
-	if ( ambient == NULL )
-		return;
-
+	FAmbientSound *ambient;
 	int loop = 0;
+
+	ambient = Ambients.CheckKey(args[0]);
+	if (ambient == NULL)
+	{
+		return;
+	}
 
 	if ((ambient->type & CONTINUOUS) == CONTINUOUS)
 	{
 		loop = CHAN_LOOP;
 	}
 
-	if (ambient->sound[0])
+	if (ambient->sound.IsNotEmpty())
 	{
-		S_Sound(this, CHAN_BODY | loop, ambient->sound, ambient->volume, ambient->attenuation);
+		// The second argument scales the ambient sound's volume.
+		// 0 and 100 are normal volume. The maximum volume level
+		// possible is always 1.
+		float volscale = args[1] == 0 ? 1 : args[1] / 100.f;
+		float usevol = clamp(ambient->volume * volscale, 0.f, 1.f);
+
+		// The third argument is the minimum distance for audible fading, and
+		// the fourth argument is the maximum distance for audibility. Setting
+		// either of these to 0 or setting  min distance > max distance will
+		// use the standard rolloff.
+		if ((args[2] | args[3]) == 0 || args[2] > args[3])
+		{
+			S_Sound(this, CHAN_BODY | loop, ambient->sound, usevol, ambient->attenuation);
+		}
+		else
+		{
+			float min = float(args[2]), max = float(args[3]);
+			// The fifth argument acts as a scalar for the preceding two, if it's non-zero.
+			if (args[4] > 0)
+			{
+				min *= args[4];
+				max *= args[4];
+			}
+			S_SoundMinMaxDist(this, CHAN_BODY | loop, ambient->sound, usevol, min, max);
+		}
 		if (!loop)
 		{
 			SetTicker (ambient);
@@ -1985,8 +2128,13 @@ void AAmbientSound::Tick ()
 	}
 }
 
+//==========================================================================
+//
+// AmbientSound :: SetTicker
+//
+//==========================================================================
 
-void AAmbientSound::SetTicker (struct AmbientSound *ambient)
+void AAmbientSound::SetTicker (struct FAmbientSound *ambient)
 {
 	if ((ambient->type & CONTINUOUS) == CONTINUOUS)
 	{
@@ -2004,17 +2152,31 @@ void AAmbientSound::SetTicker (struct AmbientSound *ambient)
 	}
 }
 
+//==========================================================================
+//
+// AmbientSound :: BeginPlay
+//
+//==========================================================================
+
 void AAmbientSound::BeginPlay ()
 {
 	Super::BeginPlay ();
 	Activate (NULL);
 }
 
+//==========================================================================
+//
+// AmbientSound :: Activate
+//
+// Starts playing a sound (or does nothing of the sound is already playing).
+//
+//==========================================================================
+
 void AAmbientSound::Activate (AActor *activator)
 {
 	Super::Activate (activator);
 
-	AmbientSound *amb = Ambients[args[0]];
+	FAmbientSound *amb = Ambients.CheckKey(args[0]);
 
 	if (amb == NULL)
 	{
@@ -2052,22 +2214,23 @@ void AAmbientSound::Activate (AActor *activator)
 	}
 }
 
+//==========================================================================
+//
+// AmbientSound :: Deactivate
+//
+// Stops playing CONTINUOUS sounds immediately. Also prevents further
+// occurrences of repeated sounds.
+//
+//==========================================================================
+
 void AAmbientSound::Deactivate (AActor *activator)
 {
-	// [BC]
-	AmbientSound	*pAmbient;
-
 	Super::Deactivate (activator);
 	if (bActive)
 	{
 		bActive = false;
-
-		// [BC] Break out if the ambient sound is invalid.
-		pAmbient = Ambients[args[0]];
-		if ( pAmbient == NULL )
-			return;
-
-		if ((pAmbient->type & CONTINUOUS) == CONTINUOUS)
+		FAmbientSound *ambient = Ambients.CheckKey(args[0]);
+		if (ambient != NULL && (ambient->type & CONTINUOUS) == CONTINUOUS)
 		{
 			S_StopSound (this, CHAN_BODY);
 		}
@@ -2138,6 +2301,8 @@ class AMusicChanger : public ASectorAction
 	DECLARE_CLASS (AMusicChanger, ASectorAction)
 public:
 	virtual bool TriggerAction (AActor *triggerer, int activationType);
+	virtual void Tick();
+	virtual void PostBeginPlay();
 };
 
 IMPLEMENT_CLASS(AMusicChanger)
@@ -2146,19 +2311,47 @@ bool AMusicChanger::TriggerAction (AActor *triggerer, int activationType)
 {
 	if (activationType & SECSPAC_Enter)
 	{
-		if (args[0] != 0)
-		{
-			FName *music = level.info->MusicMap.CheckKey(args[0]);
-
-			if (music != NULL)
-			{
-				S_ChangeMusic(music->GetChars(), args[1]);
-			}
-		}
-		else
-		{
-			S_ChangeMusic("*");
+		if (args[0] == 0 || level.info->MusicMap.CheckKey(args[0]))
+ 		{
+			level.nextmusic = args[0];
+			reactiontime = 30;
 		}
 	}
 	return Super::TriggerAction (triggerer, activationType);
+}
+ 
+void AMusicChanger::Tick()
+{
+	Super::Tick();
+	if (reactiontime > -1 && --reactiontime == 0)
+	{
+		// Is it our music that's queued for being played?
+		if (level.nextmusic == args[0])
+		{
+			if (args[0] != 0)
+ 			{
+				FName *music = level.info->MusicMap.CheckKey(args[0]);
+
+				if (music != NULL)
+				{
+					S_ChangeMusic(music->GetChars(), args[1]);
+				}
+ 			}
+			else
+			{
+				S_ChangeMusic("*");
+			}
+ 		}
+ 	}
+ }
+
+void AMusicChanger::PostBeginPlay()
+{
+	// The music changer should consider itself activated if the player
+	// spawns in its sector as well as if it enters the sector during a P_TryMove.
+	Super::PostBeginPlay();
+	if (players[consoleplayer].mo && players[consoleplayer].mo->Sector == this->Sector)
+	{
+		TriggerAction(players[consoleplayer].mo, SECSPAC_Enter);
+	}
 }

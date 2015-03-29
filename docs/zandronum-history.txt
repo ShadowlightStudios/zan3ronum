@@ -12,6 +12,29 @@
 ===============================================================================================================
 
 
+2.0
+---
+
+*+	- Updated Zandronum's (G)ZDoom base to ZDoom SVN revision 2560 / GZDoom SVN revision 900 [Torr Samaho]
+*+	- Added quad-buffered stereo / 3D Vision support to the GL renderer (minimal invasive implementation based on biospud's GZ3Doom). [Torr Samaho]
++	- Added the OS used to the version string the server sends to the launchers (adapted form Konar6's kpatch). [Torr Samaho]
++	- When a banned client is prevented from connecting, the ban reason (if specified in the banlist) is logged to the server console (adapted form Konar6's kpatch). [Torr Samaho]
++	- Added a new compatflags cvar: compat_silentwestspawns, emulates Vanilla compatibility by not performing any spawnfog/sounds for west angled spawns. [Water, Edward-san]
++	- Added compat_maxbloodscalar which will enforce vanilla red screen damage as if the blood_fade_scalar was 1.0. [Water]
++	- Ported CVARINFO lump support and the ACS functions SetCVar, GetCVarString and SetCVarString from ZDoom. This includes support for CVars that are automatically synced between server and clients. User CVars are not support for now though. [Torr Samaho]
++	- Added domination and customteamgame to SBarInfo gamemode detection. [Blzut3]
++	- Added dmflag sv_unblockallies which is exactly like sv_unblockplayers except only unblocks ally players. [Dusk]
++	- The server can now advertise WADs as optional so long as said WADs are not necessary for clients to join. This is controlled with the new command-line option -optfile and the new preferoptionalwads CVar. Note: this is only a hint for server browsers! Authentication is and has always been lump-based and not WAD-based! [Dusk]
++	- Added support for Zandronum-specific gamemodes for the alternative HUD. [Dusk]
+-	- Fixed problems when boss monsters were replaced by Randomspawners in game modes that use map resets, e.g. survival. [Torr Samaho]
+-	- Fixed: Radius_Quake didn't work properly online if the duration was longer than 128 tics. [Torr Samaho]
+-	- Fixed: Blocked poly object doors were not handled properly online. [Torr Samaho]
+!	- Renamed compatflags2 to zacompatflags and moved all Zandronum/Skulltag exclusive compatflags from compatflags to zacompatflags to resolve compatibility problems with ZDoom updates. Launchers and config files need to be updated to account for this change. [Torr Samaho] 
+!	- Renamed dmflags3 to zadmflags, moved all Zandronum/Skulltag exclusive dmflags2 from dmflags2 to zadmflags and changed the remaining dmflags2 values to match the ZDoom values to resolve compatibility problems with future ZDoom updates. Launchers and config files need to be updated to account for this change. [Torr Samaho] 
+!	- Since ZDoom 2.5.0 (and thus Zandronum) doesn't support script numbers higher than 999, Zandronum now gracefully errors out when encountering a script with an invalid number instead of crashing randomly. [Torr Samaho] 
+!	- The Linux binaries can now be debugged with the zandronum.debug file, which is provided in a separated download. [Edward-san]
+
+
 1.4
 ---
 

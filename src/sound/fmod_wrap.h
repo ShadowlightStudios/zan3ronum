@@ -47,7 +47,7 @@ namespace FMOD
 		FMOD global system functions (optional).
 	*/
 	inline FMOD_RESULT Memory_Initialize(void *poolmem, int poollen, FMOD_MEMORY_ALLOCCALLBACK useralloc, FMOD_MEMORY_REALLOCCALLBACK userrealloc, FMOD_MEMORY_FREECALLBACK userfree, FMOD_MEMORY_TYPE memtypeflags = (FMOD_MEMORY_NORMAL | FMOD_MEMORY_XBOX360_PHYSICAL)) { return FMOD_Memory_Initialize(poolmem, poollen, useralloc, userrealloc, userfree, memtypeflags); }
-	inline FMOD_RESULT Memory_GetStats  (int *currentalloced, int *maxalloced) { return FMOD_Memory_GetStats(currentalloced, maxalloced); }
+	//inline FMOD_RESULT Memory_GetStats(int *currentalloced, int *maxalloced) { return FMOD_Memory_GetStats(currentalloced, maxalloced); }
 	inline FMOD_RESULT Debug_SetLevel(FMOD_DEBUGLEVEL level)  { return FMOD_Debug_SetLevel(level); }
 	inline FMOD_RESULT Debug_GetLevel(FMOD_DEBUGLEVEL *level) { return FMOD_Debug_GetLevel(level); }
 	inline FMOD_RESULT File_SetDiskBusy(int busy) { return FMOD_File_SetDiskBusy(busy); }
@@ -131,7 +131,11 @@ namespace FMOD
 		  FMOD_RESULT getOutputHandle        (void **handle) { return FMOD_System_GetOutputHandle(this, handle); }
 		  FMOD_RESULT getChannelsPlaying     (int *channels) { return FMOD_System_GetChannelsPlaying(this, channels); }
 		  FMOD_RESULT getHardwareChannels    (int *num2d, int *num3d, int *total) { return FMOD_System_GetHardwareChannels(this, num2d, num3d, total); }
+#if FMOD_VERSION < 0x42501
 		  FMOD_RESULT getCPUUsage            (float *dsp, float *stream, float *update, float *total) { return FMOD_System_GetCPUUsage(this, dsp, stream, update, total); }
+#else
+		  FMOD_RESULT getCPUUsage            (float *dsp, float *stream, float *geometry, float *update, float *total) { return FMOD_System_GetCPUUsage(this, dsp, stream, geometry, update, total); }
+#endif
 		  FMOD_RESULT getSoundRAM            (int *currentalloced, int *maxalloced, int *total) { return FMOD_System_GetSoundRAM(this, currentalloced, maxalloced, total); }
 		  FMOD_RESULT getNumCDROMDrives      (int *numdrives) { return FMOD_System_GetNumCDROMDrives(this, numdrives); }
 		  FMOD_RESULT getCDROMDriveName      (int drive, char *drivename, int drivenamelen, char *scsiname, int scsinamelen, char *devicename, int devicenamelen) { return FMOD_System_GetCDROMDriveName(this, drive, drivename, drivenamelen, scsiname, scsinamelen, devicename, devicenamelen); }

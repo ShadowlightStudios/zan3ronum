@@ -303,7 +303,7 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 					I_PutInClipboard( szIPString );
 				}
 				else if ( iIndex == 3 )
-					DialogBox( g_hInst, MAKEINTRESOURCE( IDD_SERVERSTATISTICS ), hDlg, SERVERCONSOLE_ServerStatisticsCallback );
+					DialogBox( g_hInst, MAKEINTRESOURCE( IDD_SERVERSTATISTICS ), hDlg, (DLGPROC)SERVERCONSOLE_ServerStatisticsCallback );
 			}
 			break;
 		}
@@ -416,15 +416,15 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 				break;
 			case ID_SETTINGS_CONFIGREDMFLAGS:
 
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_DMFLAGS ), hDlg, SERVERCONSOLE_DMFlagsCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_DMFLAGS ), hDlg, (DLGPROC)SERVERCONSOLE_DMFlagsCallback );
 				break;
 			case ID_SETTINGS_MAPROTATION:
 
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_MAPROTATION ), hDlg, SERVERCONSOLE_MapRotationCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_MAPROTATION ), hDlg, (DLGPROC)SERVERCONSOLE_MapRotationCallback );
 				break;
 			case ID_SERVER_STATISTICS:
 
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_SERVERSTATISTICS ), hDlg, SERVERCONSOLE_ServerStatisticsCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_SERVERSTATISTICS ), hDlg, (DLGPROC)SERVERCONSOLE_ServerStatisticsCallback );
 				break;
 			case ID_ADMIN_ADDREMOVEBOT:
 
@@ -438,15 +438,15 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 			case ID_ADMIN_CHANGEMAP:
 
 				if ( g_bServerLoaded )
-					DialogBox( g_hInst, MAKEINTRESOURCE( IDD_CHANGEMAP ), hDlg, SERVERCONSOLE_ChangeMapCallback );
+					DialogBox( g_hInst, MAKEINTRESOURCE( IDD_CHANGEMAP ), hDlg, (DLGPROC)SERVERCONSOLE_ChangeMapCallback );
 				break;
 			case ID_ADMIN_BANIP:
 
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANIP ), hDlg, SERVERCONSOLE_BanIPCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANIP ), hDlg, (DLGPROC)SERVERCONSOLE_BanIPCallback );
 				break;
 			case ID_ADMIN_VIEWBANLIST:
 
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANLIST ), hDlg, SERVERCONSOLE_BanListCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANLIST ), hDlg, (DLGPROC)SERVERCONSOLE_BanListCallback );
 				break;
 			case IDM_HOW_TO_USE1:
 
@@ -473,11 +473,12 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 				if ( g_bServerLoaded )
 				{
 					// [BB] Load all wads the server loaded and connect to it.
-					FString arguments = NETWORK_GetPWADList( )->size() ? "-file " : "";
-					for( std::list<std::pair<FString, FString> >::iterator i = NETWORK_GetPWADList( )->begin( ); i != NETWORK_GetPWADList( )->end( ); ++i )
+					FString arguments = NETWORK_GetPWADList().Size() ? "-file " : "";
+
+					for ( unsigned int i = 0; i < NETWORK_GetPWADList().Size(); ++i )
 					{
 						// [BB] Load the wads using their full path, they don't need to be in our search path.
-						const int wadnum = Wads.CheckIfWadLoaded ( i->first );
+						const int wadnum = Wads.CheckIfWadLoaded ( NETWORK_GetPWADList()[i].name );
 						const char *wadFullName = ( wadnum != -1 ) ? Wads.GetWadFullName ( wadnum ) : NULL;
 						if ( wadFullName )
 							arguments.AppendFormat( "\"%s\" ", wadFullName );
@@ -769,10 +770,10 @@ void serverconsole_ScoreboardRightClicked( void )
 		if ( iSelection == IDR_PLAYER_BAN_DIALOG )
 		{
 			strcpy( g_szScoreboard_Reason, "" );
-			DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_ADV ), g_hDlg, serverconsole_BanPlayerAdvancedCallback );
+			DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_ADV ), g_hDlg, (DLGPROC)serverconsole_BanPlayerAdvancedCallback );
 		}
 		else if ( strlen( g_szBanLength ))
-			DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_SIMPLE ), g_hDlg, serverconsole_BanPlayerSimpleCallback );
+			DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_SIMPLE ), g_hDlg, (DLGPROC)serverconsole_BanPlayerSimpleCallback );
 	}
 }
 
@@ -1143,7 +1144,7 @@ BOOL CALLBACK serverconsole_BanPlayerSimpleCallback( HWND hDlg, UINT Message, WP
 
 				GetDlgItemText( hDlg, IDC_REASON, g_szScoreboard_Reason, 512 );				
 				EndDialog( hDlg, -1 );
-				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_ADV ), g_hDlg, serverconsole_BanPlayerAdvancedCallback );
+				DialogBox( g_hInst, MAKEINTRESOURCE( IDD_BANPLAYER_ADV ), g_hDlg, (DLGPROC)serverconsole_BanPlayerAdvancedCallback );
 				break;
 			case IDCANCEL:
 
@@ -1346,7 +1347,7 @@ BOOL CALLBACK SERVERCONSOLE_BanListCallback( HWND hDlg, UINT Message, WPARAM wPa
 					if ( lIdx != LB_ERR )
 					{
 						SendDlgItemMessage( hDlg, IDC_BANLIST, LB_GETTEXT, lIdx, (LPARAM)g_szBanEditString );
-						if ( DialogBox( g_hInst, MAKEINTRESOURCE( IDD_EDITBAN ), hDlg, SERVERCONSOLE_EditBanCallback ))
+						if ( DialogBox( g_hInst, MAKEINTRESOURCE( IDD_EDITBAN ), hDlg, (DLGPROC)SERVERCONSOLE_EditBanCallback ))
 						{
 							SendDlgItemMessage( hDlg, IDC_BANLIST, LB_DELETESTRING, lIdx, 0 );
 							SendDlgItemMessage( hDlg, IDC_BANLIST, LB_INSERTSTRING, lIdx, (LPARAM)g_szBanEditString );
@@ -1823,7 +1824,7 @@ void SERVERCONSOLE_SetupColumns( void )
 			ColumnData.pszText = "Wins";
 		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
 			ColumnData.pszText = "Frags";
-		else if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS ) && ( dmflags2 & DF2_AWARD_DAMAGE_INSTEAD_KILLS )))
+		else if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS ) && ( zadmflags & ZADF_AWARD_DAMAGE_INSTEAD_KILLS )))
 			ColumnData.pszText = "Points";
 		else
 			ColumnData.pszText = "Kills";
@@ -1927,7 +1928,7 @@ void SERVERCONSOLE_UpdatePlayerInfo( LONG lPlayer, ULONG ulUpdateFlags )
 			else
 				sprintf( szString, "%d", players[lPlayer].fragcount );
 		}
-		else if (( GAMEMODE_GetCurrentFlags( ) & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetCurrentFlags( ) & GMF_PLAYERSEARNKILLS ) && ( dmflags2 & DF2_AWARD_DAMAGE_INSTEAD_KILLS )))
+		else if (( GAMEMODE_GetCurrentFlags( ) & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetCurrentFlags( ) & GMF_PLAYERSEARNKILLS ) && ( zadmflags & ZADF_AWARD_DAMAGE_INSTEAD_KILLS )))
 			sprintf( szString, "%ld", players[lPlayer].lPointCount );
 		else if ( GAMEMODE_GetCurrentFlags( ) & GMF_PLAYERSEARNFRAGS )
 			sprintf( szString, "%d", players[lPlayer].fragcount );

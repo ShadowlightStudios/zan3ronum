@@ -176,11 +176,11 @@ class ASorcFX1 : public AActor
 public:
 	bool FloorBounceMissile (secplane_t &plane)
 	{
-		fixed_t orgmomz = momz;
+		fixed_t orgvelz = velz;
 
 		if (!Super::FloorBounceMissile (plane))
 		{
-			momz = -orgmomz;		// no energy absorbed
+			velz = -orgvelz;		// no energy absorbed
 			return false;
 		}
 		return true;
@@ -541,7 +541,7 @@ void A_StopBalls(AActor *scary)
 	{
 		actor->StopBall = RUNTIME_CLASS(ASorcBall2);	// Blue
 	}
-	else if((actor->health < (actor->GetDefault()->health >> 1)) &&
+	else if((actor->health < (actor->SpawnHealth() >> 1)) &&
 			(chance < 200))
 	{
 		actor->StopBall = RUNTIME_CLASS(ASorcBall3);	// Green
@@ -717,7 +717,7 @@ void ASorcBall3::CastSorcererSpell ()
 	ang1 = angle - ANGLE_45;
 	ang2 = angle + ANGLE_45;
 	const PClass *cls = PClass::FindClass("SorcFX3");
-	if (health < (GetDefault()->health/3))
+	if (health < (SpawnHealth()/3))
 	{	// Spawn 2 at a time
 		mo = P_SpawnMissileAngle(parent, cls, ang1, 4*FRACUNIT);
 		if (mo) mo->target = parent;
@@ -849,7 +849,7 @@ void A_SorcOffense2(AActor *actor)
 	}
 
 	index = actor->args[4] << 5;
-	actor->args[4] += 15;
+	actor->args[4] = (actor->args[4] + 15) & 255;
 
 	// [BB] If we're the server, tell the clients to set the arguments of actor.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -865,7 +865,7 @@ void A_SorcOffense2(AActor *actor)
 		dist = P_AproxDistance(dest->x - mo->x, dest->y - mo->y);
 		dist = dist/mo->Speed;
 		if(dist < 1) dist = 1;
-		mo->momz = (dest->z-mo->z)/dist;
+		mo->velz = (dest->z - mo->z) / dist;
 
 		// [BB] If we're the server, tell the clients to spawn the missile and set its special2.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -917,9 +917,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpawnFizzle)
 		if (mo)
 		{
 			rangle = angle + ((pr_heresiarch()%5) << 1);
-			mo->momx = FixedMul(pr_heresiarch()%speed,finecosine[rangle]);
-			mo->momy = FixedMul(pr_heresiarch()%speed,finesine[rangle]);
-			mo->momz = FRACUNIT*2;
+			mo->velx = FixedMul(pr_heresiarch()%speed, finecosine[rangle]);
+			mo->vely = FixedMul(pr_heresiarch()%speed, finesine[rangle]);
+			mo->velz = FRACUNIT*2;
 		}
 	}
 }
@@ -1196,9 +1196,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcBallPop)
 	S_Sound (self, CHAN_BODY, "SorcererBallPop", 1, ATTN_NONE);
 	self->flags &= ~MF_NOGRAVITY;
 	self->gravity = FRACUNIT/8;
-	self->momx = ((pr_heresiarch()%10)-5) << FRACBITS;
-	self->momy = ((pr_heresiarch()%10)-5) << FRACBITS;
-	self->momz = (2+(pr_heresiarch()%3)) << FRACBITS;
+	self->velx = ((pr_heresiarch()%10)-5) << FRACBITS;
+	self->vely = ((pr_heresiarch()%10)-5) << FRACBITS;
+	self->velz = (2+(pr_heresiarch()%3)) << FRACBITS;
 	self->special2 = 4*FRACUNIT;		// Initial bounce factor
 	self->args[4] = BOUNCE_TIME_UNIT;	// Bounce time unit
 	self->args[3] = 5;					// Bounce time in seconds

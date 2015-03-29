@@ -25,19 +25,19 @@
 
 // Include all the other Strife stuff here to reduce compile time
 #include "a_acolyte.cpp"
+#include "a_spectral.cpp"
 #include "a_alienspectres.cpp"
 #include "a_coin.cpp"
 #include "a_crusader.cpp"
 #include "a_entityboss.cpp"
 #include "a_inquisitor.cpp"
 #include "a_loremaster.cpp"
-#include "a_macil.cpp"
+//#include "a_macil.cpp"
 #include "a_oracle.cpp"
 #include "a_programmer.cpp"
 #include "a_reaver.cpp"
 #include "a_rebels.cpp"
 #include "a_sentinel.cpp"
-#include "a_spectral.cpp"
 #include "a_stalker.cpp"
 #include "a_strifeitems.cpp"
 #include "a_strifeweapons.cpp"
@@ -608,9 +608,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_TossGib)
 	an = pr_gibtosser() << 24;
 	gib->angle = an;
 	speed = pr_gibtosser() & 15;
-	gib->momx = speed * finecosine[an >> ANGLETOFINESHIFT];
-	gib->momy = speed * finesine[an >> ANGLETOFINESHIFT];
-	gib->momz = (pr_gibtosser() & 15) << FRACBITS;
+	gib->velx = speed * finecosine[an >> ANGLETOFINESHIFT];
+	gib->vely = speed * finesine[an >> ANGLETOFINESHIFT];
+	gib->velz = (pr_gibtosser() & 15) << FRACBITS;
 }
 
 //============================================================================
@@ -665,8 +665,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_CheckTerrain)
 			fixed_t speed = (anglespeed % 10) << (FRACBITS - 4);
 			angle_t finean = (anglespeed / 10) << (32-3);
 			finean >>= ANGLETOFINESHIFT;
-			self->momx += FixedMul (speed, finecosine[finean]);
-			self->momy += FixedMul (speed, finesine[finean]);
+			self->velx += FixedMul (speed, finecosine[finean]);
+			self->vely += FixedMul (speed, finesine[finean]);
 		}
 	}
 }
@@ -700,13 +700,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_ItBurnsItBurns)
 		self->player->ReadyWeapon = NULL;
 		self->player->PendingWeapon = WP_NOCHANGE;
 		self->player->playerstate = PST_LIVE;
+		self->player->extralight = 3;
 	}
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_DropFire)
 {
 	AActor *drop = Spawn("FireDroplet", self->x, self->y, self->z + 24*FRACUNIT, ALLOW_REPLACE);
-	drop->momz = -FRACUNIT;
+	drop->velz = -FRACUNIT;
 	P_RadiusAttack (self, self, 64, 64, NAME_Fire, false);
 }
 
@@ -731,6 +732,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_HandLower)
 		{
 			P_SetPsprite (self->player, ps_weapon, NULL);
 		}
+		if (self->player->extralight > 0) self->player->extralight--;
 	}
 }
 

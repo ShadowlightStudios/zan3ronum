@@ -60,8 +60,9 @@
 #include "i_system.h"
 #include "sv_commands.h"
 #include "templates.h"
+#include "d_netinf.h"
 
-CVAR(Flag, sv_nounlagged, dmflags3, DF3_NOUNLAGGED);
+CVAR(Flag, sv_nounlagged, zadmflags, ZADF_NOUNLAGGED);
 CVAR( Bool, sv_unlagged_debugactors, false, 0 )
 
 bool reconciledGame = false;
@@ -136,7 +137,7 @@ void UNLAGGED_Reconcile( AActor *actor )
 {
 	//Only do anything if the actor to be reconciled is a player,
 	//it's on a server with unlagged on, and reconciliation is not being blocked
-	if ( !actor->player || (NETWORK_GetState() != NETSTATE_SERVER) || ( dmflags3 & DF3_NOUNLAGGED ) ||
+	if ( !actor->player || (NETWORK_GetState() != NETSTATE_SERVER) || ( zadmflags & ZADF_NOUNLAGGED ) ||
 		 ( ( actor->player->userinfo.clientFlags & CLIENTFLAGS_UNLAGGED ) == 0 ) || ( reconciliationBlockers > 0 ) )
 		return;
 
@@ -225,7 +226,7 @@ void UNLAGGED_Reconcile( AActor *actor )
 				{
 					//shooter was standing on the floor, let's pull him down to his floor if
 					//he wasn't falling
-					if ( (actor->z == serverFloorZ) && (actor->momz >= 0) )
+					if ( (actor->z == serverFloorZ) && (actor->velz >= 0) )
 						actor->z = actor->floorz;
 
 					//todo: more correction for floor moving up
@@ -244,8 +245,8 @@ void UNLAGGED_SwapSectorUnlaggedStatus( )
 
 	for (int i = 0; i < numsectors; ++i)
 	{
-		swap ( sectors[i].floorplane.d, sectors[i].floorplane.restoreD );
-		swap ( sectors[i].ceilingplane.d, sectors[i].ceilingplane.restoreD );
+		swapvalues ( sectors[i].floorplane.d, sectors[i].floorplane.restoreD );
+		swapvalues ( sectors[i].ceilingplane.d, sectors[i].ceilingplane.restoreD );
 	}
 }
 
@@ -349,7 +350,7 @@ bool UNLAGGED_DrawRailClientside ( AActor *attacker )
 		return false;
 
 	// [BB] Rails are only client side when unlagged is on.
-	if ( ( dmflags3 & DF3_NOUNLAGGED ) || ( ( attacker->player->userinfo.clientFlags & CLIENTFLAGS_UNLAGGED ) == 0 ) )
+	if ( ( zadmflags & ZADF_NOUNLAGGED ) || ( ( attacker->player->userinfo.clientFlags & CLIENTFLAGS_UNLAGGED ) == 0 ) )
 		return false;
 
 	// [BB] A client should only draw rails for its own player.

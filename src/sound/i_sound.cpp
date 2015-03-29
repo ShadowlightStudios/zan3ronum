@@ -133,7 +133,7 @@ public:
 		SoundHandle retval = { NULL };
 		return retval;
 	}
-	SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits)
+	SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart)
 	{
 		SoundHandle retval = { NULL };
 		return retval;
@@ -169,7 +169,7 @@ public:
 		return NULL;
 	}
 
-	// Starts a sound. (No, not really.)
+	// Starts a sound.
 	FISoundChannel *StartSound (SoundHandle sfx, float vol, int pitch, int chanflags, FISoundChannel *reuse_chan)
 	{
 		return NULL;
@@ -179,8 +179,19 @@ public:
 		return NULL;
 	}
 
+	// Marks a channel's start time without actually playing it.
+	void MarkStartTime (FISoundChannel *chan)
+	{
+	}
+
 	// Returns position of sound on this channel, in samples.
 	unsigned int GetPosition(FISoundChannel *chan)
+	{
+		return 0;
+	}
+
+	// Gets a channel's audibility (real volume).
+	float GetAudibility(FISoundChannel *chan)
 	{
 		return 0;
 	}

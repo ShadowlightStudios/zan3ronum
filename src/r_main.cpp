@@ -55,8 +55,8 @@
 #include "r_plane.h"
 #include "r_3dfloors.h"
 #include "v_palette.h"
-#include "gl/gl_data.h"
-#include "gl/gl_texture.h"
+#include "po_man.h"
+//#include "gl/data/gl_data.h"
 #include "gl/gl_functions.h"
 
 // [BC] New #includes.
@@ -112,6 +112,7 @@ static float CurrentVisibility = 8.f;
 static fixed_t MaxVisForWall;
 static fixed_t MaxVisForFloor;
 static FRandom pr_torchflicker ("TorchFlicker");
+static FRandom pr_hom;
 static TArray<InterpolationViewer> PastViewers;
 static int centerxwide;
 static bool polyclipped;
@@ -123,6 +124,7 @@ bool r_dontmaplines;
 CVAR (String, r_viewsize, "", CVAR_NOSET)
 CVAR (Int, r_polymost, 0, 0)
 CVAR (Bool, r_deathcamera, false, CVAR_ARCHIVE)
+CVAR (Int, r_clearbuffer, 0, 0)
 
 fixed_t			r_BaseVisibility;
 fixed_t			r_WallVisibility;
@@ -153,6 +155,7 @@ int 			validcount = 1; 	// increment every time a check is made
 FDynamicColormap*basecolormap;		// [RH] colormap currently drawing with
 int				fixedlightlev;
 lighttable_t	*fixedcolormap;
+FSpecialColormap *realfixedcolormap;
 float			WallTMapScale;
 float			WallTMapScale2;
 
@@ -236,6 +239,27 @@ static bool NoInterpolateView;
 
 //==========================================================================
 //
+// SlopeDiv
+//
+// Utility function, called by R_PointToAngle.
+//
+//==========================================================================
+
+angle_t SlopeDiv (unsigned int num, unsigned den)
+{
+	unsigned int ans;
+
+	if (den < 512)
+		return (ANG45 - 1); //tantoangle[SLOPERANGE]
+
+	ans = (num << 3) / (den >> 8);
+
+	return ans <= SLOPERANGE ? tantoangle[ans] : (ANG45 - 1);
+}
+
+
+//==========================================================================
+//
 // R_PointToAngle
 //
 // To get a global angle from cartesian coordinates, the coordinates are
@@ -247,10 +271,6 @@ static bool NoInterpolateView;
 
 angle_t R_PointToAngle2 (fixed_t x1, fixed_t y1, fixed_t x, fixed_t y)
 {
-#if 1
-	// The precision of the code below is abysmal so use the CRT atan2 function instead!
-	return quickertoint((float)atan2f(y-y1, x-x1) * (ANGLE_180/M_PI));
-#else
 	x -= x1;
 	y -= y1;
 
@@ -259,69 +279,70 @@ angle_t R_PointToAngle2 (fixed_t x1, fixed_t y1, fixed_t x, fixed_t y)
 		return 0;
 	}
 
-	fixed_t ax = abs (x);
-	fixed_t ay = abs (y);
-	int div;
-	angle_t angle;
+	// We need to be aware of overflows here. If the values get larger than INT_MAX/4
+	// this code won't work anymore.
 
-	if (ax > ay)
+	if (x < INT_MAX/4 && x > -INT_MAX/4 && y < INT_MAX/4 && y > -INT_MAX/4)
 	{
-		swap (ax, ay);
+		if (x >= 0)
+		{
+			if (y >= 0)
+			{
+				if (x > y)
+				{ // octant 0
+					return SlopeDiv(y, x);
+				}
+				else
+				{ // octant 1
+					return ANG90 - 1 - SlopeDiv(x, y);
+				}
+			}
+			else // y < 0
+			{
+				y = -y;
+				if (x > y)
+				{ // octant 8
+					return 0 - SlopeDiv(y, x);
+				}
+				else
+				{ // octant 7
+					return ANG270 + SlopeDiv(x, y);
+				}
+			}
+		}
+		else // x < 0
+		{
+			x = -x;
+			if (y >= 0)
+			{
+				if (x > y)
+				{ // octant 3
+					return ANG180 - 1 - SlopeDiv(y, x);
+				}
+				else
+				{ // octant 2
+					return ANG90 + SlopeDiv(x, y);
+				}
+			}
+			else // y < 0
+			{
+				y = -y;
+				if (x > y)
+				{ // octant 4
+					return ANG180 + SlopeDiv(y, x);
+				}
+				else
+				{ // octant 5
+					return ANG270 - 1 - SlopeDiv(x, y);
+				}
+			}
+		}
 	}
-	div = SlopeDiv (ax, ay);
-	angle = tantoangle[div];
-
-	if (x >= 0)
+	else
 	{
-		if (y >= 0)
-		{
-			if (x > y)
-			{ // octant 0
-				return angle;
-			}
-			else
-			{ // octant 1
-				return ANG90 - 1 - angle;
-			}
-		}
-		else // y < 0
-		{
-			if (x > -y)
-			{ // octant 8
-				return (angle_t)-(SDWORD)angle;
-			}
-			else
-			{ // octant 7
-				return ANG270 + angle;
-			}
-		}
+		// we have to use the slower but more precise floating point atan2 function here.
+		return xs_RoundToUInt(atan2(double(y), double(x)) * (ANGLE_180/M_PI));
 	}
-	else // x < 0
-	{
-		if (y >= 0)
-		{
-			if (-x > y)
-			{ // octant 3
-				return ANG180 - 1 - angle;
-			}
-			else
-			{ // octant 2
-				return ANG90 + angle;
-			}
-		}
-		else // y < 0
-		{
-			if (x < y)
-			{ // octant 4
-				return ANG180 + angle;
-			}
-			else
-			{ // octant 5
-				return ANG270 - 1 - angle;
-			}
-		}
-	}
-#endif
 }
 
 //==========================================================================
@@ -370,7 +391,7 @@ fixed_t R_PointToDist2 (fixed_t dx, fixed_t dy)
 
 	if (dy > dx)
 	{
-		swap (dx, dy);
+		swapvalues (dx, dy);
 	}
 
 	return FixedDiv (dx, finecosine[tantoangle[FixedDiv (dy, dx) >> DBITS] >> ANGLETOFINESHIFT]);
@@ -465,7 +486,7 @@ void R_InitTextureMapping ()
 	}
 	for (i = 0; i < centerx; i++)
 	{
-		xtoviewangle[i] = (angle_t)(-(signed)xtoviewangle[viewwidth-i-1]);
+		xtoviewangle[i] = (angle_t)(-(signed)xtoviewangle[viewwidth-i]);
 	}
 }
 
@@ -526,7 +547,7 @@ void R_SetVisibility (float vis)
 		return;
 	}
 
-	r_BaseVisibility = toint (vis * 65536.f);
+	r_BaseVisibility = xs_RoundToInt(vis * 65536.f);
 
 	// Prevent overflow on walls
 	if (r_BaseVisibility < 0 && r_BaseVisibility < -MaxVisForWall)
@@ -704,7 +725,7 @@ void R_ExecuteSetViewSize ()
 //
 //==========================================================================
 
-CUSTOM_CVAR (Int, screenblocks, 11, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+CUSTOM_CVAR (Int, screenblocks, 11, CVAR_ARCHIVE)
 {
 	if (self > 12)
 		self = 12;
@@ -785,47 +806,6 @@ static void R_Shutdown ()
 
 //==========================================================================
 //
-// I am keeping both the original nodes from the WAD and the ones
-// created for the GL renderer. THe original set is only being used
-// to get the sector for in-game positioning of actors but not for rendering.
-//
-// Unfortunately this is necessary because ZDBSP is much more sensitive
-// to sloppy mapping practices that produce overlapping sectors.
-// The crane in P:AR E1M3 is a good example that would be broken If
-// I didn't do this.
-//
-//==========================================================================
-
-
-//==========================================================================
-//
-// P_PointInSubsector
-//
-//==========================================================================
-
-subsector_t *P_PointInSubsector (fixed_t x, fixed_t y)
-{
-	node_t *node;
-	int side;
-
-	// single subsector is a special case
-	if (numgamenodes == 0)
-		return gamesubsectors;
-				
-	node = gamenodes + numgamenodes - 1;
-
-	do
-	{
-		side = R_PointOnSide (x, y, node);
-		node = (node_t *)node->children[side];
-	}
-	while (!((size_t)node & 1));
-		
-	return (subsector_t *)((BYTE *)node - 1);
-}
-
-//==========================================================================
-//
 // R_PointInSubsector
 //
 //==========================================================================
@@ -901,11 +881,11 @@ void R_InterpolateView (player_t *player, fixed_t frac, InterpolationViewer *ivi
 			// Avoid overflowing viewpitch (can happen when a netgame is stalled)
 			if (viewpitch + delta <= viewpitch)
 			{
-				viewpitch = +ANGLE_1*MAX_DN_ANGLE;
+				viewpitch = screen->GetMaxViewPitch(true);
 			}
 			else
 			{
-				viewpitch = MIN(viewpitch + delta, +ANGLE_1*MAX_DN_ANGLE);
+				viewpitch = MIN(viewpitch + delta, screen->GetMaxViewPitch(true));
 			}
 		}
 		else if (delta < 0)
@@ -913,11 +893,11 @@ void R_InterpolateView (player_t *player, fixed_t frac, InterpolationViewer *ivi
 			// Avoid overflowing viewpitch (can happen when a netgame is stalled)
 			if (viewpitch + delta >= viewpitch)
 			{
-				viewpitch = -ANGLE_1*MAX_UP_ANGLE;
+				viewpitch = screen->GetMaxViewPitch(false);
 			}
 			else
 			{
-				viewpitch = MAX(viewpitch + delta, -ANGLE_1*MAX_UP_ANGLE);
+				viewpitch = MAX(viewpitch + delta, screen->GetMaxViewPitch(false));
 			}
 		}
 	}
@@ -1096,7 +1076,7 @@ void R_SetupFrame (AActor *actor)
 		((/*player->*/players[consoleplayer].cheats & CF_CHASECAM) || (r_deathcamera && camera->health <= 0)) &&
 		(camera->RenderStyle.BlendOp != STYLEOP_None) &&
 		!(camera->renderflags & RF_INVISIBLE) &&
-		camera->sprite != 0)	// Sprite 0 is always TNT1
+		camera->sprite != SPR_TNT1)
 	{
 		// [RH] Use chasecam view
 		P_AimCamera (camera, iview->nviewx, iview->nviewy, iview->nviewz, viewsector);
@@ -1123,7 +1103,7 @@ void R_SetupFrame (AActor *actor)
 		iview->otic = nowtic;
 	}
 
-	R_UpdateAnimations (I_MSTime());
+	R_UpdateAnimations (I_FPSTime());
 	r_TicFrac = I_GetTimeFrac (&r_FrameTime);
 	if (cl_capfps || r_NoInterpolate)
 	{
@@ -1170,6 +1150,7 @@ void R_SetupFrame (AActor *actor)
 	}
 
 	extralight = camera->player ? camera->player->extralight : 0;
+	newblend = 0;
 
 	// killough 3/20/98, 4/4/98: select colormap based on player status
 	// [RH] Can also select a blend
@@ -1197,21 +1178,19 @@ void R_SetupFrame (AActor *actor)
 			}
 		}
 	}
-	else if (viewsector->heightsec &&
-		!(viewsector->heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC))
-	{
-		const sector_t *s = viewsector->heightsec;
-		newblend = viewz < s->floorplane.ZatPoint (viewx, viewy)
-			? s->bottommap
-			: viewz > s->ceilingplane.ZatPoint (viewx, viewy)
-			? s->topmap
-			: s->midmap;
-		if (APART(newblend) == 0 && newblend >= numfakecmaps)
-			newblend = 0;
-	}
 	else
 	{
-		newblend = 0;
+		const sector_t *s = viewsector->GetHeightSec();
+		if (s != NULL)
+		{
+			newblend = viewz < s->floorplane.ZatPoint (viewx, viewy)
+				? s->bottommap
+				: viewz > s->ceilingplane.ZatPoint (viewx, viewy)
+				? s->topmap
+				: s->midmap;
+			if (APART(newblend) == 0 && newblend >= numfakecmaps)
+				newblend = 0;
+		}
 	}
 
 	// [RH] Don't override testblend unless entering a sector with a
@@ -1236,42 +1215,36 @@ void R_SetupFrame (AActor *actor)
 		}
 	}
 
+	realfixedcolormap = NULL;
 	fixedcolormap = NULL;
-	fixedlightlev = 0;
+	fixedlightlev = -1;
 
-	if (player != NULL && camera == player->mo && player->fixedcolormap)
+	if (player != NULL && camera == player->mo)
 	{
-		if (player->fixedcolormap < NUMCOLORMAPS)
+		if (player->fixedcolormap >= 0 && player->fixedcolormap < (int)SpecialColormaps.Size())
 		{
-			fixedlightlev = player->fixedcolormap*256;
-			fixedcolormap = NormalLight.Maps;
+			realfixedcolormap = &SpecialColormaps[player->fixedcolormap];
+			if (RenderTarget == screen && (DFrameBuffer *)screen->Accel2D)
+			{
+				// Render everything fullbright. The copy to video memory will
+				// apply the special colormap, so it won't be restricted to the
+				// palette.
+				fixedcolormap = realcolormaps;
+			}
+			else
+			{
+				fixedcolormap = SpecialColormaps[player->fixedcolormap].Colormap;
+			}
 		}
-		else switch (player->fixedcolormap)
+		else if (player->fixedlightlevel >= 0 && player->fixedlightlevel < NUMCOLORMAPS)
 		{
-		case INVERSECOLORMAP:
-			fixedcolormap = InverseColormap;
-			break;
-
-		case REDCOLORMAP:
-			fixedcolormap = RedColormap;
-			break;
-
-		case GREENCOLORMAP:
-			fixedcolormap = GreenColormap;
-			break;
-
-		case GOLDCOLORMAP:
-			fixedcolormap = GoldColormap;
-			break;
-
-		default:
-			break;
+			fixedlightlev = player->fixedlightlevel * 256;
 		}
 	}
 	// [RH] Inverse light for shooting the Sigil
-	else if (extralight == INT_MIN)
+	if (fixedcolormap == NULL && extralight == INT_MIN)
 	{
-		fixedcolormap = InverseColormap;
+		fixedcolormap = SpecialColormaps[INVERSECOLORMAP].Colormap;
 		extralight = 0;
 	}
 
@@ -1340,6 +1313,34 @@ void R_SetupFrame (AActor *actor)
 	if (r_polymost)
 	{
 		polyclipped = RP_SetupFrame (false);
+	}
+
+	if (RenderTarget == screen && r_clearbuffer != 0)
+	{
+		int color;
+		int hom = r_clearbuffer;
+
+		if (hom == 3)
+		{
+			hom = ((I_FPSTime() / 128) & 1) + 1;
+		}
+		if (hom == 1)
+		{
+			color = GPalette.BlackIndex;
+		}
+		else if (hom == 2)
+		{
+			color = GPalette.WhiteIndex;
+		}
+		else if (hom == 4)
+		{
+			color = (I_FPSTime() / 32) & 255;
+		}
+		else
+		{
+			color = pr_hom();
+		}
+		memset(RenderTarget->GetBuffer(), color, RenderTarget->GetPitch() * RenderTarget->GetHeight());
 	}
 }
 
@@ -1569,6 +1570,8 @@ void R_RenderActorView (AActor *actor, bool dontmaplines)
 	{
 		camera->renderflags |= RF_INVISIBLE;
 	}
+	// Link the polyobjects right before drawing the scene to reduce the amounts of calls to this function
+	PO_LinkToSubsectors();
 	if (r_polymost < 2)
 	{
 		R_RenderBSPNode (nodes + numnodes - 1);	// The head node is the last node output.

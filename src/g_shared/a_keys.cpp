@@ -22,7 +22,12 @@ struct OneKey
 
 	bool check(AActor * owner)
 	{
-		return !!owner->FindInventory(key);
+		// P_GetMapColorForKey() checks the key directly
+		if (owner->IsKindOf (RUNTIME_CLASS(AKey)))
+			return owner->IsA(key);
+		// Other calls check an actor that may have a key in its inventory.
+		else
+			return !!owner->FindInventory(key);
 	}
 };
 
@@ -71,6 +76,7 @@ struct Lock
 					return true;
 				}
 			}
+			return false;
 		}
 		else for(unsigned int i=0;i<keylist.Size();i++)
 		{

@@ -5,6 +5,7 @@
 #include "info.h"
 #include "s_sound.h"
 #include "sc_man.h"
+#include "cmdlib.h"
 
 
 class FScanner;
@@ -25,6 +26,10 @@ struct FFlagDef
 
 FFlagDef *FindFlag (const PClass *type, const char *part1, const char *part2);
 void HandleDeprecatedFlags(AActor *defaults, FActorInfo *info, bool set, int index);
+bool CheckDeprecatedFlags(AActor *actor, FActorInfo *info, int index);
+const char *GetFlagName(int flagnum, int flagoffset);
+
+#define FLAG_NAME(flagnum, flagvar) GetFlagName(flagnum, myoffsetof(AActor, flagvar))
 
 
 //==========================================================================
@@ -44,6 +49,8 @@ enum EStateDefineFlags
 	SDF_WAIT = 3,
 	SDF_LABEL = 4,
 	SDF_INDEX = 5,
+	SDF_MASK = 7,
+	SDF_DEHACKED = 8,	// Identify a state as having been modified by a dehacked lump
 };
 
 struct FStateDefine
@@ -120,7 +127,7 @@ public:
 	~FStateExpressions();
 	int Add(FxExpression *x, const PClass *o, bool c);
 	int Reserve(int num, const PClass *cls);
-	void Set(int num, FxExpression *x);
+	void Set(int num, FxExpression *x, bool cloned = false);
 	void Copy(int dest, int src, int cnt);
 	int ResolveAll();
 	FxExpression *Get(int no);
@@ -175,8 +182,7 @@ struct AFuncDesc
 	actionf_p Function;
 };
 
-AFuncDesc * FindFunction(const char * string);
-
+AFuncDesc *FindFunction(const char * string);
 
 
 void ParseStates(FScanner &sc, FActorInfo *actor, AActor *defaults, Baggage &bag);
@@ -211,6 +217,7 @@ enum
 	DEPF_HERETICBOUNCE,
 	DEPF_HEXENBOUNCE,
 	DEPF_DOOMBOUNCE,
+	DEPF_INTERHUBSTRIP,
 };
 
 enum
@@ -224,6 +231,7 @@ enum
 	ACMETA_MeleeDamage,
 	ACMETA_MissileName,
 	ACMETA_MissileHeight,
+	ACMETA_Lump,
 };
 
 
@@ -250,11 +258,11 @@ enum EDefinitionType
 #define GCC_MSEG
 #else
 #define MSVC_ASEG
-#define GCC_ASEG __attribute__((section(AREG_SECTION)))
+#define GCC_ASEG __attribute__((section(SECTION_AREG)))
 #define MSVC_PSEG
-#define GCC_PSEG __attribute__((section(GREG_SECTION)))
+#define GCC_PSEG __attribute__((section(SECTION_GREG)))
 #define MSVC_MSEG
-#define GCC_MSEG __attribute__((section(MREG_SECTION)))
+#define GCC_MSEG __attribute__((section(SECTION_MREG)))
 #endif
 
 
@@ -342,6 +350,10 @@ int MatchString (const char *in, const char **strings);
 	static FVariableInfo GlobalDef__##name = { #name, myoffsetof(cls, name), RUNTIME_CLASS(cls) }; \
 	MSVC_MSEG FVariableInfo *infoptr_GlobalDef__##name GCC_MSEG = &GlobalDef__##name;
 
+#define DEFINE_MEMBER_VARIABLE_ALIAS(name, alias, cls) \
+	static FVariableInfo GlobalDef__##name = { #name, myoffsetof(cls, alias), RUNTIME_CLASS(cls) }; \
+	MSVC_MSEG FVariableInfo *infoptr_GlobalDef__##name GCC_MSEG = &GlobalDef__##name;
+
 	
 
 
@@ -394,7 +406,7 @@ FName EvalExpressionName (DWORD x, AActor *self);
 #define ACTION_PARAM_FIXED(var,i) \
 	fixed_t var = EvalExpressionFix(ParameterIndex+i, self);
 #define ACTION_PARAM_FLOAT(var,i) \
-	float var = EvalExpressionF(ParameterIndex+i, self);
+	float var = float(EvalExpressionF(ParameterIndex+i, self));
 #define ACTION_PARAM_CLASS(var,i) \
 	const PClass *var = EvalExpressionClass(ParameterIndex+i, self);
 #define ACTION_PARAM_STATE(var,i) \

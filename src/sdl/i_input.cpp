@@ -17,6 +17,7 @@
 #include "dikeys.h"
 #include "templates.h"
 #include "s_sound.h"
+#include "m_joy.h"
 // [BB] New #includes.
 #include "chat.h"
 
@@ -32,112 +33,6 @@ CVAR (Bool,  use_mouse,				true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool,  m_noprescale,			false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool,	 m_filter,				false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool,  sdl_nokeyrepeat,		false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-
-float JoyAxes[6];
-//static int JoyActive;
-//static BYTE JoyButtons[128];
-//static BYTE JoyPOV[4];
-static BYTE JoyAxisMap[8];
-static float JoyAxisThresholds[8];
-char *JoyAxisNames[8];
-static const BYTE POVButtons[9] = { 0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08, 0x09, 0x00 };
-
-TArray<GUIDName> JoystickNames;
-CVAR (Bool,  use_joystick,	false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (GUID, joy_guid,		NULL, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
-
-static void MapAxis (FIntCVar &var, int num)
-{
-	if (var < JOYAXIS_NONE || var > JOYAXIS_UP)
-	{
-		var = JOYAXIS_NONE;
-	}
-	else
-	{
-		JoyAxisMap[num] = var;
-	}
-}
-
-CUSTOM_CVAR (Int, joy_xaxis,	JOYAXIS_YAW,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 0);
-}
-CUSTOM_CVAR (Int, joy_yaxis,	JOYAXIS_FORWARD, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 1);
-}
-CUSTOM_CVAR (Int, joy_zaxis,	JOYAXIS_SIDE,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 2);
-}
-CUSTOM_CVAR (Int, joy_xrot,		JOYAXIS_NONE,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 3);
-}
-CUSTOM_CVAR (Int, joy_yrot,		JOYAXIS_NONE,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 4);
-}
-CUSTOM_CVAR (Int, joy_zrot,		JOYAXIS_PITCH,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 5);
-}
-CUSTOM_CVAR (Int, joy_slider,	JOYAXIS_NONE,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 6);
-}
-CUSTOM_CVAR (Int, joy_dial,		JOYAXIS_NONE,	 CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	MapAxis (self, 7);
-}
-
-CUSTOM_CVAR (Float, joy_xthreshold,		0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[0] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_ythreshold,		0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[1] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_zthreshold,		0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[2] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_xrotthreshold,	0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[3] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_yrotthreshold,	0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[4] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_zrotthreshold,	0.15f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[5] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_sliderthreshold,	0.f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[6] = clamp (self * 256.f, 0.f, 256.f);
-}
-CUSTOM_CVAR (Float, joy_dialthreshold,	0.f,	CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-{
-	JoyAxisThresholds[7] = clamp (self * 256.f, 0.f, 256.f);
-}
-
-CVAR (Float, joy_speedmultiplier,1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (Float, joy_yawspeed,		-1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (Float, joy_pitchspeed,	-.75f,CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (Float, joy_forwardspeed,	-1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (Float, joy_sidespeed,		 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (Float, joy_upspeed,		-1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-
-static FBaseCVar * const JoyConfigVars[] =
-{
-	&joy_xaxis, &joy_yaxis, &joy_zaxis, &joy_xrot, &joy_yrot, &joy_zrot, &joy_slider, &joy_dial,
-	&joy_xthreshold, &joy_ythreshold, &joy_zthreshold, &joy_xrotthreshold, &joy_yrotthreshold, &joy_zrotthreshold, &joy_sliderthreshold, &joy_dialthreshold,
-	&joy_speedmultiplier, &joy_yawspeed, &joy_pitchspeed, &joy_forwardspeed, &joy_sidespeed,
-	&joy_upspeed
-};
 
 EXTERN_CVAR (Bool, fullscreen)
 
@@ -172,14 +67,14 @@ static WORD DIKToKeySym[256] =
 	0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, SDLK_KP_DIVIDE, 0, SDLK_SYSREQ,
 	SDLK_RALT, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, SDLK_HOME,
+	0, 0, 0, 0, 0, SDLK_PAUSE, 0, SDLK_HOME,
 	SDLK_UP, SDLK_PAGEUP, 0, SDLK_LEFT, 0, SDLK_RIGHT, 0, SDLK_END,
 	SDLK_DOWN, SDLK_PAGEDOWN, SDLK_INSERT, SDLK_DELETE, 0, 0, 0, 0,
 	0, 0, 0, SDLK_LSUPER, SDLK_RSUPER, SDLK_MENU, SDLK_POWER, 0,
 	0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, SDLK_PAUSE
+	0, 0, 0, 0, 0, 0, 0, 0
 };
 
 static void FlushDIKState (int low=0, int high=NUM_KEYS-1)
@@ -392,14 +287,8 @@ void MessagePump (const SDL_Event &sev)
 			if (sev.active.gain == 0)
 			{ // kill focus
 				FlushDIKState ();
-				if (!paused)
-					S_PauseSound (false);
 			}
-			else
-			{ // set focus
-				if (!paused)
-					S_ResumeSound ();
-			}
+			S_SetSoundPaused(sev.active.gain);
 		}
 		break;
 
@@ -572,4 +461,22 @@ void I_StartFrame ()
 	{
 		InitKeySymMap ();
 	}
+}
+
+void I_GetJoysticks(TArray<IJoystickConfig *> &sticks)
+{
+	sticks.Clear();
+}
+
+void I_GetAxes(float axes[NUM_JOYAXIS])
+{
+	for (int i = 0; i < NUM_JOYAXIS; ++i)
+	{
+		axes[i] = 0;
+	}
+}
+
+IJoystickConfig *I_UpdateDeviceList()
+{
+	return NULL;
 }

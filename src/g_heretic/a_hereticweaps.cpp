@@ -93,7 +93,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_StaffAttack)
 	angle = self->angle;
 	angle += pr_sap.Random2() << 18;
 	slope = P_AimLineAttack (self, angle, MELEERANGE, &linetarget);
-	P_LineAttack (self, angle, MELEERANGE, slope, damage, NAME_Melee, puff, true);
+	P_LineAttack (self, angle, MELEERANGE, slope, damage, NAME_Melee, puff, true, &linetarget);
 
 	// [BC] Apply spread.
 	if ( player->cheats & CF_SPREAD )
@@ -196,7 +196,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireGoldWandPL2)
 	int i;
 	angle_t angle;
 	int damage;
-	fixed_t momz;
+	fixed_t velz;
 	player_t *player;
 	AActor	*pMissile;
 
@@ -221,12 +221,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireGoldWandPL2)
 	}
 
 	angle_t pitch = P_BulletSlope(self);
-	momz = FixedMul (GetDefaultByName("GoldWandFX2")->Speed,
+	velz = FixedMul (GetDefaultByName("GoldWandFX2")->Speed,
 		finetangent[FINEANGLES/4-((signed)pitch>>ANGLETOFINESHIFT)]);
-	pMissile = P_SpawnMissileAngle (self, PClass::FindClass("GoldWandFX2"), self->angle-(ANG45/8), momz);
+	pMissile = P_SpawnMissileAngle (self, PClass::FindClass("GoldWandFX2"), self->angle-(ANG45/8), velz);
 	if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_SpawnMissileExact( pMissile );
-	pMissile = P_SpawnMissileAngle (self, PClass::FindClass("GoldWandFX2"), self->angle+(ANG45/8), momz);
+	pMissile = P_SpawnMissileAngle (self, PClass::FindClass("GoldWandFX2"), self->angle+(ANG45/8), velz);
 	if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_SpawnMissileExact( pMissile );
 
@@ -242,11 +242,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireGoldWandPL2)
 	// [BC] Apply spread.
 	if ( player->cheats & CF_SPREAD )
 	{
-		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle - ( ANG45 / 8 ) + ( ANGLE_45 / 3 ), momz );
+		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle - ( ANG45 / 8 ) + ( ANGLE_45 / 3 ), velz );
 		if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SpawnMissileExact( pMissile );
 
-		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle + ( ANG45 / 8 ) + ( ANGLE_45 / 3 ), momz );
+		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle + ( ANG45 / 8 ) + ( ANGLE_45 / 3 ), velz );
 		if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SpawnMissileExact( pMissile );
 
@@ -258,11 +258,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireGoldWandPL2)
 			angle += ((ANG45/8)*2)/4;
 		}
 
-		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle - ( ANG45 / 8 ) - ( ANGLE_45 / 3 ), momz );
+		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle - ( ANG45 / 8 ) - ( ANGLE_45 / 3 ), velz );
 		if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SpawnMissileExact( pMissile );
 
-		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle + ( ANG45 / 8 ) - ( ANGLE_45 / 3 ), momz );
+		pMissile = P_SpawnMissileAngle( self, PClass::FindClass("GoldWandFX2"), self->angle + ( ANG45 / 8 ) - ( ANGLE_45 / 3 ), velz );
 		if ( pMissile && NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SpawnMissileExact( pMissile );
 
@@ -428,7 +428,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_GauntletAttack)
 		pufftype = PClass::FindClass("GauntletPuff1");
 	}
 	slope = P_AimLineAttack (self, angle, dist, &linetarget);
-	P_LineAttack (self, angle, dist, slope, damage, NAME_Melee, pufftype);
+	P_LineAttack (self, angle, dist, slope, damage, NAME_Melee, pufftype, false, &linetarget);
 	if (!linetarget)
 	{
 		if (pr_gatk() > 64)
@@ -512,7 +512,7 @@ int AMaceFX4::DoSpecialDamage (AActor *target, int damage)
 			return -1;
 		}
 	}
-	return 1000000; // Something's gonna die
+	return TELEFRAG_DAMAGE; // Something's gonna die
 }
 
 //----------------------------------------------------------------------------
@@ -548,15 +548,15 @@ void FireMacePL1B (AActor *actor)
 
 	ball = Spawn("MaceFX2", actor->x, actor->y, actor->z + 28*FRACUNIT 
 		- actor->floorclip, ALLOW_REPLACE);
-	ball->momz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
+	ball->velz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
 		finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 	angle = actor->angle;
 	ball->target = actor;
 	ball->angle = angle;
 	ball->z += 2*finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 	angle >>= ANGLETOFINESHIFT;
-	ball->momx = (actor->momx>>1)+FixedMul(ball->Speed, finecosine[angle]);
-	ball->momy = (actor->momy>>1)+FixedMul(ball->Speed, finesine[angle]);
+	ball->velx = (actor->velx>>1) + FixedMul(ball->Speed, finecosine[angle]);
+	ball->vely = (actor->vely>>1) + FixedMul(ball->Speed, finesine[angle]);
 	S_Sound (ball, CHAN_BODY, "weapons/maceshoot", 1, ATTN_NORM);
 
 	// [BC] If we're the server, spawn the ball and play the sound.
@@ -571,15 +571,15 @@ void FireMacePL1B (AActor *actor)
 	{
 		ball = Spawn("MaceFX2", actor->x, actor->y, actor->z + 28*FRACUNIT 
 			- actor->floorclip, ALLOW_REPLACE);
-		ball->momz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
+		ball->velz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
 			finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 		angle = actor->angle + ( ANGLE_45 / 3 );
 		ball->target = actor;
 		ball->angle = angle;
 		ball->z += 2*finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 		angle >>= ANGLETOFINESHIFT;
-		ball->momx = (actor->momx>>1)+FixedMul(ball->Speed, finecosine[angle]);
-		ball->momy = (actor->momy>>1)+FixedMul(ball->Speed, finesine[angle]);
+		ball->velx = (actor->velx>>1)+FixedMul(ball->Speed, finecosine[angle]);
+		ball->vely = (actor->vely>>1)+FixedMul(ball->Speed, finesine[angle]);
 		S_Sound (ball, CHAN_BODY, "weapons/maceshoot", 1, ATTN_NORM);
 
 		// [BC] If we're the server, spawn the ball and play the sound.
@@ -591,15 +591,15 @@ void FireMacePL1B (AActor *actor)
 
 		ball = Spawn("MaceFX2", actor->x, actor->y, actor->z + 28*FRACUNIT 
 			- actor->floorclip, ALLOW_REPLACE);
-		ball->momz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
+		ball->velz = 2*FRACUNIT+/*((player->lookdir)<<(FRACBITS-5))*/
 			finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 		angle = actor->angle - ( ANGLE_45 / 3 );
 		ball->target = actor;
 		ball->angle = angle;
 		ball->z += 2*finetangent[FINEANGLES/4-(actor->pitch>>ANGLETOFINESHIFT)];
 		angle >>= ANGLETOFINESHIFT;
-		ball->momx = (actor->momx>>1)+FixedMul(ball->Speed, finecosine[angle]);
-		ball->momy = (actor->momy>>1)+FixedMul(ball->Speed, finesine[angle]);
+		ball->velx = (actor->velx>>1)+FixedMul(ball->Speed, finecosine[angle]);
+		ball->vely = (actor->vely>>1)+FixedMul(ball->Speed, finesine[angle]);
 		S_Sound (ball, CHAN_BODY, "weapons/maceshoot", 1, ATTN_NORM);
 
 		// [BC] If we're the server, spawn the ball and play the sound.
@@ -703,19 +703,20 @@ DEFINE_ACTION_FUNCTION(AActor, A_MacePL1Check)
 	self->special1 = 0;
 	self->flags &= ~MF_NOGRAVITY;
 	self->gravity = FRACUNIT/8;
-	// [RH] Avoid some precision loss by scaling the momentum directly
+	// [RH] Avoid some precision loss by scaling the velocity directly
 #if 0
+	// This is the original code, for reference.
 	angle_t angle = self->angle>>ANGLETOFINESHIFT;
-	self->momx = FixedMul(7*FRACUNIT, finecosine[angle]);
-	self->momy = FixedMul(7*FRACUNIT, finesine[angle]);
+	self->velx = FixedMul(7*FRACUNIT, finecosine[angle]);
+	self->vely = FixedMul(7*FRACUNIT, finesine[angle]);
 #else
-	float momscale = sqrtf ((float)self->momx * (float)self->momx +
-							(float)self->momy * (float)self->momy);
-	momscale = 458752.f / momscale;
-	self->momx = (int)(self->momx * momscale);
-	self->momy = (int)(self->momy * momscale);
+	double velscale = sqrtf ((float)self->velx * (float)self->velx +
+							 (float)self->vely * (float)self->vely);
+	velscale = 458752 / velscale;
+	self->velx = (int)(self->velx * velscale);
+	self->vely = (int)(self->vely * velscale);
 #endif
-	self->momz -= self->momz>>1;
+	self->velz -= self->velz >> 1;
 
 	// [BC] If we're the server, tell clients to move the object.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -749,8 +750,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact)
 	if ((self->health != MAGIC_JUNK) && (self->flags & MF_INBOUNCE))
 	{ // Bounce
 		self->health = MAGIC_JUNK;
-		self->momz = (self->momz * 192) >> 8;
-		self->bouncetype = BOUNCE_None;
+		self->velz = (self->velz * 192) >> 8;
+		self->BounceFlags = BOUNCE_None;
 
 		// [BC] If we're the server, tell clients to move the object.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -766,7 +767,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact)
 	}
 	else
 	{ // Explode
-		self->momx = self->momy = self->momz = 0;
+		self->velx = self->vely = self->velz = 0;
 		self->flags |= MF_NOGRAVITY;
 		self->gravity = FRACUNIT;
 		S_Sound (self, CHAN_BODY, "weapons/macehit", 1, ATTN_NORM);
@@ -807,11 +808,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 
 			if (floordist <= ceildist)
 			{
-				vel = MulScale32 (self->momz, self->Sector->floorplane.c);
+				vel = MulScale32 (self->velz, self->Sector->floorplane.c);
 			}
 			else
 			{
-				vel = MulScale32 (self->momz, self->Sector->ceilingplane.c);
+				vel = MulScale32 (self->velz, self->Sector->ceilingplane.c);
 			}
 			if (vel >= 2)
 				self->SetState (self->SpawnState);
@@ -828,11 +829,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 
 		if (floordist <= ceildist)
 		{
-			vel = MulScale32 (self->momz, self->Sector->floorplane.c);
+			vel = MulScale32 (self->velz, self->Sector->floorplane.c);
 		}
 		else
 		{
-			vel = MulScale32 (self->momz, self->Sector->ceilingplane.c);
+			vel = MulScale32 (self->velz, self->Sector->ceilingplane.c);
 		}
 		if (vel < 2)
 		{
@@ -840,7 +841,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 		}
 
 		// Bounce
-		self->momz = (self->momz * 192) >> 8;
+		self->velz = (self->velz * 192) >> 8;
 		self->SetState (self->SpawnState);
 
 		// [BC] If we're the server, send the state change and move it.
@@ -852,11 +853,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 		tiny->target = self->target;
 		tiny->angle = angle;
 		angle >>= ANGLETOFINESHIFT;
-		tiny->momx = (self->momx>>1)+FixedMul(self->momz-FRACUNIT,
-			finecosine[angle]);
-		tiny->momy = (self->momy>>1)+FixedMul(self->momz-FRACUNIT,
-			finesine[angle]);
-		tiny->momz = self->momz;
+		tiny->velx = (self->velx>>1) + FixedMul(self->velz-FRACUNIT, finecosine[angle]);
+		tiny->vely = (self->vely>>1) + FixedMul(self->velz-FRACUNIT, finesine[angle]);
+		tiny->velz = self->velz;
 
 		// [BC] If we're the server, spawn this missile.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -869,11 +868,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 		tiny->target = self->target;
 		tiny->angle = angle;
 		angle >>= ANGLETOFINESHIFT;
-		tiny->momx = (self->momx>>1)+FixedMul(self->momz-FRACUNIT,
-			finecosine[angle]);
-		tiny->momy = (self->momy>>1)+FixedMul(self->momz-FRACUNIT,
-			finesine[angle]);
-		tiny->momz = self->momz;
+		tiny->velx = (self->velx>>1) + FixedMul(self->velz-FRACUNIT, finecosine[angle]);
+		tiny->vely = (self->vely>>1) + FixedMul(self->velz-FRACUNIT, finesine[angle]);
+		tiny->velz = self->velz;
 
 		// [BC] If we're the server, spawn this missile.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -884,9 +881,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_MaceBallImpact2)
 	else
 	{ // Explode
 boom:
-		self->momx = self->momy = self->momz = 0;
+		self->velx = self->vely = self->velz = 0;
 		self->flags |= MF_NOGRAVITY;
-		self->bouncetype = BOUNCE_None;
+		self->BounceFlags = BOUNCE_None;
 		self->gravity = FRACUNIT;
 
 		// [BC] If we're the server, tell clients to move the object.
@@ -936,9 +933,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireMacePL2)
 	mo = P_SpawnPlayerMissile (self, 0,0,0, RUNTIME_CLASS(AMaceFX4), self->angle, &linetarget);
 	if (mo)
 	{
-		mo->momx += self->momx;
-		mo->momy += self->momy;
-		mo->momz = 2*FRACUNIT+
+		mo->velx += self->velx;
+		mo->vely += self->vely;
+		mo->velz = 2*FRACUNIT+
 			clamp<fixed_t>(finetangent[FINEANGLES/4-(self->pitch>>ANGLETOFINESHIFT)], -5*FRACUNIT, 5*FRACUNIT);
 		if (linetarget)
 		{
@@ -959,9 +956,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireMacePL2)
 		mo = P_SpawnPlayerMissile (self, 0,0,0, RUNTIME_CLASS(AMaceFX4), self->angle + ( ANGLE_45 / 3 ), &linetarget);
 		if (mo)
 		{
-			mo->momx += self->momx;
-			mo->momy += self->momy;
-			mo->momz = 2*FRACUNIT+
+			mo->velx += self->velx;
+			mo->vely += self->vely;
+			mo->velz = 2*FRACUNIT+
 				clamp<fixed_t>(finetangent[FINEANGLES/4-(self->pitch>>ANGLETOFINESHIFT)], -5*FRACUNIT, 5*FRACUNIT);
 			if (linetarget)
 			{
@@ -976,9 +973,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireMacePL2)
 		mo = P_SpawnPlayerMissile (self, 0,0,0, RUNTIME_CLASS(AMaceFX4), self->angle - ( ANGLE_45 / 3 ), &linetarget);
 		if (mo)
 		{
-			mo->momx += self->momx;
-			mo->momy += self->momy;
-			mo->momz = 2*FRACUNIT+
+			mo->velx += self->velx;
+			mo->vely += self->vely;
+			mo->velz = 2*FRACUNIT+
 				clamp<fixed_t>(finetangent[FINEANGLES/4-(self->pitch>>ANGLETOFINESHIFT)], -5*FRACUNIT, 5*FRACUNIT);
 			if (linetarget)
 			{
@@ -1019,11 +1016,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_DeathBallImpact)
 
 			if (floordist <= ceildist)
 			{
-				vel = MulScale32 (self->momz, self->Sector->floorplane.c);
+				vel = MulScale32 (self->velz, self->Sector->floorplane.c);
 			}
 			else
 			{
-				vel = MulScale32 (self->momz, self->Sector->ceilingplane.c);
+				vel = MulScale32 (self->velz, self->Sector->ceilingplane.c);
 			}
 			if (vel >= 2)
 				self->SetState (self->SpawnState);
@@ -1045,11 +1042,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_DeathBallImpact)
 
 		if (floordist <= ceildist)
 		{
-			vel = MulScale32 (self->momz, self->Sector->floorplane.c);
+			vel = MulScale32 (self->velz, self->Sector->floorplane.c);
 		}
 		else
 		{
-			vel = MulScale32 (self->momz, self->Sector->ceilingplane.c);
+			vel = MulScale32 (self->velz, self->Sector->ceilingplane.c);
 		}
 		if (vel < 2)
 		{
@@ -1093,8 +1090,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_DeathBallImpact)
 		{
 			self->angle = angle;
 			angle >>= ANGLETOFINESHIFT;
-			self->momx = FixedMul (self->Speed, finecosine[angle]);
-			self->momy = FixedMul (self->Speed, finesine[angle]);
+			self->velx = FixedMul (self->Speed, finecosine[angle]);
+			self->vely = FixedMul (self->Speed, finesine[angle]);
 		}
 		self->SetState (self->SpawnState);
 		S_Sound (self, CHAN_BODY, "weapons/macestop", 1, ATTN_NORM);
@@ -1109,7 +1106,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_DeathBallImpact)
 	else
 	{ // Explode
 boom:
-		self->momx = self->momy = self->momz = 0;
+		self->velx = self->vely = self->velz = 0;
 		self->flags |= MF_NOGRAVITY;
 		self->gravity = FRACUNIT;
 		S_Sound (self, CHAN_BODY, "weapons/maceexplode", 1, ATTN_NORM);
@@ -1268,8 +1265,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpawnRippers)
 		ripper->target = self->target;
 		ripper->angle = angle;
 		angle >>= ANGLETOFINESHIFT;
-		ripper->momx = FixedMul (ripper->Speed, finecosine[angle]);
-		ripper->momy = FixedMul (ripper->Speed, finesine[angle]);
+		ripper->velx = FixedMul (ripper->Speed, finecosine[angle]);
+		ripper->vely = FixedMul (ripper->Speed, finesine[angle]);
 		P_CheckMissileSpawn (ripper);
 	}
 }
@@ -1616,8 +1613,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_SkullRodStorm)
 	mo->Translation = ( NETWORK_GetState( ) != NETSTATE_SINGLE ) ?
 		TRANSLATION(TRANSLATION_PlayersExtra,self->special2) : 0;
 	mo->target = self->target;
-	mo->momx = 1; // Force collision detection
-	mo->momz = -mo->Speed;
+	mo->velx = 1; // Force collision detection
+	mo->velz = -mo->Speed;
 	mo->special2 = self->special2; // Transfer player number
 	P_CheckMissileSpawn (mo);
 	if (self->special1 != -1 && !S_IsActorPlayingSomething (self, CHAN_BODY, -1))
@@ -1769,14 +1766,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePhoenixPL1)
 
 	angle = self->angle + ANG180;
 	angle >>= ANGLETOFINESHIFT;
-	self->momx += FixedMul (4*FRACUNIT, finecosine[angle]);
-	self->momy += FixedMul (4*FRACUNIT, finesine[angle]);
+	self->velx += FixedMul (4*FRACUNIT, finecosine[angle]);
+	self->vely += FixedMul (4*FRACUNIT, finesine[angle]);
 
 	// [BC] Push the player back even more if they are using spread.
 	if ( player->cheats & CF_SPREAD )
 	{
-		self->momx += FixedMul( 4*FRACUNIT, finecosine[angle] ) * 2;
-		self->momy += FixedMul( 4*FRACUNIT, finesine[angle] ) * 2;
+		self->velx += FixedMul( 4*FRACUNIT, finecosine[angle] ) * 2;
+		self->vely += FixedMul( 4*FRACUNIT, finesine[angle] ) * 2;
 	}
 }
 
@@ -1796,15 +1793,15 @@ DEFINE_ACTION_FUNCTION(AActor, A_PhoenixPuff)
 	puff = Spawn("PhoenixPuff", self->x, self->y, self->z, ALLOW_REPLACE);
 	angle = self->angle + ANG90;
 	angle >>= ANGLETOFINESHIFT;
-	puff->momx = FixedMul (FRACUNIT*13/10, finecosine[angle]);
-	puff->momy = FixedMul (FRACUNIT*13/10, finesine[angle]);
-	puff->momz = 0;
+	puff->velx = FixedMul (FRACUNIT*13/10, finecosine[angle]);
+	puff->vely = FixedMul (FRACUNIT*13/10, finesine[angle]);
+	puff->velz = 0;
 	puff = Spawn("PhoenixPuff", self->x, self->y, self->z, ALLOW_REPLACE);
 	angle = self->angle - ANG90;
 	angle >>= ANGLETOFINESHIFT;
-	puff->momx = FixedMul (FRACUNIT*13/10, finecosine[angle]);
-	puff->momy = FixedMul (FRACUNIT*13/10, finesine[angle]);
-	puff->momz = 0;
+	puff->velx = FixedMul (FRACUNIT*13/10, finecosine[angle]);
+	puff->vely = FixedMul (FRACUNIT*13/10, finesine[angle]);
+	puff->velz = 0;
 }
 
 //----------------------------------------------------------------------------
@@ -1878,9 +1875,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePhoenixPL2)
 	mo = Spawn("PhoenixFX2", x, y, z, ALLOW_REPLACE);
 	mo->target = self;
 	mo->angle = angle;
-	mo->momx = self->momx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
-	mo->momy = self->momy + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
-	mo->momz = FixedMul (mo->Speed, slope);
+	mo->velx = self->velx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
+	mo->vely = self->vely + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
+	mo->velz = FixedMul (mo->Speed, slope);
 	if (!player->refire || !S_IsActorPlayingSomething (self, CHAN_WEAPON, -1))
 	{
 		S_Sound (self, CHAN_WEAPON|CHAN_LOOP, soundid, 1, ATTN_NORM);
@@ -1893,9 +1890,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePhoenixPL2)
 		mo = Spawn<APhoenixFX2> (x, y, z, ALLOW_REPLACE);
 		mo->target = self;
 		mo->angle = angle;
-		mo->momx = self->momx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
-		mo->momy = self->momy + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
-		mo->momz = FixedMul (mo->Speed, slope);
+		mo->velx = self->velx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
+		mo->vely = self->vely + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
+		mo->velz = FixedMul (mo->Speed, slope);
 		if (!player->refire || !S_IsActorPlayingSomething (self, CHAN_WEAPON, -1))
 		{
 			S_Sound (self, CHAN_WEAPON|CHAN_LOOP, soundid, 1, ATTN_NORM);
@@ -1905,9 +1902,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_FirePhoenixPL2)
 		mo = Spawn<APhoenixFX2> (x, y, z, ALLOW_REPLACE);
 		mo->target = self;
 		mo->angle = angle;
-		mo->momx = self->momx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
-		mo->momy = self->momy + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
-		mo->momz = FixedMul (mo->Speed, slope);
+		mo->velx = self->velx + FixedMul (mo->Speed, finecosine[angle>>ANGLETOFINESHIFT]);
+		mo->vely = self->vely + FixedMul (mo->Speed, finesine[angle>>ANGLETOFINESHIFT]);
+		mo->velz = FixedMul (mo->Speed, slope);
 		if (!player->refire || !S_IsActorPlayingSomething (self, CHAN_WEAPON, -1))
 		{
 			S_Sound (self, CHAN_WEAPON|CHAN_LOOP, soundid, 1, ATTN_NORM);
@@ -1952,7 +1949,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_ShutdownPhoenixPL2)
 
 DEFINE_ACTION_FUNCTION(AActor, A_FlameEnd)
 {
-	self->momz += FRACUNIT*3/2;
+	self->velz += FRACUNIT*3/2;
 }
 
 //----------------------------------------------------------------------------
@@ -1963,6 +1960,6 @@ DEFINE_ACTION_FUNCTION(AActor, A_FlameEnd)
 
 DEFINE_ACTION_FUNCTION(AActor, A_FloatPuff)
 {
-	self->momz += FRACUNIT*18/10;
+	self->velz += FRACUNIT*18/10;
 }
 

@@ -109,6 +109,12 @@ int			ConBottom, ConScroll, RowAdjust;
 int			CursorTicker;
 constate_e	ConsoleState = c_up;
 
+// [TP] Some functions print result directly to console.. when we need it to a string
+// instead. To keep as much ZDoom code unchanged, here's a hack to capture the result
+// into a string instead.
+static bool g_IsCapturing = false;
+static FString g_CaptureBuffer;
+
 static char ConsoleBuffer[CONSOLESIZE];
 static char *Lines[CONSOLELINES];
 static bool LineJoins[CONSOLELINES];
@@ -720,7 +726,7 @@ static int FlushLines (const char *start, const char *stop)
 	return i;
 }
 
-static void AddLine (const char *text, bool more, int len)
+static void AddLine (const char *text, bool more, size_t len)
 {
 	if (BufferRover + len + 1 - ConsoleBuffer > CONSOLESIZE)
 	{
@@ -932,6 +938,13 @@ int PrintString (int printlevel, const char *outline)
 {
 	if (printlevel < msglevel || *outline == '\0')
 	{
+		return 0;
+	}
+
+	// [TP] Possibly capture it instead
+	if ( C_IsCapturing() )
+	{
+		g_CaptureBuffer += outline;
 		return 0;
 	}
 
@@ -1638,7 +1651,7 @@ static bool C_HandleKey (event_t *ev, BYTE *buffer, int len)
 		{
 			if (buffer[1] == buffer[0])
 			{
-				buffer[buffer[0] + 2] = ev->data1;
+				buffer[buffer[0] + 2] = BYTE(ev->data1);
 			}
 			else
 			{
@@ -1650,7 +1663,7 @@ static bool C_HandleKey (event_t *ev, BYTE *buffer, int len)
 				for (; e >= c; e--)
 					*(e + 1) = *e;
 
-				*c = ev->data1;
+				*c = char(ev->data1);
 			}
 			buffer[0]++;
 			buffer[1]++;
@@ -1665,11 +1678,11 @@ static bool C_HandleKey (event_t *ev, BYTE *buffer, int len)
 	case EV_GUI_WheelDown:
 		if (!(ev->data3 & GKM_SHIFT))
 		{
-			data1 = GK_PGDN + ev->subtype - EV_GUI_WheelDown;
+			data1 = GK_PGDN + EV_GUI_WheelDown - ev->subtype;
 		}
 		else
 		{
-			data1 = GK_DOWN + ev->subtype - EV_GUI_WheelDown;
+			data1 = GK_DOWN + EV_GUI_WheelDown - ev->subtype;
 		}
 		// Intentional fallthrough
 
@@ -2004,7 +2017,7 @@ static void C_PasteText(FString clip, BYTE *buffer, int len)
 	{
 		// Only paste the first line.
 		long brk = clip.IndexOfAny("\r\n\b");
-		int cliplen = brk >= 0 ? brk : clip.Len();
+		int cliplen = brk >= 0 ? brk : (int)clip.Len();
 
 		// Make sure there's room for the whole thing.
 		if (buffer[0] + cliplen > len)
@@ -2069,8 +2082,8 @@ CCMD (echo)
 	int last = argv.argc()-1;
 	for (int i = 1; i <= last; ++i)
 	{
-		strbin (argv[i]);
-		Printf ("%s%s", argv[i], i!=last ? " " : "\n");
+		FString formatted = strbin1 (argv[i]);
+		Printf ("%s%s", formatted.GetChars(), i!=last ? " " : "\n");
 	}
 }
 
@@ -2425,4 +2438,30 @@ TArray<FString> C_GetTabCompletes (const FString& part)
 	}
 
 	return result;
+}
+
+//
+// [TP] Begins capture mode
+//
+void C_StartCapture()
+{
+	g_IsCapturing = true;
+	g_CaptureBuffer = "";
+}
+
+//
+// [TP] Ends capture mode and returns the result
+//
+FString C_EndCapture()
+{
+	g_IsCapturing = false;
+	return g_CaptureBuffer;
+}
+
+//
+// [TP] Are we currently capturing console output?
+//
+bool C_IsCapturing()
+{
+	return g_IsCapturing;
 }

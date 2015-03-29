@@ -9,7 +9,7 @@
 #include "thingdef/thingdef.h"
 */
 
-bool Sys_1ed64 (AActor *self)
+static bool CrusaderCheckRange (AActor *self)
 {
 	if (P_CheckSight (self, self->target) && self->reactiontime == 0)
 	{
@@ -33,7 +33,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CrusaderChoose)
 	if (self->target == NULL)
 		return;
 
-	if (Sys_1ed64 (self))
+	if (CrusaderCheckRange (self))
 	{
 		A_FaceTarget (self);
 		self->angle -= ANGLE_180/16;
@@ -93,7 +93,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CrusaderSweepLeft)
 	AActor *misl = P_SpawnMissileZAimed (self, self->z + 48*FRACUNIT, self->target, PClass::FindClass("FastFlameMissile"));
 	if (misl != NULL)
 	{
-		misl->momz += FRACUNIT;
+		misl->velz += FRACUNIT;
 
 		// [BC] Tell clients to spawn the missile.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -114,7 +114,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CrusaderSweepRight)
 	AActor *misl = P_SpawnMissileZAimed (self, self->z + 48*FRACUNIT, self->target, PClass::FindClass("FastFlameMissile"));
 	if (misl != NULL)
 	{
-		misl->momz += FRACUNIT;
+		misl->velz += FRACUNIT;
 
 		// [BC] Tell clients to spawn the missile.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )

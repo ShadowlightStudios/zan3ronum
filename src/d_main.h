@@ -38,8 +38,6 @@ struct event_t;
 //
 void D_DoomMain (void);
 
-// Called by IO functions when input is detected.
-void D_PostEvent (const event_t* ev);
 
 void D_Display ();
 
@@ -51,8 +49,7 @@ void D_PageTicker (void);
 void D_PageDrawer (void);
 void D_AdvanceDemo (void);
 void D_StartTitle (void);
-// [BC] Added the "bLoadedAutomatically" parameter.
-void D_AddFile (const char *file, bool bLoadedAutomatically = false);
+bool D_AddFile (TArray<FString> &wadfiles, const char *file, bool check = true, int position = -1);
 
 
 // [RH] Set this to something to draw an icon during the next screen refresh.
@@ -80,8 +77,11 @@ enum EIWADType
 	IWAD_FreeDoomU,
 	IWAD_FreeDoom1,
 	IWAD_FreeDM,
+	IWAD_Blasphemer,
 	IWAD_ChexQuest,
 	IWAD_ChexQuest3,
+	IWAD_ActionDoom2,
+	IWAD_Harmony,
 	IWAD_Custom,
 
 	NUM_IWAD_TYPES

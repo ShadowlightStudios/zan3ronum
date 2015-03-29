@@ -24,6 +24,7 @@
 #define __R_DEFS_H__
 
 #include "doomdef.h"
+#include "templates.h"
 
 // Some more or less basic data types
 // we depend on.
@@ -35,6 +36,7 @@
 #include "actor.h"
 struct FLightNode;
 struct FGLSection;
+struct seg_t;
 
 #include "dthinker.h"
 #include "farchive.h"
@@ -74,15 +76,27 @@ extern size_t MaxDrawSegs;
 struct vertex_t
 {
 	fixed_t x, y;
+
+	float fx, fy;		// Floating point coordinates of this vertex (excluding polyoblect translation!)
 	angle_t viewangle;	// precalculated angle for clipping
 	int angletime;		// recalculation time for view angle
+	bool dirty;			// something has changed and needs to be recalculated
+	int numheights;
+	int numsectors;
+	sector_t ** sectors;
+	float * heightlist;
 
 	bool operator== (const vertex_t &other)
 	{
 		return x == other.x && y == other.y;
 	}
 
-	angle_t GetViewAngle();
+	void clear()
+	{
+		x = y = 0;
+	}
+
+	angle_t GetClipAngle();
 };
 
 // Forward of LineDefs, for Sectors.
@@ -164,6 +178,7 @@ public:
 //
 class DSectorEffect;
 struct sector_t;
+struct line_t;
 struct FRemapTable;
 
 enum
@@ -318,13 +333,16 @@ inline FArchive &operator<< (FArchive &arc, secplane_t &plane)
 
 #include "p_3dfloors.h"
 struct subsector_t;
+struct sector_t;
+struct side_t;
 extern bool gl_plane_reflection_i;
 
 // Ceiling/floor flags
 enum
 {
-	SECF_ABSLIGHTING	= 1,	// floor/ceiling light is absolute, not relative
-	SECF_SPRINGPAD		= 2,	// [BC] Floor bounces actors up at the same velocity they landed on it with.	
+	PLANEF_ABSLIGHTING	= 1,	// floor/ceiling light is absolute, not relative
+	PLANEF_BLOCKED		= 2,		// can not be moved anymore.
+	PLANEF_SPRINGPAD		= 4,	// [BC] Floor bounces actors up at the same velocity they landed on it with.	
 };
 
 // Internal sector flags
@@ -375,10 +393,6 @@ struct FExtraLight
 	void InsertLight (const secplane_t &plane, line_t *line, int type);
 };
 
-// this substructure contains a few sector properties that are stored in dynamic arrays
-// These must not be copied by R_FakeFlat etc. or bad things will happen.
-struct sector_t;
-
 struct FLinkedSector
 {
 	sector_t *Sector;
@@ -386,6 +400,8 @@ struct FLinkedSector
 };
 
 
+// this substructure contains a few sector properties that are stored in dynamic arrays
+// These must not be copied by R_FakeFlat etc. or bad things will happen.
 struct extsector_t
 {
 	// Boom sector transfer information
@@ -421,6 +437,11 @@ struct extsector_t
 		TArray<lightlist_t>				lightlist;		// 3D light list
 		TArray<sector_t*>				attached;		// 3D floors attached to this sector
 	} XFloor;
+
+	// Links to other objects that get invalidated when this sector changes
+	TArray<sector_t *> SectorDependencies;
+	TArray<side_t *> SideDependencies;
+	TArray<vertex_t *> VertexDependencies;
 	
 	void Serialize(FArchive &arc);
 };
@@ -466,6 +487,8 @@ struct sector_t
 	// [BB] Added bInformClients and bExecuteOnClient.
 	void SetFade(int r, int g, int b, bool bInformClients = true, bool bExecuteOnClient = false);
 	void ClosestPoint(fixed_t x, fixed_t y, fixed_t &ox, fixed_t &oy) const;
+	// [BB] Backported from ZDoom revision 3600.
+	sector_t *GetHeightSec() const;
 
 	DInterpolation *SetInterpolation(int position, bool attach);
 	void StopInterpolation(int position);
@@ -488,14 +511,18 @@ struct sector_t
 
 	splane planes[2];
 
+	void SetDirty(bool dolines, bool dovertices);
+
 	void SetXOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.xoffs = o;
+		//SetDirty(false, false);
 	}
 
 	void AddXOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.xoffs += o;
+		//SetDirty(false, false);
 	}
 
 	fixed_t GetXOffset(int pos) const
@@ -506,11 +533,13 @@ struct sector_t
 	void SetYOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.yoffs = o;
+		//SetDirty(false, false);
 	}
 
 	void AddYOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.yoffs += o;
+		//SetDirty(false, false);
 	}
 
 	fixed_t GetYOffset(int pos, bool addbase = true) const
@@ -528,6 +557,7 @@ struct sector_t
 	void SetXScale(int pos, fixed_t o)
 	{
 		planes[pos].xform.xscale = o;
+		//SetDirty(false, false);
 	}
 
 	fixed_t GetXScale(int pos) const
@@ -538,6 +568,7 @@ struct sector_t
 	void SetYScale(int pos, fixed_t o)
 	{
 		planes[pos].xform.yscale = o;
+		//SetDirty(false, false);
 	}
 
 	fixed_t GetYScale(int pos) const
@@ -548,6 +579,7 @@ struct sector_t
 	void SetAngle(int pos, angle_t o)
 	{
 		planes[pos].xform.angle = o;
+		//SetDirty(false, false);
 	}
 
 	angle_t GetAngle(int pos, bool addbase = true) const
@@ -566,6 +598,7 @@ struct sector_t
 	{
 		planes[pos].xform.base_yoffs = y;
 		planes[pos].xform.base_angle = o;
+		//SetDirty(false, false);
 	}
 
 	int GetFlags(int pos) const 
@@ -587,6 +620,7 @@ struct sector_t
 	void SetPlaneLight(int pos, int level)
 	{
 		planes[pos].Light = level;
+		//dirty = true;
 	}
 
 	FTextureID GetTexture(int pos) const
@@ -599,6 +633,7 @@ struct sector_t
 		FTextureID old = planes[pos].Texture;
 		planes[pos].Texture = tex;
 		if (floorclip && pos == floor && tex != old) AdjustFloorClip();
+		SetDirty(true, false);
 	}
 
 	fixed_t GetPlaneTexZ(int pos) const
@@ -609,12 +644,38 @@ struct sector_t
 	void SetPlaneTexZ(int pos, fixed_t val)
 	{
 		planes[pos].TexZ = val;
+		SetDirty(true, true);
 	}
 
 	void ChangePlaneTexZ(int pos, fixed_t val)
 	{
 		planes[pos].TexZ += val;
+		SetDirty(true, true);
 	}
+
+	void ChangeLightLevel(int newval)
+	{
+		lightlevel = (BYTE)clamp(lightlevel + newval, 0, 255);
+		//SetDirty(true, false);
+	}
+
+	void SetLightLevel(int newval)
+	{
+		lightlevel = (BYTE)clamp(newval, 0, 255);
+		//SetDirty(true, false);
+	}
+
+	int GetLightLevel() const
+	{
+		return lightlevel;
+	}
+
+	secplane_t &GetSecPlane(int pos)
+	{
+		return pos == floor? floorplane:ceilingplane;
+	}
+
+	bool PlaneMoving(int pos);
 
 
 	// Member variables
@@ -638,6 +699,7 @@ struct sector_t
 
 	int			sky;
 	short		seqType;		// this sector's sound sequence
+	FNameNoInit	SeqName;		// Sound sequence name. Setting seqType non-negative will override this.
 
 	fixed_t		soundorg[2];	// origin for any sounds played by the sector
 	int 		validcount;		// if == validcount, already checked
@@ -703,21 +765,44 @@ struct sector_t
 	FExtraLight *ExtraLights;
 
 	vertex_t *Triangle[3];	// Three points that can define a plane
-	short						oldspecial;			//jff 2/16/98 remembers if sector WAS secret (automap)
+	short						secretsector;		//jff 2/16/98 remembers if sector WAS secret (automap)
 	int							sectornum;			// for comparing sector copies
 
-	// [GZDoom]
 	extsector_t	*				e;		// This stores data that requires construction/destruction. Such data must not be copied by R_FakeFlat.
+
+	// GL only stuff starts here
 	float						ceiling_reflect, floor_reflect;
 
+	int							dirtyframe[3];		// last frame this sector was marked dirty
+	bool						dirty;				// marked for recalculation
 	bool						transdoor;			// For transparent door hacks
 	fixed_t						transdoorheight;	// for transparent door hacks
 	int							subsectorcount;		// list of subsectors
 	subsector_t **				subsectors;
 
+	enum
+	{
+		vbo_fakefloor = floor+2,
+		vbo_fakeceiling = ceiling+2,
+	};
+
+	int				vboindex[4];	// VBO indices of the 4 planes this sector uses during rendering
+	fixed_t			vboheight[2];	// Last calculated height for the 2 planes of this actual sector
+	int				vbocount[2];	// Total count of vertices belonging to this sector's planes
+#ifdef IBO_TEST
+	int				iboindex[4];	// VBO indices of the 4 planes this sector uses during rendering
+	int				ibocount;
+#endif
+
 	float GetFloorReflect() { return gl_plane_reflection_i? floor_reflect : 0; }
 	float GetCeilingReflect() { return gl_plane_reflection_i? ceiling_reflect : 0; }
-	void SetDirty();
+	bool VBOHeightcheck(int pos) const { return vboheight[pos] == GetPlaneTexZ(pos); }
+
+	enum
+	{
+		INVALIDATE_PLANES = 1,
+		INVALIDATE_OTHER = 2
+	};
 
 	// [BC] Is this sector a floor or ceiling?
 	int		floorOrCeiling;
@@ -784,10 +869,13 @@ class DBaseDecal;
 
 enum
 {
-	WALLF_ABSLIGHTING	= 1,	// Light is absolute instead of relative
-	WALLF_NOAUTODECALS	= 2,	// Do not attach impact decals to this wall
+	WALLF_ABSLIGHTING	 = 1,	// Light is absolute instead of relative
+	WALLF_NOAUTODECALS	 = 2,	// Do not attach impact decals to this wall
 	WALLF_NOFAKECONTRAST = 4,	// Don't do fake contrast for this wall in side_t::GetLightLevel
 	WALLF_SMOOTHLIGHTING = 8,   // Similar to autocontrast but applies to all angles.
+	WALLF_CLIP_MIDTEX	 = 16,	// Like the line counterpart, but only for this side.
+	WALLF_WRAP_MIDTEX	 = 32,	// Like the line counterpart, but only for this side.
+	WALLF_POLYOBJ		 = 64,	// This wall belongs to a polyobject.
 };
 
 struct side_t
@@ -802,6 +890,8 @@ struct side_t
 	{
 		fixed_t xoffset;
 		fixed_t yoffset;
+		fixed_t xscale;
+		fixed_t yscale;
 		FTextureID texture;
 		TObjPtr<DInterpolation> interpolation;
 		//int Light;
@@ -810,7 +900,8 @@ struct side_t
 	sector_t*	sector;			// Sector the SideDef is facing.
 	DBaseDecal*	AttachedDecals;	// [RH] Decals bound to the wall
 	part		textures[3];
-	DWORD		linenum;
+	line_t		*linedef;
+	//DWORD		linenum;
 	DWORD		LeftSide, RightSide;	// [RH] Group walls into loops
 	WORD		TexelLength;
 	SWORD		Light;
@@ -824,11 +915,12 @@ struct side_t
 	FTextureID	SavedMidTexture;
 	FTextureID	SavedBottomTexture;
 
-	int GetLightLevel (bool foggy, int baselight) const;
+	int GetLightLevel (bool foggy, int baselight, bool noabsolute=false, int *pfakecontrast_usedbygzdoom=NULL) const;
 
 	void SetLight(SWORD l)
 	{
 		Light = l;
+		//dirty = true;
 	}
 
 	FTextureID GetTexture(int which) const
@@ -838,17 +930,20 @@ struct side_t
 	void SetTexture(int which, FTextureID tex)
 	{
 		textures[which].texture = tex;
+		dirty = true;
 	}
 
 	void SetTextureXOffset(int which, fixed_t offset)
 	{
 		textures[which].xoffset = offset;
+		//dirty = true;
 	}
 	void SetTextureXOffset(fixed_t offset)
 	{
 		textures[top].xoffset =
 		textures[mid].xoffset =
 		textures[bottom].xoffset = offset;
+		//dirty = true;
 	}
 	fixed_t GetTextureXOffset(int which) const
 	{
@@ -857,17 +952,20 @@ struct side_t
 	void AddTextureXOffset(int which, fixed_t delta)
 	{
 		textures[which].xoffset += delta;
+		//dirty = true;
 	}
 
 	void SetTextureYOffset(int which, fixed_t offset)
 	{
 		textures[which].yoffset = offset;
+		//dirty = true;
 	}
 	void SetTextureYOffset(fixed_t offset)
 	{
 		textures[top].yoffset =
 		textures[mid].yoffset =
 		textures[bottom].yoffset = offset;
+		//dirty = true;
 	}
 	fixed_t GetTextureYOffset(int which) const
 	{
@@ -876,12 +974,62 @@ struct side_t
 	void AddTextureYOffset(int which, fixed_t delta)
 	{
 		textures[which].yoffset += delta;
+		//dirty = true;
+	}
+
+	void SetTextureXScale(int which, fixed_t scale)
+	{
+		textures[which].xscale = scale <= 0? FRACUNIT : scale;
+		//dirty = true;
+	}
+	void SetTextureXScale(fixed_t scale)
+	{
+		textures[top].xscale = textures[mid].xscale = textures[bottom].xscale = scale <= 0? FRACUNIT : scale;
+		//dirty = true;
+	}
+	fixed_t GetTextureXScale(int which) const
+	{
+		return textures[which].xscale;
+	}
+	void MultiplyTextureXScale(int which, fixed_t delta)
+	{
+		textures[which].xscale = FixedMul(textures[which].xscale, delta);
+		//dirty = true;
+	}
+
+
+	void SetTextureYScale(int which, fixed_t scale)
+	{
+		textures[which].yscale = scale <= 0? FRACUNIT : scale;
+		//dirty = true;
+	}
+	void SetTextureYScale(fixed_t scale)
+	{
+		textures[top].yscale = textures[mid].yscale = textures[bottom].yscale = scale <= 0? FRACUNIT : scale;
+		//dirty = true;
+	}
+	fixed_t GetTextureYScale(int which) const
+	{
+		return textures[which].yscale;
+	}
+	void MultiplyTextureYScale(int which, fixed_t delta)
+	{
+		textures[which].yscale = FixedMul(textures[which].yscale, delta);
+		//dirty = true;
 	}
 
 	DInterpolation *SetInterpolation(int position);
 	void StopInterpolation(int position);
+
+	vertex_t *V1() const;
+	vertex_t *V2() const;
+
 	//For GL
 	FLightNode * lighthead[2];				// all blended lights that may affect this wall
+	bool dirty;								// GL info needs to be recalculated
+
+	seg_t **segs;	// all segs belonging to this sidedef in ascending order. Used for precise rendering
+	int numsegs;
 
 };
 
@@ -904,7 +1052,6 @@ enum slopetype_t
 #define	TEXCHANGE_BACKTOP		8
 #define	TEXCHANGE_BACKMEDIUM	16
 #define	TEXCHANGE_BACKBOTTOM	32
-
 struct line_t
 {
 	vertex_t	*v1, *v2;	// vertices, from v1 to v2
@@ -912,11 +1059,12 @@ struct line_t
 	DWORD		flags;
 	DWORD		activation;	// activation type
 	int			special;
-	fixed_t		Alpha;		// <--- translucency (0-255/255=opaque)
+	fixed_t		Alpha;		// <--- translucency (0=invisibile, FRACUNIT=opaque)
 	int			id;			// <--- same as tag or set with Line_SetIdentification
 	int			args[5];	// <--- hexen-style arguments (expanded to ZDoom's full width)
 	int			firstid, nextid;
-	DWORD		sidenum[2];	// sidenum[1] will be NO_SIDE if one sided
+	side_t		*sidedef[2];
+	//DWORD		sidenum[2];	// sidenum[1] will be NO_SIDE if one sided
 	fixed_t		bbox[4];	// bounding box, for the extent of the LineDef.
 	slopetype_t	slopetype;	// To aid move clipping.
 	sector_t	*frontsector, *backsector;
@@ -961,41 +1109,8 @@ struct msecnode_t
 	bool visited;	// killough 4/4/98, 4/7/98: used in search algorithms
 };
 
-//
-// A SubSector.
-// References a Sector.
-// Basically, this is a list of LineSegs indicating the visible walls that
-// define (all or some) sides of a convex BSP leaf.
-//
-struct FPolyObj;
-struct subsector_t
-{
-	sector_t	*sector;
-	DWORD		numlines;
-	DWORD		firstline;
-	FPolyObj	*poly;
-	int			validcount;
-	fixed_t		CenterX, CenterY;
-
-	// subsector related GL data
-	FGLSection *	section;		// section this subsector belongs to
-	FLightNode *	lighthead[2];	// Light nodes (blended and additive)
-	sector_t *		render_sector;	// The sector this belongs to for rendering
-	int				firstvertex;	// index into the gl_vertices array
-	int				numvertices;
-	int				validcount2;	// Second v
-	fixed_t			bbox[4];		// Bounding box
-	bool			degenerate;
-	char			hacked;			// 1: is part of a render hack
-									// 2: has one-sided walls
-
-	// [BL] Constructor to init GZDoom data
-	subsector_t() : render_sector(NULL), firstvertex(0), numvertices(0), validcount2(0), degenerate(0), hacked(0)
-	{
-		bbox[0] = bbox[1] = bbox[2] = bbox[3] = 0;
-		lighthead[0] = lighthead[1] = NULL;
-	}
-};
+struct FPolyNode;
+struct FMiniBSP;
 
 //
 // The LineSeg.
@@ -1012,59 +1127,47 @@ struct seg_t
 	sector_t*		frontsector;
 	sector_t*		backsector;		// NULL for one-sided lines
 
-	subsector_t*	Subsector;
 	seg_t*			PartnerSeg;
 
 	BITFIELD		bPolySeg:1;
+
+	subsector_t*	Subsector;
+	float			sidefrac;		// relative position of seg's ending vertex on owning sidedef
 };
 
-// ===== Polyobj data =====
-struct FPolyObj
+//
+// A SubSector.
+// References a Sector.
+// Basically, this is a list of LineSegs indicating the visible walls that
+// define (all or some) sides of a convex BSP leaf.
+//
+struct subsector_t
 {
-	int			numsegs;
-	seg_t		**segs;
-	int			numlines;
-	line_t		**lines;
-	int			numvertices;
-	vertex_t	**vertices;
-	fixed_t		startSpot[2];
-	vertex_t	*originalPts;	// used as the base for the rotations
-	vertex_t	*prevPts; 		// use to restore the old point values
-	angle_t		angle;
-	int			tag;			// reference tag assigned in HereticEd
-	int			bbox[4];
-	int			validcount;
-	int			crush; 			// should the polyobj attempt to crush mobjs?
-	bool		bHurtOnTouch;	// should the polyobj hurt anything it touches?
-	int			seqType;
-	fixed_t		size;			// polyobj size (area of POLY_AREAUNIT == size of FRACUNIT)
-	DThinker	*specialdata;	// pointer to a thinker, if the poly is moving
-	TObjPtr<DInterpolation> interpolation;
+	sector_t	*sector;
+	FPolyNode	*polys;
+	FMiniBSP	*BSP;
+	seg_t		*firstline;
+	DWORD		numlines;
 
-	~FPolyObj();
-	DInterpolation *SetInterpolation();
-	void StopInterpolation();
+	// subsector related GL data
+	FLightNode *	lighthead[2];	// Light nodes (blended and additive)
+	sector_t *		render_sector;	// The sector this belongs to for rendering
+	fixed_t			bbox[4];		// Bounding box
+	int				validcount;
+	bool			degenerate;
+	char			hacked;			// 1: is part of a render hack
+									// 2: has one-sided walls
 
-	// Has this polyobject moved at all? If so, we need to tell connecting clients of its new position.
-	bool		bMoved;
-	// [BB] Original start stop, necessary for GAME_ResetMap.
-	fixed_t		SavedStartSpot[3];
-
-	// Has this polyobject rotated at all? If so, we need to tell connecting clients of its new position.
-	bool		bRotated;
+	// [BL] Constructor to init GZDoom data
+	subsector_t() : render_sector(NULL), degenerate(0), hacked(0)
+	{
+		bbox[0] = bbox[1] = bbox[2] = bbox[3] = 0;
+		lighthead[0] = lighthead[1] = NULL;
+	}
 };
-extern FPolyObj *polyobjs;		// list of all poly-objects on the level
 
-inline FArchive &operator<< (FArchive &arc, FPolyObj *&poly)
-{
-	return arc.SerializePointer (polyobjs, (BYTE **)&poly, sizeof(FPolyObj));
-}
 
-inline FArchive &operator<< (FArchive &arc, const FPolyObj *&poly)
-{
-	return arc.SerializePointer (polyobjs, (BYTE **)&poly, sizeof(FPolyObj));
-}
-
+	
 
 //
 // BSP node.
@@ -1077,6 +1180,7 @@ struct node_t
 	fixed_t		dx;
 	fixed_t		dy;
 	fixed_t		bbox[2][4];		// Bounding box for each child.
+	float		len;
 	union
 	{
 		void	*children[2];	// If bit 0 is set, it's a subsector.
@@ -1085,11 +1189,18 @@ struct node_t
 };
 
 
-struct polyblock_t
+// An entire BSP tree.
+
+struct FMiniBSP
 {
-	FPolyObj *polyobj;
-	struct polyblock_t *prev;
-	struct polyblock_t *next;
+	FMiniBSP();
+
+	bool bDirty;
+
+	TArray<node_t> Nodes;
+	TArray<seg_t> Segs;
+	TArray<subsector_t> Subsectors;
+	TArray<vertex_t> Verts;
 };
 
 
@@ -1173,7 +1284,11 @@ struct spriteframe_t
 //
 struct spritedef_t
 {
-	char name[5];
+	union
+	{
+		char name[5];
+		DWORD dwName;
+	};
 	BYTE numframes;
 	WORD spriteframes;
 };

@@ -102,6 +102,7 @@ static	ULONG			g_ulCompatFlags;
 static	ULONG			g_ulCompatFlags2;
 static	ULONG			g_ulDMFlags;
 static	ULONG			g_ulDMFlags2;
+static	ULONG			g_ulZADMFlags;
 static	ULONG			g_ulLMSAllowedWeapons;
 static	ULONG			g_ulLMSSpectatorSettings;
 
@@ -147,7 +148,7 @@ static	FLAGMAPPING_t	g_Flags[NUMBER_OF_FLAGS] =
 	{ DF2_NO_RESPAWN_INVUL,				IDC_NO_RESPAWN_INVUL,			&g_ulDMFlags2, },
 	{ DF2_COOP_SHOTGUNSTART,			IDC_SHOTGUN_START,				&g_ulDMFlags2, },
 	{ DF2_SAME_SPAWN_SPOT,				IDC_SAME_SPAWN_SPOT,			&g_ulDMFlags2, },
-	{ DF2_YES_KEEP_TEAMS,				IDC_DF2_YES_KEEP_TEAMS,			&g_ulDMFlags2, },
+	{ ZADF_YES_KEEP_TEAMS,				IDC_ZADF_YES_KEEP_TEAMS,		&g_ulZADMFlags, },
 	{ DF2_YES_KEEPFRAGS,				IDC_DF2_YES_KEEP_FRAGS,			&g_ulDMFlags2, },
 	{ DF2_NO_RESPAWN,					IDC_DF2_NO_RESPAWN,				&g_ulDMFlags2, },
 	{ DF2_YES_LOSEFRAG,					IDC_DF2_YES_LOSEFRAG,			&g_ulDMFlags2, },
@@ -159,11 +160,11 @@ static	FLAGMAPPING_t	g_Flags[NUMBER_OF_FLAGS] =
 	{ DF2_CHASECAM,						IDC_DF2_CHASECAM,				&g_ulDMFlags2, },
 	{ DF2_NOSUICIDE,					IDC_DF2_NOSUICIDE,				&g_ulDMFlags2, },
 	{ DF2_NOAUTOAIM,					IDC_DF2_NOAUTOAIM,				&g_ulDMFlags2, },
-	{ DF2_FORCE_GL_DEFAULTS,			IDC_DF2_FORCE_GL_DEFAULTS,		&g_ulDMFlags2, },
-	{ DF2_NO_ROCKET_JUMPING,			IDC_DF2_NO_ROCKET_JUMPING,		&g_ulDMFlags2, },
-	{ DF2_AWARD_DAMAGE_INSTEAD_KILLS,	IDC_DF2_AWARD_DAMAGE_INSTEAD_KILLS,	&g_ulDMFlags2, },
-	{ DF2_FORCE_ALPHA,					IDC_DF2_FORCE_ALPHA,			&g_ulDMFlags2, },
-	{ DF2_COOP_SP_ACTOR_SPAWN,			NULL,							&g_ulDMFlags2, },
+	{ ZADF_FORCE_GL_DEFAULTS,			IDC_ZADF_FORCE_GL_DEFAULTS,		&g_ulZADMFlags, },
+	{ ZADF_NO_ROCKET_JUMPING,			IDC_ZADF_NO_ROCKET_JUMPING,		&g_ulZADMFlags, },
+	{ ZADF_AWARD_DAMAGE_INSTEAD_KILLS,	IDC_ZADF_AWARD_DAMAGE_INSTEAD_KILLS,	&g_ulZADMFlags, },
+	{ ZADF_FORCE_ALPHA,					IDC_ZADF_FORCE_ALPHA,			&g_ulZADMFlags, },
+	{ ZADF_COOP_SP_ACTOR_SPAWN,			NULL,							&g_ulZADMFlags, },
 	{ COMPATF_SHORTTEX,					IDC_SHORTTEX,					&g_ulCompatFlags, },
 	{ COMPATF_STAIRINDEX,				IDC_STAIRINDEX,					&g_ulCompatFlags, },
 	{ COMPATF_LIMITPAIN,				IDC_LIMITPAIN,					&g_ulCompatFlags, },
@@ -185,22 +186,22 @@ static	FLAGMAPPING_t	g_Flags[NUMBER_OF_FLAGS] =
 	{ COMPATF_SECTORSOUNDS,				IDC_COMPATF_SECTORSOUNDS,		&g_ulCompatFlags, },
 	{ COMPATF_MISSILECLIP,				IDC_COMPATF_MISSILECLIP,		&g_ulCompatFlags, },
 	{ COMPATF_CROSSDROPOFF,				IDC_COMPATF_CROSSDROPOFF,		&g_ulCompatFlags, },
-	{ COMPATF_LIMITED_AIRMOVEMENT,		IDC_LIMITED_AIRMOVEMENT,		&g_ulCompatFlags, },
-	{ COMPATF_PLASMA_BUMP_BUG,			IDC_PLASMA_BUMP_BUG,			&g_ulCompatFlags, },
-	{ COMPATF_INSTANTRESPAWN,			IDC_INSTANTRESPAWN,				&g_ulCompatFlags, },
-	{ COMPATF_DISABLETAUNTS,			IDC_DISABLETAUNTS,				&g_ulCompatFlags, },
-	{ COMPATF_ORIGINALSOUNDCURVE,		IDC_ORIGINALSOUNDCURVE,			&g_ulCompatFlags, },
-	{ COMPATF_OLDINTERMISSION,			IDC_OLDINTERMISSION,			&g_ulCompatFlags, },
-	{ COMPATF_DISABLESTEALTHMONSTERS,	IDC_DISABLESTEALTHMONSTERS,		&g_ulCompatFlags, },	
-	{ COMPATF_OLDRADIUSDMG,				IDC_COMPATF_OLDRADIUSDMG,		&g_ulCompatFlags, },
-	{ COMPATF_NO_CROSSHAIR,				IDC_COMPATF_NO_CROSSHAIR,		&g_ulCompatFlags, },
-	{ COMPATF_OLD_WEAPON_SWITCH,		IDC_COMPATF_OLD_WEAPON_SWITCH,	&g_ulCompatFlags, },
-	{ COMPATF2_NETSCRIPTS_ARE_CLIENTSIDE,IDC_COMPATF2_NETSCRIPTS_ARE_CLIENTSIDE, &g_ulCompatFlags2, },
-	{ COMPATF2_CLIENTS_SEND_FULL_BUTTON_INFO, NULL,						&g_ulCompatFlags2, },
-	{ COMPATF2_NO_LAND,					NULL,							&g_ulCompatFlags2, },
-	{ COMPATF2_OLD_RANDOM_GENERATOR,					NULL,							&g_ulCompatFlags2, },
-	{ COMPATF2_NOGRAVITY_SPHERES,					NULL,							&g_ulCompatFlags2, },
-	{ COMPATF2_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT,					NULL,							&g_ulCompatFlags2, },
+	{ ZACOMPATF_LIMITED_AIRMOVEMENT,		IDC_LIMITED_AIRMOVEMENT,		&g_ulCompatFlags2, },
+	{ ZACOMPATF_PLASMA_BUMP_BUG,			IDC_PLASMA_BUMP_BUG,			&g_ulCompatFlags2, },
+	{ ZACOMPATF_INSTANTRESPAWN,			IDC_INSTANTRESPAWN,				&g_ulCompatFlags2, },
+	{ ZACOMPATF_DISABLETAUNTS,			IDC_DISABLETAUNTS,				&g_ulCompatFlags2, },
+	{ ZACOMPATF_ORIGINALSOUNDCURVE,		IDC_ORIGINALSOUNDCURVE,			&g_ulCompatFlags2, },
+	{ ZACOMPATF_OLDINTERMISSION,			IDC_OLDINTERMISSION,			&g_ulCompatFlags2, },
+	{ ZACOMPATF_DISABLESTEALTHMONSTERS,	IDC_DISABLESTEALTHMONSTERS,		&g_ulCompatFlags2, },	
+	{ ZACOMPATF_OLDRADIUSDMG,				IDC_COMPATF_OLDRADIUSDMG,		&g_ulCompatFlags2, },
+	{ ZACOMPATF_NO_CROSSHAIR,				IDC_COMPATF_NO_CROSSHAIR,		&g_ulCompatFlags2, },
+	{ ZACOMPATF_OLD_WEAPON_SWITCH,		IDC_COMPATF_OLD_WEAPON_SWITCH,	&g_ulCompatFlags2, },
+	{ ZACOMPATF_NETSCRIPTS_ARE_CLIENTSIDE,IDC_ZACOMPATF_NETSCRIPTS_ARE_CLIENTSIDE, &g_ulCompatFlags2, },
+	{ ZACOMPATF_CLIENTS_SEND_FULL_BUTTON_INFO, NULL,						&g_ulCompatFlags2, },
+	{ ZACOMPATF_NO_LAND,					NULL,							&g_ulCompatFlags2, },
+	{ ZACOMPATF_OLD_RANDOM_GENERATOR,					NULL,							&g_ulCompatFlags2, },
+	{ ZACOMPATF_NOGRAVITY_SPHERES,					NULL,							&g_ulCompatFlags2, },
+	{ ZACOMPATF_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT,					NULL,							&g_ulCompatFlags2, },
 	{ LMS_AWF_CHAINSAW,					IDC_LMS_ALLOWCHAINSAW,			&g_ulLMSAllowedWeapons, },
 	{ LMS_AWF_PISTOL,					IDC_LMS_ALLOWPISTOL,			&g_ulLMSAllowedWeapons, },
 	{ LMS_AWF_SHOTGUN,					IDC_LMS_ALLOWSHOTGUN,			&g_ulLMSAllowedWeapons, },
@@ -292,8 +293,9 @@ BOOL CALLBACK SERVERCONSOLE_DMFlagsCallback( HWND hDlg, UINT Message, WPARAM wPa
 			g_hDlg = hDlg;
 			g_ulDMFlags = dmflags;
 			g_ulDMFlags2 = dmflags2;
+			g_ulZADMFlags = zadmflags;
 			g_ulCompatFlags = compatflags;
-			g_ulCompatFlags2 = compatflags2;
+			g_ulCompatFlags2 = zacompatflags;
 			g_ulLMSAllowedWeapons = lmsallowedweapons;
 			g_ulLMSSpectatorSettings = lmsspectatorsettings;
 
@@ -369,10 +371,12 @@ BOOL CALLBACK SERVERCONSOLE_DMFlagsCallback( HWND hDlg, UINT Message, WPARAM wPa
 				dmflags = g_ulDMFlags;
 			if ( dmflags2 != g_ulDMFlags2 )
 				dmflags2 = g_ulDMFlags2;
+			if ( zadmflags != g_ulZADMFlags )
+				zadmflags = g_ulZADMFlags;
 			if ( compatflags != g_ulCompatFlags )
 				compatflags = g_ulCompatFlags;
-			if ( compatflags2 != g_ulCompatFlags2 )
-				compatflags2 = g_ulCompatFlags2;
+			if ( zacompatflags != g_ulCompatFlags2 )
+				zacompatflags = g_ulCompatFlags2;
 			if ( lmsallowedweapons != g_ulLMSAllowedWeapons )
 				lmsallowedweapons = g_ulLMSAllowedWeapons;
 			if ( lmsspectatorsettings != g_ulLMSSpectatorSettings )
@@ -533,7 +537,7 @@ void flags_ReadNewValue( HWND hDlg, int iControlID, ULONG &ulFlags )
 static void flags_InsertTab( char *pszTitle, int iResource, HWND hDlg, TCITEM tcitem, HWND edit, RECT tabrect, RECT tcrect, int &index )
 {
 	tcitem.pszText = pszTitle;
-	tcitem.lParam = (LPARAM) CreateDialogParam( g_hInst, MAKEINTRESOURCE( iResource ), hDlg, flags_GenericTabCallback, (LPARAM) edit );
+	tcitem.lParam = (LPARAM) CreateDialogParam( g_hInst, MAKEINTRESOURCE( iResource ), hDlg, (DLGPROC)flags_GenericTabCallback, (LPARAM) edit );
 	TabCtrl_InsertItem( edit, index, &tcitem );
 	SetWindowPos( (HWND) tcitem.lParam, HWND_TOP, tcrect.left + 3, tcrect.top + tabrect.bottom + 3,
 		tcrect.right - tcrect.left - 8, tcrect.bottom - tcrect.top - tabrect.bottom - 8, 0 );

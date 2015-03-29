@@ -264,7 +264,7 @@ bool P_GiveBody (AActor *actor, int num)
 	}
 	else
 	{
-		max = actor->GetDefault()->health;
+		max = actor->SpawnHealth();
 		if (num < 0)
 		{
 			num = max * -num / 100;
@@ -575,10 +575,10 @@ bool AInventory::HandlePickup (AInventory *item)
 {
 	if (item->GetClass() == GetClass())
 	{
-		if (Amount < MaxAmount)
+		if (Amount < MaxAmount || sv_unlimited_pickup)
 		{
 			Amount += item->Amount;
-			if (Amount > MaxAmount)
+			if (Amount > MaxAmount && !sv_unlimited_pickup)
 			{
 				Amount = MaxAmount;
 			}
@@ -1180,7 +1180,7 @@ void AInventory::Touch (AActor *toucher)
 			// the keys later on so we store the actor network index instead.
 			g_keysFound.Push( GetClass()->getActorNetworkIndex() );
 
-			if ( dmflags3 & DF3_SHARE_KEYS )
+			if ( zadmflags & ZADF_SHARE_KEYS )
 			{
 				// [Dusk] Announcement message
 				SERVER_Printf( PRINT_HIGH, TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL " has found the " TEXTCOLOR_GOLD "%s!\n",
@@ -1677,7 +1677,7 @@ IMPLEMENT_CLASS (AHealth)
 
 //===========================================================================
 //
-// AHealth :: TryPickup
+// AHealth :: PickupMessage
 //
 //===========================================================================
 const char *AHealth::PickupMessage ()
@@ -1963,7 +1963,7 @@ void ABackpackItem::Serialize (FArchive &arc)
 AInventory *ABackpackItem::CreateCopy (AActor *other)
 {
 	// Find every unique type of ammo. Give it to the player if
-	// he doesn't have it already, and double it's maximum capacity.
+	// he doesn't have it already, and double its maximum capacity.
 	for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
 	{
 		const PClass *type = PClass::m_Types[i];
@@ -1982,7 +1982,14 @@ AInventory *ABackpackItem::CreateCopy (AActor *other)
 			{ // The player did not have the ammo. Add it.
 				ammo = static_cast<AAmmo *>(Spawn (type, 0, 0, 0, NO_REPLACE));
 				ammo->Amount = bDepleted ? 0 : amount;
-				if (ammo->BackpackMaxAmount > ammo->MaxAmount) ammo->MaxAmount = ammo->BackpackMaxAmount;
+				if (ammo->BackpackMaxAmount > ammo->MaxAmount)
+				{
+					ammo->MaxAmount = ammo->BackpackMaxAmount;
+				}
+				if (ammo->Amount > ammo->MaxAmount)
+				{
+					ammo->Amount = ammo->MaxAmount;
+				}
 				ammo->AttachToOwner (other);
 			}
 			else
@@ -2025,7 +2032,7 @@ bool ABackpackItem::HandlePickup (AInventory *item)
 		{
 			if (probe->GetClass()->ParentClass == RUNTIME_CLASS(AAmmo))
 			{
-				if (probe->Amount < probe->MaxAmount)
+				if (probe->Amount < probe->MaxAmount || sv_unlimited_pickup)
 				{
 					int amount = static_cast<AAmmo*>(probe->GetDefault())->BackpackAmount;
 					// extra ammo in baby mode and nightmare mode
@@ -2034,7 +2041,7 @@ bool ABackpackItem::HandlePickup (AInventory *item)
 						amount = FixedMul(amount, G_SkillProperty(SKILLP_AmmoFactor));
 					}
 					probe->Amount += amount;
-					if (probe->Amount > probe->MaxAmount)
+					if (probe->Amount > probe->MaxAmount && !sv_unlimited_pickup)
 					{
 						probe->Amount = probe->MaxAmount;
 					}
@@ -2131,6 +2138,30 @@ bool AMapRevealer::TryPickup (AActor *&toucher)
 {
 	level.flags2 |= LEVEL2_ALLMAP;
 	GoAwayAndDie ();
+	return true;
+}
+
+
+//===========================================================================
+//
+// AScoreItem
+//
+//===========================================================================
+
+IMPLEMENT_CLASS(AScoreItem)
+
+//===========================================================================
+//
+// AScoreItem :: TryPickup
+//
+// Adds the value (Amount) of the item to the toucher's Score property.
+//
+//===========================================================================
+
+bool AScoreItem::TryPickup (AActor *&toucher)
+{
+	toucher->Score += Amount;
+	GoAwayAndDie();
 	return true;
 }
 

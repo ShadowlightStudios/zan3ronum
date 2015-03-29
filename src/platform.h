@@ -52,6 +52,8 @@ char *I_ConsoleInput (void);
 typedef unsigned char UCHAR;
 typedef bool BOOL;
 
+#define _access(a,b)	access(a,b)
+
 #endif
 
 // [BB] FreeBSD specific defines
@@ -67,5 +69,25 @@ typedef bool BOOL;
 // of the interlocked intrinsics.
 #include <intrin.h>
 #endif	//_MSC_VER
+
+#if defined(__MINGW32_VERSION) || defined(__MINGW64__)
+
+// [BB] For i_keyboard.cpp (from dinput.h of the Windows SDK)
+#ifndef DIK_PREVTRACK
+#define DIK_PREVTRACK       0x90    /* Previous Track (DIK_CIRCUMFLEX on Japanese keyboard) */
+#endif
+
+// [BB] For i_xinput.cpp (from Xinput.h of the Windows SDK)
+#ifndef XINPUT_DLL
+#define XINPUT_DLL_A  "xinput9_1_0.dll"
+#define XINPUT_DLL_W L"xinput9_1_0.dll"
+#ifdef UNICODE
+    #define XINPUT_DLL XINPUT_DLL_W
+#else
+    #define XINPUT_DLL XINPUT_DLL_A
+#endif 
+#endif
+
+#endif
 
 #endif	//ndef PLATFORM_H

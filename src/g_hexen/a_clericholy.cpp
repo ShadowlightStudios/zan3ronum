@@ -145,36 +145,6 @@ bool AHolySpirit::SpecialBlastHandling (AActor *source, fixed_t strength)
 	return true;
 }
 
-bool AHolySpirit::IsOkayToAttack (AActor *link)
-{
-	if ((link->flags3&MF3_ISMONSTER ||
-		(link->player && link != target))
-		&& !(link->flags2&MF2_DORMANT))
-	{
-		if (target != NULL && link->IsFriend(target))
-		{
-			return false;
-		}
-		if (!(link->flags & MF_SHOOTABLE))
-		{
-			return false;
-		}
-		if (( NETWORK_GetState( ) != NETSTATE_SINGLE ) && !deathmatch && link->player && target != NULL && target->player)
-		{
-			return false;
-		}
-		if (link == target)
-		{
-			return false;
-		}
-		else if (P_CheckSight (this, link))
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
 //============================================================================
 //
 // A_CHolyAttack2 
@@ -486,8 +456,8 @@ static void CHolySeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax)
 		actor->angle -= delta;
 	}
 	angle = actor->angle>>ANGLETOFINESHIFT;
-	actor->momx = FixedMul (actor->Speed, finecosine[angle]);
-	actor->momy = FixedMul (actor->Speed, finesine[angle]);
+	actor->velx = FixedMul (actor->Speed, finecosine[angle]);
+	actor->vely = FixedMul (actor->Speed, finesine[angle]);
 	if (!(level.time&15) 
 		|| actor->z > target->z+(target->height)
 		|| actor->z+actor->height < target->z)
@@ -511,7 +481,7 @@ static void CHolySeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax)
 		{
 			dist = 1;
 		}
-		actor->momz = deltaZ/dist;
+		actor->velz = deltaZ / dist;
 	}
 	return;
 }
@@ -558,9 +528,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_CHolySeek)
 	self->health--;
 	if (self->health <= 0)
 	{
-		self->momx >>= 2;
-		self->momy >>= 2;
-		self->momz = 0;
+		self->velx >>= 2;
+		self->vely >>= 2;
+		self->velz = 0;
 		self->SetState (self->FindState(NAME_Death));
 		self->tics -= pr_holyseek()&3;
 		return;

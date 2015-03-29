@@ -74,6 +74,7 @@
 #include "d_netinf.h"
 #include "gl/gl_functions.h"
 // [BC] New #includes.
+#include "announcer.h"
 #include "chat.h"
 #include "cl_demo.h"
 #include "cl_main.h"
@@ -83,13 +84,25 @@
 #include "team.h"
 #include "campaign.h"
 #include "cooperative.h"
+#include "i_input.h"
 
+// [BB]
+extern bool g_bStringInput;
+extern char g_szStringInputBuffer[64];
+// [BB]
+static TArray<valuestring_t> Announcers;
 
 // MACROS ------------------------------------------------------------------
 
 #define SKULLXOFF			-32
 #define SELECTOR_XOFFSET	(-28)
 #define SELECTOR_YOFFSET	(-1)
+
+#define KEY_REPEAT_DELAY	(TICRATE*5/12)
+#define KEY_REPEAT_RATE		(3)
+
+#define INPUTGRID_WIDTH		13
+#define INPUTGRID_HEIGHT	5
 
 // TYPES -------------------------------------------------------------------
 
@@ -124,8 +137,7 @@ protected:
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
-void M_DrawSlider (int x, int y, float min, float max, float cur);
-void R_GetPlayerTranslation (int color, FPlayerSkin *skin, FRemapTable *table);
+void R_GetPlayerTranslation (int color, const FPlayerColorSet *colorset, FPlayerSkin *skin, FRemapTable *table);
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
@@ -162,6 +174,7 @@ static void M_ExtractSaveData (const FSaveGameNode *file);
 static void M_UnloadSaveData ();
 static void M_InsertSaveNode (FSaveGameNode *node);
 static bool M_SaveLoadResponder (event_t *ev);
+static void M_SaveLoadButtonHandler(EMenuKey key);
 static void M_DeleteSaveResponse (int choice);
 
 static void M_DrawMainMenu ();
@@ -185,20 +198,24 @@ static void M_DrawBotSkill( );
 void M_DrawFrame (int x, int y, int width, int height);
 static void M_DrawSaveLoadBorder (int x,int y, int len);
 static void M_DrawSaveLoadCommon ();
+static void M_DrawInputGrid();
+
 static void M_SetupNextMenu (oldmenu_t *menudef);
 // [BC] No longer static so this can be used elsewhere.
-/*static*/ void M_StartMessage (const char *string, void(*routine)(int), bool input);
+/*static*/ void M_StartMessage (const char *string, void(*routine)(int));
+static void M_EndMessage (int key);
 
 // [RH] For player setup menu.
 	   void M_PlayerSetup ();
 static void M_PlayerSetupTicker ();
-static void M_PlayerSetupDrawer ();
+static bool M_PlayerSetupDrawer ();
 // [BC] These functions are no longer needed.
 /*
 static void M_EditPlayerName (int choice);
 static void M_ChangePlayerTeam (int choice);
 static void M_PlayerNameChanged (FSaveGameNode *dummy);
 static void M_PlayerNameNotChanged ();
+static void M_ChangeColorSet (int choice);
 static void M_SlidePlayerRed (int choice);
 static void M_SlidePlayerGreen (int choice);
 static void M_SlidePlayerBlue (int choice);
@@ -206,6 +223,7 @@ static void M_ChangeClass (int choice);
 static void M_ChangeGender (int choice);
 static void M_ChangeSkin (int choice);
 static void M_ChangeAutoAim (int choice);
+static void M_ChangeSwitchPickup (int choice);
 */
 static void PickPlayerClass ();
 
@@ -214,6 +232,7 @@ static void PickPlayerClass ();
 EXTERN_CVAR (String, playerclass)
 EXTERN_CVAR (String, name)
 EXTERN_CVAR (Int, team)
+EXTERN_CVAR(Bool, neverswitchonpickup)
 
 extern bool		sendpause;
 extern int		flagsvar;
@@ -227,6 +246,8 @@ int				skullAnimCounter;	// skull animation counter
 bool			drawSkull;			// [RH] don't always draw skull
 bool			M_DemoNoPlay;
 bool			OptionsActive;
+FButtonStatus	MenuButtons[NUM_MKEYS];
+int				MenuButtonTickers[NUM_MKEYS];
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -238,9 +259,9 @@ static FSaveGameNode *lastSaveSlot;	// Used for highlighting the most recently u
 static int 		messageToPrint;			// 1 = message to be printed
 static const char *messageString;		// ...and here is the message string!
 static EMenuState messageLastMenuActive;
-static bool		messageNeedsInput;		// timed message = no input from user
-static void	  (*messageRoutine)(int response);
+static void	  (*messageRoutine)(int response);	// Non-NULL if only Y/N should close message
 static int		showSharewareMessage;
+static int		messageSelection;		// 0 {Yes) or 1 (No) [if messageRoutine is non-NULL]
 
 static int 		genStringEnter;	// we are going to be entering a savegame string
 static size_t	genStringLen;	// [RH] Max # of chars that can be entered
@@ -250,21 +271,15 @@ static int 		saveSlot;		// which slot to save in
 static size_t	saveCharIndex;	// which char we're editing
 
 static int		LINEHEIGHT;
+static const int PLAYERSETUP_LINEHEIGHT = 16;
 
 static char		savegamestring[SAVESTRINGSIZE];
 static FString	EndString;
 
 static short	itemOn; 			// menu item skull is on
-static short	whichSkull; 		// which skull to draw
 static int		MenuTime;
 static int		InfoType;
 static int		InfoTic;
-
-static const char skullName[2][9] = {"M_SKULL1", "M_SKULL2"};	// graphic name of skulls
-static const char cursName[8][8] =	// graphic names of Strife menu selector
-{
-	"M_CURS1", "M_CURS2", "M_CURS3", "M_CURS4", "M_CURS5", "M_CURS6", "M_CURS7", "M_CURS8"
-};
 
 static oldmenu_t *currentMenu;		// current menudef
 static oldmenu_t *TopLevelMenu;		// The main menu everything hangs off of
@@ -280,6 +295,7 @@ static FState		*PlayerState;
 static int			PlayerTics;
 // [BC] This is used in m_options.cpp now.
 /*static*/ int			PlayerRotation;
+static TArray<int>	PlayerColorSets;
 
 static FTexture			*SavePic;
 static FBrokenLines		*SaveComment;
@@ -291,6 +307,18 @@ static FSaveGameNode	NewSaveNode;
 static int 	epi;				// Selected episode
 
 static const char *saved_playerclass = NULL;
+
+// Heretic and Hexen do not, by default, come with glyphs for all of these
+// characters. Oh well. Doom and Strife do.
+static const char InputGridChars[INPUTGRID_WIDTH * INPUTGRID_HEIGHT] =
+	"ABCDEFGHIJKLM"
+	"NOPQRSTUVWXYZ"
+	"0123456789+-="
+	".,!?@'\":;[]()"
+	"<>^#$%&*/_ \b";
+static int InputGridX = INPUTGRID_WIDTH - 1;
+static int InputGridY = INPUTGRID_HEIGHT - 1;
+static bool InputGridOkay;		// Last input was with a controller.
 
 // PRIVATE MENU DEFINITIONS ------------------------------------------------
 
@@ -397,7 +425,6 @@ oldmenuitem_t EpisodeMenu[MAX_EPISODES] =
 	{1,0,0, NULL, false, false, M_Episode, CR_UNTRANSLATED},
 };
 
-// [BB] Increased size to 9 to ensure that the map names are terminated.
 char EpisodeMaps[MAX_EPISODES][9];
 // [BC] Customizeable titles for skill menu.
 char EpisodeSkillHeaders[MAX_EPISODES][64];
@@ -447,10 +474,10 @@ static oldmenuitem_t SkillSelectMenu[]={
 static oldmenu_t SkillDef =
 {
 	0,
-	SkillSelectMenu,		// oldmenuitem_t ->
+	SkillSelectMenu,	// oldmenuitem_t ->
 	M_DrawNewGame,		// drawing routine ->
 	48,63,				// x,y
-	2					// lastOn
+	-1					// lastOn
 };
 
 // [BC] New menu for bot games.
@@ -475,10 +502,10 @@ oldmenu_t BotDef =
 static oldmenu_t HexenSkillMenu =
 {
 	0, 
-	SkillSelectMenu,		// oldmenuitem_t ->
+	SkillSelectMenu,
 	DrawHexenSkillMenu,
 	120, 44,
-	2
+	-1
 };
 
 
@@ -501,13 +528,20 @@ void M_StartupSkillMenu(const char *playerclass)
 		}
 	}
 	SkillDef.numitems = HexenSkillMenu.numitems = 0;
-	for(unsigned int i=0;i<AllSkills.Size() && i<8;i++)
+	for(unsigned int i = 0; i < AllSkills.Size() && i < 8; i++)
 	{
 		FSkillInfo &skill = AllSkills[i];
 
-		SkillSelectMenu[i].name = skill.MenuName;
-		SkillSelectMenu[i].fulltext = !skill.MenuNameIsLump;
-		SkillSelectMenu[i].alphaKey = skill.MenuNameIsLump? skill.Shortcut : tolower(SkillSelectMenu[i].name[0]);
+		if (skill.PicName.Len() != 0)
+		{
+			SkillSelectMenu[i].name = skill.PicName;
+			SkillSelectMenu[i].fulltext = false;
+		}
+		else
+		{
+			SkillSelectMenu[i].name = skill.MenuName;
+			SkillSelectMenu[i].fulltext = true;
+		}
 		SkillSelectMenu[i].textcolor = skill.GetTextColor();
 		SkillSelectMenu[i].alphaKey = skill.Shortcut;
 
@@ -525,13 +559,30 @@ void M_StartupSkillMenu(const char *playerclass)
 		SkillDef.numitems++;
 		HexenSkillMenu.numitems++;
 	}
+	int defskill = DefaultSkill;
+	if ((unsigned int)defskill >= AllSkills.Size())
+	{
+		defskill = (AllSkills.Size() - 1) / 2;
+	}
+	// The default skill is only set the first time the menu is opened.
+	// After that, it opens on whichever skill you last selected.
+	if (SkillDef.lastOn < 0)
+	{
+		SkillDef.lastOn = defskill;
+	}
+	if (HexenSkillMenu.lastOn < 0)
+	{
+		HexenSkillMenu.lastOn = defskill;
+	}
 	// Hexen needs some manual coordinate adjustments based on player class
 	if (gameinfo.gametype == GAME_Hexen)
 	{
 		M_SetupNextMenu(&HexenSkillMenu);
 	}
 	else
+	{
 		M_SetupNextMenu(&SkillDef);
+	}
 
 }
 
@@ -544,13 +595,23 @@ static oldmenuitem_t PlayerSetupMenu[] =
 {
 	{ 1,0,'n',NULL,M_EditPlayerName, CR_UNTRANSLATED},
 	{ 2,0,'t',NULL,M_ChangePlayerTeam, CR_UNTRANSLATED},
+	{ 2,0,'c',NULL,M_ChangeColorSet, CR_UNTRANSLATED},
 	{ 2,0,'r',NULL,M_SlidePlayerRed, CR_UNTRANSLATED},
 	{ 2,0,'g',NULL,M_SlidePlayerGreen, CR_UNTRANSLATED},
 	{ 2,0,'b',NULL,M_SlidePlayerBlue, CR_UNTRANSLATED},
-	{ 2,0,'c',NULL,M_ChangeClass, CR_UNTRANSLATED},
+	{ 2,0,'t',NULL,M_ChangeClass, CR_UNTRANSLATED},
 	{ 2,0,'s',NULL,M_ChangeSkin, CR_UNTRANSLATED},
 	{ 2,0,'e',NULL,M_ChangeGender, CR_UNTRANSLATED},
-	{ 2,0,'a',NULL,M_ChangeAutoAim, CR_UNTRANSLATED}
+	{ 2,0,'a',NULL,M_ChangeAutoAim, CR_UNTRANSLATED},
+	{ 2,0,'p',NULL,M_ChangeSwitchPickup, CR_UNTRANSLATED}
+};
+
+enum
+{
+	// These must be changed if the menu definition is altered
+	PSM_RED = 3,
+	PSM_GREEN = 4,
+	PSM_BLUE = 5,
 };
 
 static oldmenu_t PSetupDef =
@@ -619,12 +680,34 @@ menuitem_t PlayerSetupItems[] = {
 	{ discrete,	"Unlagged",					{&cl_unlagged},			{2.0}, {0.0}, {0.0}, {OnOff} },
 	{ more,		"Weapon setup",				{NULL},					{0.0}, {0.0}, {0.0}, {(value_t *)M_WeaponSetup} },
 	{ redtext,	" ",						{NULL},					{0.0}, {0.0}, {0.0}, {NULL}  },
-	{ announcer,"Announcer",				{&cl_announcer},			{0.0}, {0.0}, {0.0}, {NULL} },
+	{ discretes,"Announcer",				{&cl_announcer},			{0.0}, {0.0}, {0.0}, {NULL} },
 	{ slider,	"Announcer volume",			{&snd_announcervolume},	{0.0}, {1.0},	{0.05}, {NULL} },	// [WS] Skulltag Announcer volume.
 // [RC] Moved switch team to the Multiplayer menu
 	{ redtext,	" ",						{NULL},					{0.0}, {0.0}, {0.0}, {NULL}  },
 	{ more,		"Undo changes",				{NULL},					{0.0}, {0.0}, {0.0}, {(value_t *)M_UndoPlayerSetupChanges} },
 };
+
+// [BB] Update this define if PlayerSetupItems is altered!
+#define ANNOUNCER_INDEX 17
+
+// [BB]
+void InitAnnouncersList()
+{
+	Announcers.Clear();
+	valuestring_t value;
+	value.value = -1;
+	value.name = "None";
+	Announcers.Push(value);
+	for ( unsigned int i = 0; i < ANNOUNCER_GetNumProfiles( ); ++i )
+	{
+		value.value = float(i);
+		value.name = ANNOUNCER_GetName( i );
+		Announcers.Push(value);
+	}
+	// [BB] Moved crosshair selection to the HUD menu.
+	PlayerSetupItems[ANNOUNCER_INDEX].b.numvalues = float(Announcers.Size());
+	PlayerSetupItems[ANNOUNCER_INDEX].e.valuestrings = &Announcers[0];
+}
 
 menu_t PlayerSetupMenu = {
 	"PLAYER SETUP",
@@ -712,8 +795,7 @@ static oldmenu_t SaveDef =
 // through console commands.
 CCMD (menu_main)
 {
-	M_StartControlPanel (true);
-	M_SetupNextMenu (TopLevelMenu);
+	M_StartControlPanel (true, true);
 }
 
 CCMD (menu_load)
@@ -1422,6 +1504,9 @@ void M_DrawFrame (int left, int top, int width, int height)
 {
 	FTexture *p;
 	const gameborder_t *border = gameinfo.border;
+	// Sanity check for incomplete gameinfo
+	if (border == NULL)
+		return;
 	int offset = border->offset;
 	int right = left + width;
 	int bottom = top + height;
@@ -1453,9 +1538,9 @@ void M_LoadGame (int choice)
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage (GStrings("CLOADNET"), NULL, false);
+			M_StartMessage (GStrings("CLOADNET"), NULL);
 		else
-			M_StartMessage (GStrings("LOADNET"), NULL, false);
+			M_StartMessage (GStrings("LOADNET"), NULL);
 		return;
 	}
 		
@@ -1528,21 +1613,21 @@ void M_SaveGame (int choice)
 {
 	if (!usergame || (players[consoleplayer].health <= 0 && NETWORK_GetState( ) == NETSTATE_SINGLE ))
 	{
-		M_StartMessage (GStrings("SAVEDEAD"), NULL, false);
+		M_StartMessage (GStrings("SAVEDEAD"), NULL);
 		return;
 	}
 
 	// [BB] No saving in multiplayer.
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 	{
-		M_StartMessage (GStrings("SAVENET"), NULL, false);
+		M_StartMessage (GStrings("SAVENET"), NULL);
 		return;
 	}
 
 	// [BB] Saving bots is not supported yet.
 	if ( BOTS_CountBots() > 0 )
 	{
-		M_StartMessage ("You cannot save the game\nwhile bots are in use.", NULL, false);
+		M_StartMessage ("You cannot save the game\nwhile bots are in use.", NULL);
 		return;
 	}
 
@@ -1603,7 +1688,7 @@ void M_QuickSave ()
 	else
 		mysnprintf (tempstring, countof(tempstring), GStrings("QSPROMPT"), quickSaveSlot->Title);
 	strcpy (savegamestring, quickSaveSlot->Title);
-	M_StartMessage (tempstring, M_QuickSaveResponse, true);
+	M_StartMessage (tempstring, M_QuickSaveResponse);
 }
 
 
@@ -1626,9 +1711,9 @@ void M_QuickLoad ()
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage (GStrings("CQLOADNET"), NULL, false);
+			M_StartMessage (GStrings("CQLOADNET"), NULL);
 		else
-			M_StartMessage (GStrings("QLOADNET"), NULL, false);
+			M_StartMessage (GStrings("QLOADNET"), NULL);
 		return;
 	}
 		
@@ -1644,7 +1729,7 @@ void M_QuickLoad ()
 		mysnprintf (tempstring, countof(tempstring), GStrings("CQLPROMPT"), quickSaveSlot->Title);
 	else
 		mysnprintf (tempstring, countof(tempstring), GStrings("QLPROMPT"), quickSaveSlot->Title);
-	M_StartMessage (tempstring, M_QuickLoadResponse, true);
+	M_StartMessage (tempstring, M_QuickLoadResponse);
 }
 
 //
@@ -1765,9 +1850,9 @@ void M_NewGame(int choice)
 	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && !demoplayback)
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage (GStrings("CNEWGAME"), NULL, false);
+			M_StartMessage (GStrings("CNEWGAME"), NULL);
 		else
-			M_StartMessage (GStrings("NEWGAME"), NULL, false);
+			M_StartMessage (GStrings("NEWGAME"), NULL);
 		return;
 	}
 */
@@ -1775,7 +1860,7 @@ void M_NewGame(int choice)
 	// if we are not in client mode. So just tell the user to disconnect first.
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT && PlayerClasses.Size() > 1 )
 	{
-		M_StartMessage ("Please disconnect before\nstarting a new game.", NULL, false);
+		M_StartMessage ("Please disconnect before\nstarting a new game.", NULL);
 		return;
 	}
 
@@ -2011,7 +2096,7 @@ void M_ChooseSkill (int choice)
 		if (*msg==0) msg = GStrings("NIGHTMARE");
 		if (*msg=='$') msg = GStrings(msg+1);
 		confirmskill = choice;
-		M_StartMessage (msg, M_VerifyNightmare, true);
+		M_StartMessage (msg, M_VerifyNightmare);
 		return;
 	}
 
@@ -2051,7 +2136,7 @@ void M_ChooseBotSkill (int choice)
 
 	if (gameinfo.gametype & (GAME_Doom|GAME_Strife) && choice == BotDef.numitems - 1)
 	{								  
-		M_StartMessage( "are you sure? you'll prolly get\nyour ass whooped!\n\npress y or n.", M_VerifyBotNightmare, true );
+		M_StartMessage( "are you sure? you'll prolly get\nyour ass whooped!\n\npress y or n.", M_VerifyBotNightmare );
 		return;
 	}
 
@@ -2081,12 +2166,12 @@ void M_Episode (int choice)
 	{
 		if (gameinfo.gametype == GAME_Doom)
 		{
-			M_StartMessage(GStrings("SWSTRING"),NULL,false);
+			M_StartMessage(GStrings("SWSTRING"), NULL);
 			//M_SetupNextMenu(&ReadDef);
 		}
 		else if (gameinfo.gametype == GAME_Chex)
 		{
-			M_StartMessage(GStrings("CSWSTRING"),NULL,false);
+			M_StartMessage(GStrings("CSWSTRING"), NULL);
 		}
 		else
 		{
@@ -2127,9 +2212,9 @@ static void SCClass (int option)
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage (GStrings("CNEWGAME"), NULL, false);
+			M_StartMessage (GStrings("CNEWGAME"), NULL);
 		else
-			M_StartMessage (GStrings("NEWGAME"), NULL, false);
+			M_StartMessage (GStrings("NEWGAME"), NULL);
 		return;
 	}
 
@@ -2164,9 +2249,9 @@ static void M_ChooseClass (int choice)
 	if (netgame)
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage (GStrings("CNEWGAME"), NULL, false);
+			M_StartMessage (GStrings("CNEWGAME"), NULL);
 		else
-			M_StartMessage (GStrings("NEWGAME"), NULL, false);
+			M_StartMessage (GStrings("NEWGAME"), NULL);
 		return;
 	}
 	*/
@@ -2234,16 +2319,16 @@ void M_EndGame(int choice)
 	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 	{
 		if(gameinfo.gametype == GAME_Chex)
-			M_StartMessage(GStrings("CNETEND"),NULL,false);
+			M_StartMessage(GStrings("CNETEND"), NULL);
 		else
-			M_StartMessage(GStrings("NETEND"),NULL,false);
+			M_StartMessage(GStrings("NETEND"), NULL);
 		return;
 	}
 
 	if(gameinfo.gametype == GAME_Chex)
-		M_StartMessage(GStrings("CENDGAME"),M_EndGameResponse,true);
+		M_StartMessage(GStrings("CENDGAME"), M_EndGameResponse);
 	else
-		M_StartMessage(GStrings("ENDGAME"),M_EndGameResponse,true);
+		M_StartMessage(GStrings("ENDGAME"), M_EndGameResponse);
 }
 
 
@@ -2286,7 +2371,7 @@ void M_QuitResponse(int ch)
 		return;
 	if ( NETWORK_GetState( ) == NETSTATE_SINGLE )
 	{
-		if (gameinfo.quitSound)
+		if (gameinfo.quitSound.IsNotEmpty())
 		{
 			S_Sound (CHAN_VOICE | CHAN_UI, gameinfo.quitSound, 1, ATTN_NONE);
 			I_WaitVBL (105);
@@ -2330,7 +2415,7 @@ void M_QuitGame (int choice)
 		EndString = GStrings("RAVENQUITMSG");
 	}
 
-	M_StartMessage (EndString, M_QuitResponse, true);
+	M_StartMessage (EndString, M_QuitResponse);
 }
 
 
@@ -2355,6 +2440,9 @@ void M_PlayerSetup (void)
 	// [BC] Initialize all placeholder values for the player setup menu.
 	M_SetupPlayerSetupMenu( );
 
+	// [BB] Init announcer list.
+	InitAnnouncersList();
+
 	// [BC] Switch to the player setup menu.
 	M_SwitchMenu( &PlayerSetupMenu );
 
@@ -2370,13 +2458,16 @@ void M_PlayerSetup (void)
 */
 	}
 	PlayerSkin = g_ulPlayerSetupSkin;
-	R_GetPlayerTranslation (g_ulPlayerSetupColor, &skins[g_ulPlayerSetupSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
+	R_GetPlayerTranslation (g_ulPlayerSetupColor,
+		P_GetPlayerColorSet(PlayerClass->Type->TypeName, players[consoleplayer].userinfo.colorset),
+		&skins[g_ulPlayerSetupSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
 	PlayerState = GetDefaultByType (PlayerClass->Type)->SeeState;
 	PlayerTics = PlayerState->GetTics();
 	if (FireTexture == NULL)
 	{
 		FireTexture = new FBackdropTexture;
 	}
+	P_EnumPlayerColorSets(PlayerClass->Type->TypeName, &PlayerColorSets);
 }
 
 static void M_PlayerSetupTicker (void)
@@ -2394,6 +2485,7 @@ static void M_PlayerSetupTicker (void)
 			item = (MenuTime>>2) % (ClassMenuDef.numitems-1);
 
 		PlayerClass = &PlayerClasses[D_PlayerClassToInt (ClassMenuItems[item].name)];
+		P_EnumPlayerColorSets(PlayerClass->Type->TypeName, &PlayerColorSets);
 	}
 	else
 	{
@@ -2409,6 +2501,7 @@ static void M_PlayerSetupTicker (void)
 		g_ulPlayerSetupSkin = R_FindSkin (skins[g_ulPlayerSetupSkin].name, int(PlayerClass - &PlayerClasses[0]));
 		PlayerSkin = g_ulPlayerSetupSkin;
 		R_GetPlayerTranslation (g_ulPlayerSetupColor,
+			P_GetPlayerColorSet(PlayerClass->Type->TypeName, players[consoleplayer].userinfo.colorset),
 			&skins[g_ulPlayerSetupSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
 	}
 
@@ -2422,8 +2515,29 @@ static void M_PlayerSetupTicker (void)
 	}
 }
 
-static void M_PlayerSetupDrawer ()
+
+static void M_DrawPlayerSlider (int x, int y, int cur)
 {
+	const int range = 255;
+
+	x = (x - 160) * CleanXfac + screen->GetWidth() / 2;
+	y = (y - 100) * CleanYfac + screen->GetHeight() / 2;
+
+	screen->DrawText (ConFont, CR_WHITE, x, y,
+		"\x10\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x12",
+		DTA_CellX, 8 * CleanXfac,
+		DTA_CellY, 8 * CleanYfac,
+		TAG_DONE);
+	screen->DrawText (ConFont, CR_ORANGE, x + (5 + (int)((cur * 78) / range)) * CleanXfac, y,
+		"\x13",
+		DTA_CellX, 8 * CleanXfac,
+		DTA_CellY, 8 * CleanYfac,
+		TAG_DONE);
+}
+
+static bool M_PlayerSetupDrawer ()
+{
+	const int LINEHEIGHT = PLAYERSETUP_LINEHEIGHT;
 	int xo, yo;
 	EColorRange label, value;
 	// [BC] Store the line height.
@@ -2495,25 +2609,23 @@ static void M_PlayerSetupDrawer ()
 
 	// [BC] NOTE: This part draws the backdrop.
 	{
-		int x = 320 - 88 - 32 + xo, y = ulOldPlayerSetupYOffset + ulLineHeight*3 - 18 + yo;
+		const int x = ( 320 - 88 - 32 + xo ) * CleanXfac_1, y = ( ulOldPlayerSetupYOffset + ulLineHeight*3 - 18 + yo ) * CleanYfac_1;
 
-		x = (x-160)*CleanXfac+(SCREENWIDTH>>1);
-		y = (y-100)*CleanYfac+(SCREENHEIGHT>>1);
 		if (!FireTexture)
 		{
-			screen->Clear (x, y, x + 72 * CleanXfac, y + 80 * CleanYfac-1, 0, 0);
+			screen->Clear (x, y, x + 72 * CleanXfac_1, y + 80 * CleanYfac_1-1, 0, 0);
 		}
 		else
 		{
 			screen->DrawTexture (FireTexture, x, y - 1,
-				DTA_DestWidth, static_cast<int> (72 * CleanXfac),
-				DTA_DestHeight, static_cast<int> (80 * CleanYfac),
+				DTA_DestWidth, 72 * CleanXfac_1,
+				DTA_DestHeight, 80 * CleanYfac_1,
 				DTA_Translation, &FireRemap,
 				DTA_Masked, false,
 				TAG_DONE);
 		}
 
-		M_DrawFrame (x, y, 72*CleanXfac, 80*CleanYfac-1);
+		M_DrawFrame (x, y, 72*CleanXfac_1, 80*CleanYfac_1-1);
 	}
 
 	// [BC] NOTE: This part renders the actual character.
@@ -2546,42 +2658,50 @@ static void M_PlayerSetupDrawer ()
 					tex = TexMan(SpriteFrames[tex->Rotations].Texture[PlayerRotation]);
 				}
 				screen->DrawTexture (tex,
-					(320 - 52 - 32 + xo - 160)*CleanXfac + (SCREENWIDTH)/2,
-					(ulOldPlayerSetupYOffset + ulLineHeight*3 + 57 - 104)*CleanYfac + (SCREENHEIGHT/2),
-					DTA_DestWidth, MulScale16 (tex->GetWidth() * CleanXfac, ScaleX),
-					DTA_DestHeight, MulScale16 (tex->GetHeight() * CleanYfac, ScaleY),
+					(320 - 52 - 32 + xo)*CleanXfac_1,
+					(ulOldPlayerSetupYOffset + ulLineHeight*3 + 57 - 4)*CleanYfac_1,
+					DTA_DestWidth, MulScale16 (tex->GetWidth() * CleanXfac_1, ScaleX),
+					DTA_DestHeight, MulScale16 (tex->GetHeight() * CleanYfac_1, ScaleY),
 					DTA_Translation, translationtables[TRANSLATION_Players](MAXPLAYERS),
 					TAG_DONE);
 			}
 		}
 
 		const char *str = "PRESS SPACE"; // [RC] Color tweak so it sticks out less
-		screen->DrawText (SmallFont, CR_DARKGRAY, 320 - 52 - 32 -
-			SmallFont->StringWidth (str)/2,
-			(ULONG)( ulOldPlayerSetupYOffset + ulLineHeight * 3 + 69 ), str,
-			DTA_Clean, true, TAG_DONE);
+		screen->DrawText (SmallFont, CR_DARKGRAY, ( 320 - 52 - 32 -
+			SmallFont->StringWidth (str)/2 ) *  CleanXfac_1,
+			( (ULONG)( ulOldPlayerSetupYOffset + ulLineHeight * 3 + 69 ) ) * CleanYfac_1, str,
+			DTA_CleanNoMove_1, true, TAG_DONE);
 		str = PlayerRotation ? "TO SEE FRONT" : "TO SEE BACK";
-		screen->DrawText (SmallFont, CR_DARKGRAY, 320 - 52 - 32 -
-			SmallFont->StringWidth (str)/2,
-			(ULONG)( ulOldPlayerSetupYOffset + ulLineHeight * 4 + 69 ), str,
-			DTA_Clean, true, TAG_DONE);
+		screen->DrawText (SmallFont, CR_DARKGRAY, ( 320 - 52 - 32 -
+			SmallFont->StringWidth (str)/2 ) * CleanXfac_1,
+			( (ULONG)( ulOldPlayerSetupYOffset + ulLineHeight * 4 + 69 ) ) * CleanYfac_1, str,
+			DTA_CleanNoMove_1, true, TAG_DONE);
 	}
 
 	// [BC] Skulltag doesn't need to draw this.
 /*
-	// Draw player color sliders
-	//V_DrawTextCleanMove (CR_GREY, PSetupDef.x, PSetupDef.y + LINEHEIGHT, "Color");
+	// Draw player color selection and sliders
+	FPlayerColorSet *colorset = P_GetPlayerColorSet(PlayerClass->Type->TypeName, players[consoleplayer].userinfo.colorset);
+	x = SmallFont->StringWidth("Color") + 8 + PSetupDef.x;
+	screen->DrawText(SmallFont, label, PSetupDef.x, PSetupDef.y + LINEHEIGHT*2+yo, "Color", DTA_Clean, true, TAG_DONE);
+	screen->DrawText(SmallFont, value, x, PSetupDef.y + LINEHEIGHT*2+yo,
+		colorset != NULL ? colorset->Name.GetChars() : "Custom", DTA_Clean, true, TAG_DONE);
 
-	screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + LINEHEIGHT*2+yo, "Red", DTA_Clean, true, TAG_DONE);
-	screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + LINEHEIGHT*3+yo, "Green", DTA_Clean, true, TAG_DONE);
-	screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + LINEHEIGHT*4+yo, "Blue", DTA_Clean, true, TAG_DONE);
+	// Only show the sliders for a custom color set.
+	if (colorset == NULL)
+	{
+		screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + int(LINEHEIGHT*2.875)+yo, "Red", DTA_Clean, true, TAG_DONE);
+		screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + int(LINEHEIGHT*3.5)+yo, "Green", DTA_Clean, true, TAG_DONE);
+		screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + int(LINEHEIGHT*4.125)+yo, "Blue", DTA_Clean, true, TAG_DONE);
 
-	x = SmallFont->StringWidth ("Green") + 8 + PSetupDef.x;
-	color = players[consoleplayer].userinfo.color;
+		x = SmallFont->StringWidth ("Green") + 8 + PSetupDef.x;
+		color = players[consoleplayer].userinfo.color;
 
-	M_DrawSlider (x, PSetupDef.y + LINEHEIGHT*2+yo, 0.0f, 255.0f, float(RPART(color)));
-	M_DrawSlider (x, PSetupDef.y + LINEHEIGHT*3+yo, 0.0f, 255.0f, float(GPART(color)));
-	M_DrawSlider (x, PSetupDef.y + LINEHEIGHT*4+yo, 0.0f, 255.0f, float(BPART(color)));
+		M_DrawPlayerSlider (x, PSetupDef.y + int(LINEHEIGHT*2.875)+yo, RPART(color));
+		M_DrawPlayerSlider (x, PSetupDef.y + int(LINEHEIGHT*3.5)+yo, GPART(color));
+		M_DrawPlayerSlider (x, PSetupDef.y + int(LINEHEIGHT*4.125)+yo, BPART(color));
+	}
 
 	// [GRB] Draw class setting
 	int pclass = players[consoleplayer].userinfo.PlayerClass;
@@ -2622,7 +2742,15 @@ static void M_PlayerSetupDrawer ()
 		autoaim <= 2 ? "High" :
 		autoaim <= 3 ? "Very High" : "Always",
 		DTA_Clean, true, TAG_DONE);
+
+	// Draw Switch on Pickup setting
+	x = SmallFont->StringWidth ("Switch on Pickup") + 8 + PSetupDef.x;
+	screen->DrawText (SmallFont, label, PSetupDef.x, PSetupDef.y + LINEHEIGHT*9+yo, "Switch on Pickup", DTA_Clean, true, TAG_DONE);
+	screen->DrawText (SmallFont, value, x, PSetupDef.y + LINEHEIGHT*9+yo,
+		neverswitchonpickup == false ? "Yes" : "No",
+		DTA_Clean, true, TAG_DONE);
 */
+	return false;
 }
 
 // A 32x32 cloud rendered with Photoshop, plus some other filters
@@ -2879,7 +3007,9 @@ static void M_ChangeSkin (int choice)
 			PlayerSkin = (PlayerSkin < (int)numskins - 1) ? PlayerSkin + 1 : 0;
 	} while (!PlayerClass->CheckSkin (PlayerSkin));
 
-	R_GetPlayerTranslation (players[consoleplayer].userinfo.color, &skins[PlayerSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
+	R_GetPlayerTranslation (players[consoleplayer].userinfo.color,
+		P_GetPlayerColorSet(PlayerClass->Type->TypeName, players[consoleplayer].userinfo.colorset),
+		&skins[PlayerSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
 
 	cvar_set ("skin", skins[PlayerSkin].name);
 }
@@ -2929,6 +3059,14 @@ static void M_ChangeAutoAim (int choice)
 	}
 
 	autoaim = aim;
+}
+
+static void M_ChangeSwitchPickup (int choice)
+{
+	if (!choice)
+		neverswitchonpickup = (neverswitchonpickup == 1) ? 0 : 1;
+	else
+		neverswitchonpickup = (neverswitchonpickup == 0) ? 1 : 0;
 }
 
 static void M_EditPlayerName (int choice)
@@ -2999,6 +3137,46 @@ static void M_ChangePlayerTeam (int choice)
 		}	
 	}
 }
+
+static void M_ChangeColorSet (int choice)
+{
+	int curpos = (int)PlayerColorSets.Size();
+	int mycolorset = players[consoleplayer].userinfo.colorset;
+	while (--curpos >= 0)
+	{
+		if (PlayerColorSets[curpos] == mycolorset)
+			break;
+	}
+	if (choice == 0)
+	{
+		curpos--;
+	}
+	else
+	{
+		curpos++;
+	}
+	if (curpos < -1)
+	{
+		curpos = (int)PlayerColorSets.Size() - 1;
+	}
+	else if (curpos >= (int)PlayerColorSets.Size())
+	{
+		curpos = -1;
+	}
+	mycolorset = (curpos >= 0) ? PlayerColorSets[curpos] : -1;
+
+	// disable the sliders if a valid colorset is selected
+	PlayerSetupMenu[PSM_RED].status =
+	PlayerSetupMenu[PSM_GREEN].status =
+	PlayerSetupMenu[PSM_BLUE].status = (mycolorset == -1? 2:-1);
+
+	char command[24];
+	mysnprintf(command, countof(command), "colorset %d", mycolorset);
+	C_DoCommand(command);
+	R_GetPlayerTranslation(players[consoleplayer].userinfo.color,
+		P_GetPlayerColorSet(PlayerClass->Type->TypeName, mycolorset),
+		&skins[PlayerSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
+}
 */
 
 void SendNewColor (int red, int green, int blue)
@@ -3009,7 +3187,9 @@ void SendNewColor (int red, int green, int blue)
 	C_DoCommand (command);
 
 	g_ulPlayerSetupColor = MAKERGB (red, green, blue);
-	R_GetPlayerTranslation (g_ulPlayerSetupColor, &skins[g_ulPlayerSetupSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
+	R_GetPlayerTranslation(MAKERGB (red, green, blue),
+		P_GetPlayerColorSet(PlayerClass->Type->TypeName, players[consoleplayer].userinfo.colorset),
+		&skins[g_ulPlayerSetupSkin], translationtables[TRANSLATION_Players][MAXPLAYERS]);
 }
 
 // [BC] Skulltag doesn't use any of this.
@@ -3072,19 +3252,19 @@ static void M_SlidePlayerBlue (int choice)
 //
 //		Menu Functions
 //
-void M_StartMessage (const char *string, void (*routine)(int), bool input)
+void M_StartMessage (const char *string, void (*routine)(int))
 {
 	C_HideConsole ();
 	messageLastMenuActive = menuactive;
 	messageToPrint = 1;
 	messageString = string;
 	messageRoutine = routine;
-	messageNeedsInput = input;
+	messageSelection = 0;
 	if (menuactive == MENU_Off)
 	{
 		M_ActivateMenuInput ();
 	}
-	if (input)
+	if (messageRoutine != NULL)
 	{
 		S_StopSound (CHAN_VOICE);
 		S_Sound (CHAN_VOICE | CHAN_UI, "menu/prompt", 1, ATTN_NONE);
@@ -3092,6 +3272,22 @@ void M_StartMessage (const char *string, void (*routine)(int), bool input)
 	return;
 }
 
+void M_EndMessage(int key)
+{
+	menuactive = messageLastMenuActive;
+	messageToPrint = 0;
+	if (messageRoutine != NULL)
+	{
+		messageRoutine(key);
+	}
+	if (menuactive != MENU_Off)
+	{
+		M_DeactivateMenuInput();
+	}
+	SB_state = screen->GetPageCount();	// refresh the status bar
+	BorderNeedRefresh = screen->GetPageCount();
+	S_Sound(CHAN_VOICE | CHAN_UI, "menu/dismiss", 1, ATTN_NONE);
+}
 
 
 //
@@ -3125,184 +3321,530 @@ bool M_Responder (event_t *ev)
 {
 	int ch;
 	int i;
+	EMenuKey mkey = NUM_MKEYS;
+	bool keyup = true;
 
 	ch = -1;
 
+	// [BB] chatmodeon is CHAT_GetChatMode( ) in Zandronum.
+	if (CHAT_GetChatMode( ))
+	{
+		return false;
+	}
 	if (menuactive == MENU_Off && ev->type == EV_KeyDown)
 	{
 		// Pop-up menu?
 		if (ev->data1 == KEY_ESCAPE)
 		{
-			M_StartControlPanel (true);
-			M_SetupNextMenu (TopLevelMenu);
+			M_StartControlPanel(true, true);
 			return true;
 		}
 		// If devparm is set, pressing F1 always takes a screenshot no matter
 		// what it's bound to. (for those who don't bother to read the docs)
 		if (devparm && ev->data1 == KEY_F1)
 		{
-			G_ScreenShot (NULL);
+			G_ScreenShot(NULL);
 			return true;
 		}
+		return false;
 	}
-	else if (ev->type == EV_GUI_Event && menuactive == MENU_On && CHAT_GetChatMode( ) == 0 )
+	if (menuactive == MENU_WaitKey && OptionsActive)
 	{
-		if (ev->subtype == EV_GUI_KeyDown || ev->subtype == EV_GUI_KeyRepeat)
+		M_OptResponder(ev);
+		return true;
+	}
+	if (menuactive != MENU_On && menuactive != MENU_OnNoPause &&
+		!genStringEnter && !messageToPrint
+		&& !g_bStringInput ) // [BB]
+	{
+		return false;
+	}
+
+	// There are a few input sources we are interested in:
+	//
+	// EV_KeyDown / EV_KeyUp : joysticks/gamepads/controllers
+	// EV_GUI_KeyDown / EV_GUI_KeyUp : the keyboard
+	// EV_GUI_Char : printable characters, which we want in string input mode
+	//
+	// This code previously listened for EV_GUI_KeyRepeat to handle repeating
+	// in the menus, but that doesn't work with gamepads, so now we combine
+	// the multiple inputs into buttons and handle the repetition manually.
+	if (ev->type == EV_GUI_Event)
+	{
+		// [BB] User is currently inputting a string. Handle input for that here.
+		if ( g_bStringInput )
 		{
-			ch = ev->data1;
-		}
-		else if (ev->subtype == EV_GUI_Char && genStringEnter)
-		{
-			ch = ev->data1;
-			if (saveCharIndex < genStringLen &&
-				(genStringEnter==2 || (size_t)SmallFont->StringWidth (savegamestring) < (genStringLen-1)*8))
+			int ch = tolower (ev->data1);
+			menuitem_t *item = CurrentMenu->items + CurrentItem;
+			ULONG	ulLength;
+
+			ulLength = (ULONG)strlen( g_szStringInputBuffer );
+
+			if ( ev->subtype == EV_GUI_KeyDown || ev->subtype == EV_GUI_KeyRepeat )
 			{
-				savegamestring[saveCharIndex] = ch;
-				savegamestring[++saveCharIndex] = 0;
+				if ( ch == '\r' )
+				{
+					UCVarValue	Val;
+
+					V_ColorizeString( g_szStringInputBuffer );
+
+					if ( item->type == mnnumber )
+					{
+						Val.Int = atoi( g_szStringInputBuffer );
+						item->a.intcvar->ForceSet( Val, CVAR_Int );
+					}
+					else
+					{
+						Val.String = g_szStringInputBuffer;
+						item->a.stringcvar->ForceSet( Val, CVAR_String );
+					}
+
+					g_bStringInput = false;
+				}
+				else if ( ch == GK_ESCAPE )
+					g_bStringInput = false;
+				else if ( ch == '\b' )
+				{
+					if ( ulLength )
+						g_szStringInputBuffer[ulLength - 1] = '\0';
+				}
+				// Ctrl+C. 
+				else if ( ev->data1 == 'C' && ( ev->data3 & GKM_CTRL ))
+				{
+					I_PutInClipboard((char *)g_szStringInputBuffer );
+				}
+				// Ctrl+V.
+				else if ( ev->data1 == 'V' && ( ev->data3 & GKM_CTRL ))
+				{
+					FString clipString = I_GetFromClipboard (false);
+					if (clipString.IsNotEmpty())
+					{
+						const char *clip = clipString.GetChars();
+						// Only paste the first line.
+						while (*clip != '\0')
+						{
+							if (*clip == '\n' || *clip == '\r' || *clip == '\b')
+							{
+								break;
+							}
+							ulLength = (ULONG)strlen( g_szStringInputBuffer );
+							if ( ulLength < ( 64 - 2 ))
+							{
+								g_szStringInputBuffer[ulLength] = *clip++;
+								g_szStringInputBuffer[ulLength + 1] = '\0';
+							}
+							// [BB] We still need to increment the pointer, otherwise the while loop never ends.
+							else
+								++clip;
+						}
+					}
+				}
+			}
+			else if ( ev->subtype == EV_GUI_Char )
+			{
+				if ( ulLength  < ( 64 - 2 ))
+				{
+					// Don't allow input of characters when entering a manual number.
+					if (( item->type != mnnumber ) || ( ev->data1 >= '0' && ev->data1 <= '9' ))
+					{
+						g_szStringInputBuffer[ulLength] = ev->data1;
+						g_szStringInputBuffer[ulLength + 1] = '\0';
+					}
+				}
 			}
 			return true;
 		}
-		else if (ev->subtype == EV_GUI_Char && messageToPrint && messageNeedsInput)
-		{
-			ch = ev->data1;
-		}
-	}
-	
-	if (OptionsActive && CHAT_GetChatMode( ) == 0 )
-	{
-		M_OptResponder (ev);
-		return true;
-	}
-	
-	if (ch == -1)
-		return false;
 
-	// Save Game string input
-	// [RH] and Player Name string input
-	if (genStringEnter)
-	{
+		// Save game and player name string input
+		if (genStringEnter)
+		{
+			if (ev->subtype == EV_GUI_Char)
+			{
+				InputGridOkay = false;
+				if (saveCharIndex < genStringLen &&
+					(genStringEnter == 2/*entering player name*/ || (size_t)SmallFont->StringWidth(savegamestring) < (genStringLen-1)*8))
+				{
+					savegamestring[saveCharIndex] = (char)ev->data1;
+					savegamestring[++saveCharIndex] = 0;
+				}
+				return true;
+			}
+			ch = ev->data1;
+			if ((ev->subtype == EV_GUI_KeyDown || ev->subtype == EV_GUI_KeyRepeat) && ch == '\b')
+			{
+				if (saveCharIndex > 0)
+				{
+					saveCharIndex--;
+					savegamestring[saveCharIndex] = 0;
+				}
+			}
+			else if (ev->subtype == EV_GUI_KeyDown)
+			{
+				if (ch == GK_ESCAPE)
+				{
+					genStringEnter = 0;
+					genStringCancel();	// [RH] Function to call when escape is pressed
+				}
+				else if (ch == '\r')
+				{
+					if (savegamestring[0])
+					{
+						genStringEnter = 0;
+						if (messageToPrint)
+							M_ClearMenus ();
+						genStringEnd (SelSaveGame);	// [RH] Function to call when enter is pressed
+					}
+				}
+			}
+			if (ev->subtype == EV_GUI_KeyDown || ev->subtype == EV_GUI_KeyRepeat)
+			{
+				return true;
+			}
+		}
+		if (ev->subtype != EV_GUI_KeyDown && ev->subtype != EV_GUI_KeyUp)
+		{
+			return false;
+		}
+		if (ev->subtype == EV_GUI_KeyRepeat)
+		{
+			// We do our own key repeat handling but still want to eat the
+			// OS's repeated keys.
+			return true;
+		}
+		ch = ev->data1;
+		keyup = ev->subtype == EV_GUI_KeyUp;
+		if (messageToPrint && messageRoutine == NULL)
+		{
+			if (!keyup && !OptionsActive)
+			{
+				D_RemoveNextCharEvent();
+				M_EndMessage(ch);
+				return true;
+			}
+		}
 		switch (ch)
 		{
-		case '\b':
-			if (saveCharIndex > 0)
+		case GK_ESCAPE:			mkey = MKEY_Back;		break;
+		case GK_RETURN:			mkey = MKEY_Enter;		break;
+		case GK_UP:				mkey = MKEY_Up;			break;
+		case GK_DOWN:			mkey = MKEY_Down;		break;
+		case GK_LEFT:			mkey = MKEY_Left;		break;
+		case GK_RIGHT:			mkey = MKEY_Right;		break;
+		case GK_BACKSPACE:		mkey = MKEY_Clear;		break;
+		case GK_PGUP:			mkey = MKEY_PageUp;		break;
+		case GK_PGDN:			mkey = MKEY_PageDown;	break;
+		default:
+			// [BB] Zandronum uses PlayerSetupMenu instead of PSetupDef.
+			if (ch == ' ' && ( CurrentMenu == &PlayerSetupMenu ) )
 			{
-				saveCharIndex--;
-				savegamestring[saveCharIndex] = 0;
+				mkey = MKEY_Clear;
 			}
-			break;
-
-		case GK_ESCAPE:
-			genStringEnter = 0;
-			genStringCancel ();	// [RH] Function to call when escape is pressed
-			break;
-								
-		case '\r':
-			if (savegamestring[0])
+			else if (!keyup)
 			{
-				genStringEnter = 0;
-				if (messageToPrint)
-					M_ClearMenus ();
-				genStringEnd (SelSaveGame);	// [RH] Function to call when enter is pressed
+				if (OptionsActive)
+				{
+					M_OptResponder(ev);
+				}
+				else
+				{
+					ch = tolower (ch);
+					if (messageToPrint)
+					{
+						// Take care of any messages that need input
+						ch = tolower (ch);
+						assert(messageRoutine != NULL);
+						if (ch != ' ' && ch != 'n' && ch != 'y')
+						{
+							return false;
+						}
+						D_RemoveNextCharEvent();
+						M_EndMessage(ch);
+						return true;
+					}
+					else
+					{
+						// Search for a menu item associated with the pressed key.
+						for (i = (itemOn + 1) % currentMenu->numitems;
+							 i != itemOn;
+							 i = (i + 1) % currentMenu->numitems)
+						{
+							if (currentMenu->menuitems[i].alphaKey == ch)
+							{
+								break;
+							}
+						}
+						if (currentMenu->menuitems[i].alphaKey == ch)
+						{
+							itemOn = i;
+							S_Sound(CHAN_VOICE | CHAN_UI, "menu/cursor", 1, ATTN_NONE);
+							return true;
+						}
+					}
+				}
 			}
 			break;
 		}
-		return true;
-	}
-
-	// Take care of any messages that need input
-	if (messageToPrint)
-	{
-		ch = tolower (ch);
-		if (messageNeedsInput)
+		if (!keyup)
 		{
-			// For each printable keystroke, both EV_GUI_KeyDown and
-			// EV_GUI_Char will be generated, in that order. If we close
-			// the menu after the first event arrives and the fullscreen
-			// console is up, the console will get the EV_GUI_Char event
-			// next. Therefore, the message input should only respond to
-			// EV_GUI_Char events (sans Escape, which only generates
-			// EV_GUI_KeyDown.)
-			if (ev->subtype != EV_GUI_Char && ch != GK_ESCAPE)
-			{
-				return false;
-			}
-			if (ch != ' ' && ch != 'n' && ch != 'y' && ch != GK_ESCAPE)
-			{
-				return false;
-			}
+			InputGridOkay = false;
 		}
-
-		menuactive = messageLastMenuActive;
-		messageToPrint = 0;
-		if (messageRoutine)
-			messageRoutine (ch);
-
-		if (menuactive != MENU_Off)
-		{
-			M_DeactivateMenuInput ();
-		}
-		SB_state = screen->GetPageCount ();	// refresh the statbar
-		BorderNeedRefresh = screen->GetPageCount ();
-		S_Sound (CHAN_VOICE | CHAN_UI, "menu/dismiss", 1, ATTN_NONE);
-		return true;
 	}
-
-	if (ch == GK_ESCAPE)
+	else if (ev->type == EV_KeyDown || ev->type == EV_KeyUp)
 	{
-		// [RH] Escape now moves back one menu instead of quitting
-		//		the menu system. Thus, backspace is ignored.
-		currentMenu->lastOn = itemOn;
-		M_PopMenuStack ();
-		return true;
+		keyup = ev->type == EV_KeyUp;
+		// If this is a button down, it's okay to show the input grid if the
+		// next action causes us to enter genStringEnter mode. If we are
+		// already in that mode, then we let M_ButtonHandler() turn it on so
+		// that it will know if a button press happened while the input grid
+		// was turned off.
+		if (!keyup && !genStringEnter)
+		{
+			InputGridOkay = true;
+		}
+		ch = ev->data1;
+		switch (ch)
+		{
+		case KEY_JOY1:
+		case KEY_PAD_A:
+			mkey = MKEY_Enter;
+			break;
+
+		case KEY_JOY2:
+		case KEY_PAD_B:
+			mkey = MKEY_Back;
+			break;
+
+		case KEY_JOY3:
+		case KEY_PAD_X:
+			mkey = MKEY_Clear;
+			break;
+
+		case KEY_JOY5:
+		case KEY_PAD_LSHOULDER:
+			mkey = MKEY_PageUp;
+			break;
+
+		case KEY_JOY6:
+		case KEY_PAD_RSHOULDER:
+			mkey = MKEY_PageDown;
+			break;
+
+		case KEY_PAD_DPAD_UP:
+		case KEY_PAD_LTHUMB_UP:
+		case KEY_JOYAXIS1MINUS:
+		case KEY_JOYPOV1_UP:
+			mkey = MKEY_Up;
+			break;
+
+		case KEY_PAD_DPAD_DOWN:
+		case KEY_PAD_LTHUMB_DOWN:
+		case KEY_JOYAXIS1PLUS:
+		case KEY_JOYPOV1_DOWN:
+			mkey = MKEY_Down;
+			break;
+
+		case KEY_PAD_DPAD_LEFT:
+		case KEY_PAD_LTHUMB_LEFT:
+		case KEY_JOYAXIS2MINUS:
+		case KEY_JOYPOV1_LEFT:
+			mkey = MKEY_Left;
+			break;
+
+		case KEY_PAD_DPAD_RIGHT:
+		case KEY_PAD_LTHUMB_RIGHT:
+		case KEY_JOYAXIS2PLUS:
+		case KEY_JOYPOV1_RIGHT:
+			mkey = MKEY_Right;
+			break;
+		}
+		// Any button press will work for messages without callbacks
+		if (!keyup && messageToPrint && messageRoutine == NULL)
+		{
+			M_EndMessage(ch);
+			return true;
+		}
 	}
 
-	if (currentMenu == &SaveDef || currentMenu == &LoadDef)
+	if (mkey != NUM_MKEYS)
+	{
+		if (keyup)
+		{
+			MenuButtons[mkey].ReleaseKey(ch);
+		}
+		else
+		{
+			MenuButtons[mkey].PressKey(ch);
+			if (mkey <= MKEY_PageDown)
+			{
+				MenuButtonTickers[mkey] = KEY_REPEAT_DELAY;
+			}
+			M_ButtonHandler(mkey, false);
+		}
+	}
+
+	if (ev->type == EV_GUI_Event && (currentMenu == &SaveDef || currentMenu == &LoadDef))
 	{
 		return M_SaveLoadResponder (ev);
 	}
 
-	// Keys usable within menu
-	switch (ch)
+	// Eat key downs, but let the rest through.
+	return !keyup;
+}
+
+void M_ButtonHandler(EMenuKey key, bool repeat)
+{
+	if (OptionsActive)
 	{
-	case GK_DOWN:
+		M_OptButtonHandler(key, repeat);
+		return;
+	}
+	if (key == MKEY_Back)
+	{
+		if (genStringEnter)
+		{
+			// Cancel string entry.
+			genStringEnter = 0;
+			genStringCancel();
+		}
+		else if (messageToPrint)
+		{
+			M_EndMessage(GK_ESCAPE);
+		}
+		else
+		{
+			// Save the cursor position on the current menu, and pop it off the stack
+			// to go back to the previous menu.
+			currentMenu->lastOn = itemOn;
+			M_PopMenuStack();
+		}
+		return;
+	}
+	if (messageToPrint)
+	{
+		if (key == MKEY_Down || key == MKEY_Up)
+		{
+			messageSelection ^= 1;
+		}
+		else if (key == MKEY_Enter)
+		{
+			M_EndMessage(messageSelection == 0 ? 'y' : 'n');
+		}
+		return;
+	}
+	if (genStringEnter)
+	{
+		int ch;
+
+		switch (key)
+		{
+		case MKEY_Down:
+			InputGridY = (InputGridY + 1) % INPUTGRID_HEIGHT;
+			break;
+
+		case MKEY_Up:
+			InputGridY = (InputGridY + INPUTGRID_HEIGHT - 1) % INPUTGRID_HEIGHT;
+			break;
+
+		case MKEY_Right:
+			InputGridX = (InputGridX + 1) % INPUTGRID_WIDTH;
+			break;
+
+		case MKEY_Left:
+			InputGridX = (InputGridX + INPUTGRID_WIDTH - 1) % INPUTGRID_WIDTH;
+			break;
+
+		case MKEY_Clear:
+			if (saveCharIndex > 0)
+			{
+				savegamestring[--saveCharIndex] = 0;
+			}
+			break;
+
+		case MKEY_Enter:
+			assert(unsigned(InputGridX) < INPUTGRID_WIDTH && unsigned(InputGridY) < INPUTGRID_HEIGHT);
+			if (InputGridOkay)
+			{
+				ch = InputGridChars[InputGridX + InputGridY * INPUTGRID_WIDTH];
+				if (ch == 0)			// end
+				{
+					if (savegamestring[0] != '\0')
+					{
+						genStringEnter = 0;
+						if (messageToPrint)
+						{
+							M_ClearMenus();
+						}
+						genStringEnd(SelSaveGame);
+					}
+				}
+				else if (ch == '\b')	// bs
+				{
+					if (saveCharIndex > 0)
+					{
+						savegamestring[--saveCharIndex] = 0;
+					}
+				}
+				else if (saveCharIndex < genStringLen &&
+					(genStringEnter == 2/*entering player name*/ || (size_t)SmallFont->StringWidth(savegamestring) < (genStringLen-1)*8))
+				{
+					savegamestring[saveCharIndex] = ch;
+					savegamestring[++saveCharIndex] = 0;
+				}
+			}
+			break;
+
+		default:
+			break;	// Keep GCC quiet
+		}
+		InputGridOkay = true;
+		return;
+	}
+	if (currentMenu == &SaveDef || currentMenu == &LoadDef)
+	{
+		M_SaveLoadButtonHandler(key);
+		return;
+	}
+	switch (key)
+	{
+	case MKEY_Down:
 		do
 		{
-			if (itemOn+1 > currentMenu->numitems-1)
+			if (itemOn + 1 >= currentMenu->numitems)
 				itemOn = 0;
 			else itemOn++;
 			S_Sound (CHAN_VOICE | CHAN_UI, "menu/cursor", 1, ATTN_NONE);
-		} while(currentMenu->menuitems[itemOn].status==-1);
-		return true;
+		} while (currentMenu->menuitems[itemOn].status == -1);
+		break;
 
-	case GK_UP:
+	case MKEY_Up:
 		do
 		{
-			if (!itemOn)
-				itemOn = currentMenu->numitems-1;
+			if (itemOn == 0)
+				itemOn = currentMenu->numitems - 1;
 			else itemOn--;
 			S_Sound (CHAN_VOICE | CHAN_UI, "menu/cursor", 1, ATTN_NONE);
-		} while(currentMenu->menuitems[itemOn].status==-1);
-		return true;
+		} while (currentMenu->menuitems[itemOn].status == -1);
+		break;
 
-	case GK_LEFT:
+	case MKEY_Left:
 		if (currentMenu->menuitems[itemOn].routine &&
 			currentMenu->menuitems[itemOn].status == 2)
 		{
 			S_Sound (CHAN_VOICE | CHAN_UI, "menu/change", 1, ATTN_NONE);
 			currentMenu->menuitems[itemOn].routine(0);
 		}
-		return true;
+		break;
 
-	case GK_RIGHT:
+	case MKEY_Right:
 		if (currentMenu->menuitems[itemOn].routine &&
 			currentMenu->menuitems[itemOn].status == 2)
 		{
 			S_Sound (CHAN_VOICE | CHAN_UI, "menu/change", 1, ATTN_NONE);
 			currentMenu->menuitems[itemOn].routine(1);
 		}
-		return true;
+		break;
 
-	case '\r':
+	case MKEY_Enter:
 		if (currentMenu->menuitems[itemOn].routine &&
 			currentMenu->menuitems[itemOn].status)
 		{
@@ -3318,49 +3860,83 @@ bool M_Responder (event_t *ev)
 				S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", 1, ATTN_NONE);
 			}
 		}
-		return true;
+		break;
 
-	case ' ':
+	case MKEY_Clear:
 		// [BC] This is now done elsewhere.
 		//if (currentMenu == &PSetupDef)
 		if ( 0 )
 		{
 			PlayerRotation ^= 8;
-			break;
-		}
-		// intentional fall-through
-
-	default:
-		if (ch)
-		{
-			ch = tolower (ch);
-			for (i = (itemOn + 1) % currentMenu->numitems;
-				 i != itemOn;
-				 i = (i + 1) % currentMenu->numitems)
-			{
-				if (currentMenu->menuitems[i].alphaKey == ch)
-				{
-					break;
-				}
-			}
-			if (currentMenu->menuitems[i].alphaKey == ch)
-			{
-				itemOn = i;
-				S_Sound (CHAN_VOICE | CHAN_UI, "menu/cursor", 1, ATTN_NONE);
-				return true;
-			}
 		}
 		break;
-	}
 
-	// [RH] Menu eats all keydown events while active
-	return (ev->subtype == EV_GUI_KeyDown);
+	default:
+		break;		// Keep GCC quiet
+	}
 }
 
-bool M_SaveLoadResponder (event_t *ev)
+static void M_SaveLoadButtonHandler(EMenuKey key)
 {
-	char workbuf[512];
+	if (SelSaveGame == NULL || SelSaveGame->Succ == NULL)
+	{
+		return;
+	}
+	switch (key)
+	{
+	case MKEY_Up:
+		if (SelSaveGame != SaveGames.Head)
+		{
+			if (SelSaveGame == TopSaveGame)
+			{
+				TopSaveGame = static_cast<FSaveGameNode *>(TopSaveGame->Pred);
+			}
+			SelSaveGame = static_cast<FSaveGameNode *>(SelSaveGame->Pred);
+		}
+		else
+		{
+			SelSaveGame = static_cast<FSaveGameNode *>(SaveGames.TailPred);
+		}
+		M_UnloadSaveData ();
+		M_ExtractSaveData (SelSaveGame);
+		break;
 
+	case MKEY_Down:
+		if (SelSaveGame != SaveGames.TailPred)
+		{
+			SelSaveGame = static_cast<FSaveGameNode *>(SelSaveGame->Succ);
+		}
+		else
+		{
+			SelSaveGame = TopSaveGame =
+				static_cast<FSaveGameNode *>(SaveGames.Head);
+		}
+		M_UnloadSaveData ();
+		M_ExtractSaveData (SelSaveGame);
+		break;
+
+	case MKEY_Enter:
+		if (currentMenu == &LoadDef)
+		{
+			M_LoadSelect (SelSaveGame);
+		}
+		else
+		{
+			M_SaveSelect (SelSaveGame);
+		}
+		break;
+
+	default:
+		break;		// Keep GCC quiet
+	}
+}
+
+static bool M_SaveLoadResponder (event_t *ev)
+{
+	if (ev->subtype != EV_GUI_KeyDown)
+	{
+		return false;
+	}
 	if (SelSaveGame != NULL && SelSaveGame->Succ != NULL)
 	{
 		switch (ev->data1)
@@ -3368,6 +3944,8 @@ bool M_SaveLoadResponder (event_t *ev)
 		case GK_F1:
 			if (!SelSaveGame->Filename.IsEmpty())
 			{
+				char workbuf[512];
+
 				mysnprintf (workbuf, countof(workbuf), "File on disk:\n%s", SelSaveGame->Filename.GetChars());
 				if (SaveComment != NULL)
 				{
@@ -3377,37 +3955,6 @@ bool M_SaveLoadResponder (event_t *ev)
 			}
 			break;
 
-		case GK_UP:
-			if (SelSaveGame != SaveGames.Head)
-			{
-				if (SelSaveGame == TopSaveGame)
-				{
-					TopSaveGame = static_cast<FSaveGameNode *>(TopSaveGame->Pred);
-				}
-				SelSaveGame = static_cast<FSaveGameNode *>(SelSaveGame->Pred);
-			}
-			else
-			{
-				SelSaveGame = static_cast<FSaveGameNode *>(SaveGames.TailPred);
-			}
-			M_UnloadSaveData ();
-			M_ExtractSaveData (SelSaveGame);
-			break;
-
-		case GK_DOWN:
-			if (SelSaveGame != SaveGames.TailPred)
-			{
-				SelSaveGame = static_cast<FSaveGameNode *>(SelSaveGame->Succ);
-			}
-			else
-			{
-				SelSaveGame = TopSaveGame =
-					static_cast<FSaveGameNode *>(SaveGames.Head);
-			}
-			M_UnloadSaveData ();
-			M_ExtractSaveData (SelSaveGame);
-			break;
-
 		case GK_DEL:
 		case '\b':
 			if (SelSaveGame != &NewSaveNode)
@@ -3415,7 +3962,7 @@ bool M_SaveLoadResponder (event_t *ev)
 				EndString.Format("%s" TEXTCOLOR_WHITE "%s" TEXTCOLOR_NORMAL "?\n\n%s",
 					GStrings("MNU_DELETESG"), SelSaveGame->Title, GStrings("PRESSYN"));
 					
-				M_StartMessage (EndString, M_DeleteSaveResponse, true);
+				M_StartMessage (EndString, M_DeleteSaveResponse);
 			}
 			break;
 
@@ -3426,20 +3973,9 @@ bool M_SaveLoadResponder (event_t *ev)
 				M_UnloadSaveData ();
 			}
 			break;
-
-		case '\r':
-			if (currentMenu == &LoadDef)
-			{
-				M_LoadSelect (SelSaveGame);
-			}
-			else
-			{
-				M_SaveSelect (SelSaveGame);
-			}
 		}
 	}
-
-	return (ev->subtype == EV_GUI_KeyDown);
+	return true;
 }
 
 static void M_LoadSelect (const FSaveGameNode *file)
@@ -3461,12 +3997,16 @@ static void M_LoadSelect (const FSaveGameNode *file)
 //
 // User wants to save. Start string input for M_Responder
 //
+static void M_CancelSaveName ()
+{
+}
+
 static void M_SaveSelect (const FSaveGameNode *file)
 {
 	// we are going to be intercepting all chars
 	genStringEnter = 1;
 	genStringEnd = M_DoSave;
-	genStringCancel = M_ClearMenus;
+	genStringCancel = M_CancelSaveName;
 	genStringLen = SAVESTRINGSIZE-1;
 
 	if (file != &NewSaveNode)
@@ -3475,6 +4015,12 @@ static void M_SaveSelect (const FSaveGameNode *file)
 	}
 	else
 	{
+		// If we are naming a new save, don't start the cursor on "end".
+		if (InputGridX == INPUTGRID_WIDTH - 1 && InputGridY == INPUTGRID_HEIGHT - 1)
+		{
+			InputGridX = 0;
+			InputGridY = 0;
+		}
 		savegamestring[0] = 0;
 	}
 	saveCharIndex = strlen (savegamestring);
@@ -3505,16 +4051,28 @@ static void M_DeleteSaveResponse (int choice)
 //
 // M_StartControlPanel
 //
-void M_StartControlPanel (bool makeSound)
+void M_StartControlPanel (bool makeSound, bool wantTop)
 {
 	// intro might call this repeatedly
 	if (menuactive == MENU_On)
 		return;
-	
+
+	for (int i = 0; i < NUM_MKEYS; ++i)
+	{
+		MenuButtons[i].ReleaseKey(0);
+	}
 	drawSkull = true;
 	MenuStackDepth = 0;
-	currentMenu = TopLevelMenu;
-	itemOn = currentMenu->lastOn;
+	if (wantTop)
+	{
+		M_SetupNextMenu(TopLevelMenu);
+	}
+	else
+	{
+		// Just a default. The caller ought to call M_SetupNextMenu() next.
+		currentMenu = TopLevelMenu;
+		itemOn = currentMenu->lastOn;
+	}
 	C_HideConsole ();				// [RH] Make sure console goes bye bye.
 	OptionsActive = false;			// [RH] Make sure none of the options menus appear.
 	M_ActivateMenuInput ();
@@ -3559,6 +4117,7 @@ void M_Drawer ()
 	// Horiz. & Vertically center string and print it.
 	if (messageToPrint)
 	{
+		int fontheight = SmallFont->GetHeight();
 		screen->Dim (fade);
 		BorderNeedRefresh = screen->GetPageCount ();
 		SB_state = screen->GetPageCount ();
@@ -3573,10 +4132,26 @@ void M_Drawer ()
 		{
 			screen->DrawText (SmallFont, CR_UNTRANSLATED, 160 - lines[i].Width/2, y, lines[i].Text,
 				DTA_Clean, true, TAG_DONE);
-			y += SmallFont->GetHeight ();
+			y += fontheight;
 		}
-
 		V_FreeBrokenLines (lines);
+		if (messageRoutine != NULL)
+		{
+			y += fontheight;
+			screen->DrawText(SmallFont, CR_UNTRANSLATED, 160, y, GStrings["TXT_YES"], DTA_Clean, true, TAG_DONE);
+			screen->DrawText(SmallFont, CR_UNTRANSLATED, 160, y + fontheight + 1, GStrings["TXT_NO"], DTA_Clean, true, TAG_DONE);
+			if (skullAnimCounter < 6)
+			{
+				// [BB] Except for the y-position, using Skulltag's increased precision of CleanXfac/CleanYfac is wrong here.
+				screen->DrawText(ConFont, CR_RED,
+					(150 - 160) * static_cast<int>(CleanXfac) + screen->GetWidth() / 2,
+					(y + (fontheight + 1) * messageSelection - 100) * CleanYfac + screen->GetHeight() / 2,
+					"\xd",
+					DTA_CellX, 8 * static_cast<int>(CleanXfac),
+					DTA_CellY, 8 * static_cast<int>(CleanYfac),
+					TAG_DONE);
+			}
+		}
 	}
 	else if (menuactive != MENU_Off)
 	{
@@ -3647,32 +4222,59 @@ void M_Drawer ()
 					// [RH] Use options menu cursor for the player setup menu.
 					if (skullAnimCounter < 6)
 					{
+						double item;
+						// The green slider is halfway between lines, and the red and
+						// blue ones are offset slightly to make room for it.
+						if (itemOn < 3)
+						{
+							item = itemOn;
+						}
+						else if (itemOn > 5)
+						{
+							item = itemOn - 1;
+						}
+						else if (itemOn == 3)
+						{
+							item = 2.875;
+						}
+						else if (itemOn == 4)
+						{
+							item = 3.5;
+						}
+						else
+						{
+							item = 4.125;
+						}
 						screen->DrawText (ConFont, CR_RED, x - 16,
-							currentMenu->y + itemOn*LINEHEIGHT +
+							currentMenu->y + int(item*PLAYERSETUP_LINEHEIGHT) +
 							(!(gameinfo.gametype & (GAME_DoomStrifeChex)) ? 6 : -1), "\xd",
 							DTA_Clean, true, TAG_DONE);
 					}
 				}
 				else*/ if (gameinfo.gametype & GAME_DoomChex)
 				{
-					screen->DrawTexture (TexMan[skullName[whichSkull]],
+					screen->DrawTexture (TexMan("M_SKULL1"),
 						x + SKULLXOFF, currentMenu->y - 5 + itemOn*LINEHEIGHT,
 						DTA_Clean, true, TAG_DONE);
 				}
 				else if (gameinfo.gametype == GAME_Strife)
 				{
-					screen->DrawTexture (TexMan[cursName[(MenuTime >> 2) & 7]],
+					screen->DrawTexture (TexMan("M_CURS1"),
 						x - 28, currentMenu->y - 5 + itemOn*LINEHEIGHT,
 						DTA_Clean, true, TAG_DONE);
 				}
 				else
 				{
-					screen->DrawTexture (TexMan[MenuTime & 16 ? "M_SLCTR1" : "M_SLCTR2"],
+					screen->DrawTexture (TexMan("M_SLCTR1"),
 						x + SELECTOR_XOFFSET,
 						currentMenu->y + itemOn*LINEHEIGHT + SELECTOR_YOFFSET,
 						DTA_Clean, true, TAG_DONE);
 				}
 			}
+		}
+		if (genStringEnter && InputGridOkay)
+		{
+			M_DrawInputGrid();
 		}
 	}
 }
@@ -3696,6 +4298,77 @@ static void M_ClearSaveStuff ()
 	if (quickSaveSlot == (FSaveGameNode *)1)
 	{
 		quickSaveSlot = NULL;
+	}
+}
+
+static void M_DrawInputGrid()
+{
+	const int cell_width = 18 * CleanXfac;
+	const int cell_height = 12 * CleanYfac;
+	const int top_padding = cell_height / 2 - SmallFont->GetHeight() * CleanYfac / 2;
+
+	// Darken the background behind the character grid.
+	// Unless we frame it with a border, I think it looks better to extend the
+	// background across the full width of the screen.
+	screen->Dim(0, 0.8f,
+		0 /*screen->GetWidth()/2 - 13 * cell_width / 2*/,
+		screen->GetHeight() - 5 * cell_height,
+		screen->GetWidth() /*13 * cell_width*/,
+		5 * cell_height);
+
+	// Highlight the background behind the selected character.
+	screen->Dim(MAKERGB(255,248,220), 0.6f,
+		InputGridX * cell_width - INPUTGRID_WIDTH * cell_width / 2 + screen->GetWidth() / 2,
+		InputGridY * cell_height - INPUTGRID_HEIGHT * cell_height + screen->GetHeight(),
+		cell_width, cell_height);
+
+	for (int y = 0; y < INPUTGRID_HEIGHT; ++y)
+	{
+		const int yy = y * cell_height - INPUTGRID_HEIGHT * cell_height + screen->GetHeight();
+		for (int x = 0; x < INPUTGRID_WIDTH; ++x)
+		{
+			int width;
+			const int xx = x * cell_width - INPUTGRID_WIDTH * cell_width / 2 + screen->GetWidth() / 2;
+			const int ch = InputGridChars[y * INPUTGRID_WIDTH + x];
+			FTexture *pic = SmallFont->GetChar(ch, &width);
+			EColorRange color;
+			FRemapTable *remap;
+
+			// The highlighted character is yellow; the rest are dark gray.
+			color = (x == InputGridX && y == InputGridY) ? CR_YELLOW : CR_DARKGRAY;
+			remap = SmallFont->GetColorTranslation(color);
+
+			if (pic != NULL)
+			{
+				// Draw a normal character.
+				screen->DrawTexture(pic, xx + cell_width/2 - width*CleanXfac/2, yy + top_padding,
+					DTA_Translation, remap,
+					DTA_CleanNoMove, true,
+					TAG_DONE);
+			}
+			else if (ch == ' ')
+			{
+				// Draw the space as a box outline. We also draw it 50% wider than it really is.
+				const int x1 = xx + cell_width/2 - width * CleanXfac * 3 / 4;
+				const int x2 = x1 + width * 3 * CleanXfac / 2;
+				const int y1 = yy + top_padding;
+				const int y2 = y1 + SmallFont->GetHeight() * CleanYfac;
+				const int palentry = remap->Remap[remap->NumEntries*2/3];
+				const uint32 palcolor = remap->Palette[remap->NumEntries*2/3];
+				screen->Clear(x1, y1, x2, y1+CleanYfac, palentry, palcolor);	// top
+				screen->Clear(x1, y2, x2, y2+CleanYfac, palentry, palcolor);	// bottom
+				screen->Clear(x1, y1+CleanYfac, x1+CleanXfac, y2, palentry, palcolor);	// left
+				screen->Clear(x2-CleanXfac, y1+CleanYfac, x2, y2, palentry, palcolor);	// right
+			}
+			else if (ch == '\b' || ch == 0)
+			{
+				// Draw the backspace and end "characters".
+				const char *const str = ch == '\b' ? "BS" : "ED";
+				screen->DrawText(SmallFont, color,
+					xx + cell_width/2 - SmallFont->StringWidth(str)*CleanXfac/2,
+					yy + top_padding, str, DTA_CleanNoMove, true, TAG_DONE);
+			}
+		}
 	}
 }
 
@@ -3794,12 +4467,25 @@ void M_Ticker (void)
 	MenuTime++;
 	if (--skullAnimCounter <= 0)
 	{
-		whichSkull ^= 1;
 		skullAnimCounter = 8;
 	}
 	//if (currentMenu == &PSetupDef || currentMenu == &ClassMenuDef)
 	if ( CurrentMenu == &PlayerSetupMenu || currentMenu == &ClassMenuDef )
-		M_PlayerSetupTicker ();
+	{
+		M_PlayerSetupTicker();
+	}
+
+	for (int i = 0; i < NUM_MKEYS; ++i)
+	{
+		if (MenuButtons[i].bDown)
+		{
+			if (MenuButtonTickers[i] > 0 &&	--MenuButtonTickers[i] <= 0)
+			{
+				MenuButtonTickers[i] = KEY_REPEAT_RATE;
+				M_ButtonHandler(EMenuKey(i), true);
+			}
+		}
+	}
 }
 
 
@@ -3835,7 +4521,6 @@ void M_Init (void)
 	menuactive = MENU_Off;
 	InfoType = 0;
 	itemOn = currentMenu->lastOn;
-	whichSkull = 0;
 	skullAnimCounter = 10;
 	drawSkull = true;
 	messageToPrint = 0;
@@ -3958,4 +4643,5 @@ static void PickPlayerClass ()
 	}
 
 	PlayerClass = &PlayerClasses[pclass];
+	P_EnumPlayerColorSets(PlayerClass->Type->TypeName, &PlayerColorSets);
 }

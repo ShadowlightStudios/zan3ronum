@@ -123,15 +123,21 @@ public:
 		}
 	}
 	// Return a reference to an element
-	T &operator[] (unsigned int index) const
+	T &operator[] (size_t index) const
 	{
 		return Array[index];
 	}
 	// Returns the value of an element
-	TT operator() (unsigned int index) const
+	TT operator() (size_t index) const
 	{
 		return Array[index];
 	}
+	// Returns a reference to the last element
+	T &Last() const
+	{
+		return Array[Count-1];
+	}
+
 	unsigned int Push (const T &item)
 	{
 		Grow (1);
@@ -162,10 +168,13 @@ public:
 
 	void Delete (unsigned int index, int deletecount)
 	{
-		if (index + deletecount > Count) deletecount = Count - index;
+		if (index + deletecount > Count)
+		{
+			deletecount = Count - index;
+		}
 		if (deletecount > 0)
 		{
-			for(int i = 0; i < deletecount; i++)
+			for (int i = 0; i < deletecount; i++)
 			{
 				Array[index + i].~T();
 			}
@@ -733,7 +742,11 @@ protected:
 		Node *mp = MainPosition(key), **mpp;
 		HashTraits Traits;
 
-		if (!mp->IsNil() && !Traits.Compare(mp->Pair.Key, key)) /* the key is in its main position */
+		if (mp->IsNil())
+		{
+			/* the key is definitely not present, because there is nothing at its main position */
+		}
+		else if (!Traits.Compare(mp->Pair.Key, key)) /* the key is in its main position */
 		{
 			if (mp->Next != NULL)		/* move next node to its main position */
 			{

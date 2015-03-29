@@ -97,14 +97,6 @@ void AScriptedMarine::BeginPlay ()
 			}
 		}
 	}
-
-	// Copy the standard player's scaling
-	AActor * playerdef = GetDefaultByName("DoomPlayer");
-	if (playerdef != NULL)
-	{
-		scaleX = playerdef->scaleX;
-		scaleY = playerdef->scaleY;
-	}
 }
 
 void AScriptedMarine::Tick ()
@@ -112,7 +104,7 @@ void AScriptedMarine::Tick ()
 	Super::Tick ();
 
 	// Override the standard sprite, if desired
-	if (SpriteOverride != 0 && sprite == GetClass()->ActorInfo->OwnedStates[0].sprite)
+	if (SpriteOverride != 0 && sprite == SpawnState->sprite)
 	{
 		sprite = SpriteOverride;
 	}
@@ -187,7 +179,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_M_Refire)
 	{
 		if (self->MissileState && pr_m_refire() < 160)
 		{ // Look for a new target most of the time
-			if (P_LookForPlayers (self, true) && P_CheckMissileRange (self))
+			if (P_LookForPlayers (self, true, NULL) && P_CheckMissileRange (self))
 			{ // Found somebody new and in range, so don't stop shooting
 				return;
 			}
@@ -301,8 +293,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_MarineLook)
 //
 //============================================================================
 
-DEFINE_ACTION_FUNCTION(AActor, A_M_Saw)
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_M_Saw)
 {
+	ACTION_PARAM_START(4);
+	ACTION_PARAM_SOUND(fullsound, 0);
+	ACTION_PARAM_SOUND(hitsound, 1);
+	ACTION_PARAM_INT(damage, 2);
+	ACTION_PARAM_CLASS(pufftype, 3);
+
 	// [BC] Don't do this in client mode.
 	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
 		( CLIENTDEMO_IsPlaying( )))
@@ -313,34 +311,36 @@ DEFINE_ACTION_FUNCTION(AActor, A_M_Saw)
 	if (self->target == NULL)
 		return;
 
+	if (pufftype == NULL) pufftype = PClass::FindClass(NAME_BulletPuff);
+	if (damage == 0) damage = 2;
+
 	A_FaceTarget (self);
 	if (self->CheckMeleeRange ())
 	{
 		angle_t 	angle;
-		int 		damage;
 		AActor		*linetarget;
 
-		damage = 2 * (pr_m_saw()%10+1);
+		damage *= (pr_m_saw()%10+1);
 		angle = self->angle + (pr_m_saw.Random2() << 18);
 		
 		P_LineAttack (self, angle, MELEERANGE+1,
 					P_AimLineAttack (self, angle, MELEERANGE+1, &linetarget), damage,
-					NAME_Melee, NAME_BulletPuff);
+					NAME_Melee, pufftype, false, &linetarget);
 
 		if (!linetarget)
 		{
-			S_Sound (self, CHAN_WEAPON, "weapons/sawfull", 1, ATTN_NORM);
+			S_Sound (self, CHAN_WEAPON, fullsound, 1, ATTN_NORM);
 
 			// [BC] If we're the server, tell clients to play this sound.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "weapons/sawfull", 1, ATTN_NORM );
+				SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName ( fullsound ), 1, ATTN_NORM );
 			return;
 		}
-		S_Sound (self, CHAN_WEAPON, "weapons/sawhit", 1, ATTN_NORM);
+		S_Sound (self, CHAN_WEAPON, hitsound, 1, ATTN_NORM);
 
 		// [BC] If we're the server, tell clients to play this sound.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "weapons/sawhit", 1, ATTN_NORM );
+			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName ( hitsound ), 1, ATTN_NORM );
 			
 		// turn to face target
 		angle = R_PointToAngle2 (self->x, self->y, linetarget->x, linetarget->y);
@@ -361,11 +361,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_M_Saw)
 	}
 	else
 	{
-		S_Sound (self, CHAN_WEAPON, "weapons/sawfull", 1, ATTN_NORM);
+		S_Sound (self, CHAN_WEAPON, fullsound, 1, ATTN_NORM);
 
 		// [BC] If we're the server, tell clients to play this sound.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "weapons/sawfull", 1, ATTN_NORM );
+			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName ( fullsound ), 1, ATTN_NORM );
 	}
 	//A_Chase (self);
 }
@@ -398,7 +398,7 @@ static void MarinePunch(AActor *self, int damagemul)
 	A_FaceTarget (self);
 	angle = self->angle + (pr_m_punch.Random2() << 18);
 	pitch = P_AimLineAttack (self, angle, MELEERANGE, &linetarget);
-	P_LineAttack (self, angle, MELEERANGE, pitch, damage, NAME_Melee, NAME_BulletPuff, true);
+	P_LineAttack (self, angle, MELEERANGE, pitch, damage, NAME_Melee, NAME_BulletPuff, true, &linetarget);
 
 	// turn to face target
 	if (linetarget)
@@ -585,7 +585,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_M_FireShotgun2)
 
 		P_LineAttack (self, angle, MISSILERANGE,
 					  pitch + (pr_m_fireshotgun2.Random2() * 332063), damage,
-					  NAME_None, PClass::FindClass(NAME_BulletPuff));
+					  NAME_None, NAME_BulletPuff);
 	}
 	self->special1 = level.maptime;
 }
@@ -818,14 +818,12 @@ void AScriptedMarine::SetSprite (const PClass *source)
 	if (source == NULL || source->ActorInfo == NULL)
 	{ // A valid actor class wasn't passed, so use the standard sprite
 		SpriteOverride = sprite = GetClass()->ActorInfo->OwnedStates[0].sprite;
-		// Copy the standard player's scaling
-		AActor * playerdef = GetDefaultByName("DoomPlayer");
-		if (playerdef == NULL) playerdef = GetDefaultByType(RUNTIME_CLASS(AScriptedMarine));
-		scaleX = playerdef->scaleX;
-		scaleY = playerdef->scaleY;
+		// Copy the standard scaling
+		scaleX = GetDefault()->scaleX;
+		scaleY = GetDefault()->scaleY;
 	}
 	else
-	{ // Use the same sprite the passed class spawns with
+	{ // Use the same sprite and scaling the passed class spawns with
 		SpriteOverride = sprite = GetDefaultByType (source)->SpawnState->sprite;
 		scaleX = GetDefaultByType(source)->scaleX;
 		scaleY = GetDefaultByType(source)->scaleY;

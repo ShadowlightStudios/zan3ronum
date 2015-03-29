@@ -227,7 +227,7 @@ void DPillar::Tick ()
 			SERVERCOMMANDS_SetSectorCeilingPlane( ULONG( m_Sector - sectors ));
 		}
 
-		SN_StopSequence (m_Sector);
+		SN_StopSequence (m_Sector, CHAN_FLOOR);
 		Destroy ();
 	}
 	else
@@ -321,9 +321,17 @@ DPillar::DPillar (sector_t *sector, EPillar type, fixed_t speed,
 	}
 
 	if (sector->seqType >= 0)
+	{
 		SN_StartSequence (sector, CHAN_FLOOR, sector->seqType, SEQ_PLATFORM, 0);
+	}
+	else if (sector->SeqName != NAME_None)
+	{
+		SN_StartSequence (sector, CHAN_FLOOR, sector->SeqName, 0);
+	}
 	else
+	{
 		SN_StartSequence (sector, CHAN_FLOOR, "Floor", 0);
+	}
 }
 
 bool EV_DoPillar (DPillar::EPillar type, int tag, fixed_t speed, fixed_t height,
@@ -338,7 +346,7 @@ bool EV_DoPillar (DPillar::EPillar type, int tag, fixed_t speed, fixed_t height,
 	{
 		sector_t *sec = &sectors[secnum];
 
-		if (sec->floordata || sec->ceilingdata)
+		if (sec->PlaneMoving(sector_t::floor) || sec->PlaneMoving(sector_t::ceiling))
 			continue;
 
 		fixed_t flor, ceil;

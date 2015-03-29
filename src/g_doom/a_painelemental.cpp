@@ -22,9 +22,6 @@ static const PClass *GetSpawnType(DECLARE_PARAMINFO)
 }
 
 
-#define SKULLSPEED (20*FRACUNIT)
-void A_SkullAttack(AActor *self, fixed_t speed);
-
 //
 // A_PainShootSkull
 // Spawn a lost soul and launch it at the target
@@ -53,7 +50,7 @@ void A_PainShootSkull (AActor *self, angle_t angle, const PClass *spawntype)
 	{
 		if (self->flags & MF_FLOAT)
 		{
-			self->momz -= 2*FRACUNIT;
+			self->velz -= 2*FRACUNIT;
 			self->flags |= MF_INFLOAT;
 			self->flags4 |= MF4_VFRICTION;
 		}
@@ -129,7 +126,7 @@ void A_PainShootSkull (AActor *self, angle_t angle, const PClass *spawntype)
         (other->z < other->Sector->floorplane.ZatPoint (other->x, other->y)))
 	{
 		// kill it immediately
-		P_DamageMobj (other, self, self, 1000000, NAME_None);		//   ^
+		P_DamageMobj (other, self, self, TELEFRAG_DAMAGE, NAME_None);//  ^
 		return;														//   |
 	}																// phares
 
@@ -138,7 +135,7 @@ void A_PainShootSkull (AActor *self, angle_t angle, const PClass *spawntype)
 	if (!P_CheckPosition (other, other->x, other->y))
 	{
 		// kill it immediately
-		P_DamageMobj (other, self, self, 1000000, NAME_None);		
+		P_DamageMobj (other, self, self, TELEFRAG_DAMAGE, NAME_None);		
 		return;
 	}
 
@@ -181,7 +178,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_PainDie)
 		self->flags &= ~MF_FRIENDLY;
 	}
 	const PClass *spawntype = GetSpawnType(PUSH_PARAMINFO);
-	CALL_ACTION(A_NoBlocking, self);
+	A_Unblock(self, true);
 	A_PainShootSkull (self, self->angle + ANG90, spawntype);
 	A_PainShootSkull (self, self->angle + ANG180, spawntype);
 	A_PainShootSkull (self, self->angle + ANG270, spawntype);

@@ -51,6 +51,8 @@
 #include "team.h"
 #include "a_keys.h"
 #include "invasion.h"
+#include "cl_demo.h"
+#include "cooperative.h"
 
 // List of spawnable things for the Thing_Spawn and Thing_Projectile specials.
 const PClass *SpawnableThings[MAX_SPAWNABLES];
@@ -195,9 +197,9 @@ bool P_MoveThing(AActor *source, fixed_t x, fixed_t y, fixed_t z, bool fog)
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				SERVERCOMMANDS_SpawnThing( pFog );
 		}
-		source->PrevX=x;
-		source->PrevY=y;
-		source->PrevZ=z;
+		source->PrevX = x;
+		source->PrevY = y;
+		source->PrevZ = z;
 
 		ULONG ulFlags = 0;
 		if ( oldx != source->x )
@@ -330,7 +332,7 @@ bool P_Thing_Projectile (int tid, AActor *source, int type, const char *type_nam
 						fixed_t spot[3] = { targ->x, targ->y, targ->z+targ->height/2 };
 						FVector3 aim(float(spot[0] - mobj->x), float(spot[1] - mobj->y), float(spot[2] - mobj->z));
 
-						if (leadTarget && speed > 0 && (targ->momx | targ->momy | targ->momz))
+						if (leadTarget && speed > 0 && (targ->velx | targ->vely | targ->velz))
 						{
 							// Aiming at the target's position some time in the future
 							// is basically just an application of the law of sines:
@@ -339,14 +341,14 @@ bool P_Thing_Projectile (int tid, AActor *source, int type, const char *type_nam
 							// with the math. I don't think I would have thought of using
 							// trig alone had I been left to solve it by myself.
 
-							FVector3 tvel(targ->momx, targ->momy, targ->momz);
+							FVector3 tvel(targ->velx, targ->vely, targ->velz);
 							if (!(targ->flags & MF_NOGRAVITY) && targ->waterlevel < 3)
 							{ // If the target is subject to gravity and not underwater,
 							  // assume that it isn't moving vertically. Thanks to gravity,
 							  // even if we did consider the vertical component of the target's
 							  // velocity, we would still miss more often than not.
 								tvel.Z = 0.0;
-								if ((targ->momx | targ->momy) == 0)
+								if ((targ->velx | targ->vely) == 0)
 								{
 									goto nolead;
 								}
@@ -370,18 +372,18 @@ bool P_Thing_Projectile (int tid, AActor *source, int type, const char *type_nam
 							FVector3 aimvec = rm * aim;
 							// And make the projectile follow that vector at the desired speed.
 							double aimscale = fspeed / dist;
-							mobj->momx = fixed_t (aimvec[0] * aimscale);
-							mobj->momy = fixed_t (aimvec[1] * aimscale);
-							mobj->momz = fixed_t (aimvec[2] * aimscale);
-							mobj->angle = R_PointToAngle2 (0, 0, mobj->momx, mobj->momy);
+							mobj->velx = fixed_t (aimvec[0] * aimscale);
+							mobj->vely = fixed_t (aimvec[1] * aimscale);
+							mobj->velz = fixed_t (aimvec[2] * aimscale);
+							mobj->angle = R_PointToAngle2 (0, 0, mobj->velx, mobj->vely);
 						}
 						else
 						{
 nolead:						mobj->angle = R_PointToAngle2 (mobj->x, mobj->y, targ->x, targ->y);
 							aim.Resize (fspeed);
-							mobj->momx = fixed_t(aim[0]);
-							mobj->momy = fixed_t(aim[1]);
-							mobj->momz = fixed_t(aim[2]);
+							mobj->velx = fixed_t(aim[0]);
+							mobj->vely = fixed_t(aim[1]);
+							mobj->velz = fixed_t(aim[2]);
 						}
 						if (mobj->flags2 & MF2_SEEKERMISSILE)
 						{
@@ -391,19 +393,19 @@ nolead:						mobj->angle = R_PointToAngle2 (mobj->x, mobj->y, targ->x, targ->y);
 					else
 					{
 						mobj->angle = angle;
-						mobj->momx = FixedMul (speed, finecosine[angle>>ANGLETOFINESHIFT]);
-						mobj->momy = FixedMul (speed, finesine[angle>>ANGLETOFINESHIFT]);
-						mobj->momz = vspeed;
+						mobj->velx = FixedMul (speed, finecosine[angle>>ANGLETOFINESHIFT]);
+						mobj->vely = FixedMul (speed, finesine[angle>>ANGLETOFINESHIFT]);
+						mobj->velz = vspeed;
 					}
 					// Set the missile's speed to reflect the speed it was spawned at.
 					if (mobj->flags & MF_MISSILE)
 					{
-						mobj->Speed = fixed_t (sqrt (double(mobj->momx)*mobj->momx + double(mobj->momy)*mobj->momy + double(mobj->momz)*mobj->momz));
+						mobj->Speed = fixed_t (sqrt (double(mobj->velx)*mobj->velx + double(mobj->vely)*mobj->vely + double(mobj->velz)*mobj->velz));
 					}
 					// Hugger missiles don't have any vertical velocity
 					if (mobj->flags3 & (MF3_FLOORHUGGER|MF3_CEILINGHUGGER))
 					{
-						mobj->momz = 0;
+						mobj->velz = 0;
 					}
 					if (mobj->flags & MF_SPECIAL)
 					{
@@ -494,12 +496,12 @@ int P_Thing_Damage (int tid, AActor *whofor0, int amount, FName type)
 			{
 				P_DamageMobj (actor, NULL, whofor0, amount, type);
 			}
-			else if (actor->health < actor->GetDefault()->health)
+			else if (actor->health < actor->SpawnHealth())
 			{
 				actor->health -= amount;
-				if (actor->health > actor->GetDefault()->health)
+				if (actor->health > actor->SpawnHealth())
 				{
-					actor->health = actor->GetDefault()->health;
+					actor->health = actor->SpawnHealth();
 				}
 				if (actor->player != NULL)
 				{
@@ -556,20 +558,98 @@ void P_Thing_SetVelocity(AActor *actor, fixed_t vx, fixed_t vy, fixed_t vz, bool
 	{
 		if (!add)
 		{
-			actor->momx = actor->momy = actor->momz = 0;
-			if (actor->player != NULL) actor->player->momx = actor->player->momy = 0;
+			actor->velx = actor->vely = actor->velz = 0;
+			if (actor->player != NULL) actor->player->velx = actor->player->vely = 0;
 		}
-		actor->momx += vx;
-		actor->momy += vy;
-		actor->momz += vz;
+		actor->velx += vx;
+		actor->vely += vy;
+		actor->velz += vz;
 		if (setbob && actor->player != NULL)
 		{
-			actor->player->momx += vx;
-			actor->player->momy += vy;
+			actor->player->velx += vx;
+			actor->player->vely += vy;
 		}
 		// [Dusk] Update momentum
 		SERVER_UpdateThingMomentum( actor, true );
 	}
+}
+
+// [BB] Added bIgnorePositionCheck: If the server instructs the client to raise
+// a thing with SERVERCOMMANDS_SetThingState, the client has to ignore the
+// P_CheckPosition check. For example this is relevant if an Archvile raised
+// the thing.
+bool P_Thing_Raise(AActor *thing, bool bIgnorePositionCheck)
+{
+	if (thing == NULL)
+		return false;	// not valid
+
+	if (!(thing->flags & MF_CORPSE) )
+		return true;	// not a corpse
+	
+	if (thing->tics != -1)
+		return true;	// not lying still yet
+	
+	FState * RaiseState = thing->FindState(NAME_Raise);
+	if (RaiseState == NULL)
+		return true;	// monster doesn't have a raise state
+	
+	AActor *info = thing->GetDefault ();
+
+	thing->velx = thing->vely = 0;
+
+	// [RH] Check against real height and radius
+	fixed_t oldheight = thing->height;
+	fixed_t oldradius = thing->radius;
+	int oldflags = thing->flags;
+
+	thing->flags |= MF_SOLID;
+	thing->height = info->height;	// [RH] Use real height
+	thing->radius = info->radius;	// [RH] Use real radius
+	if (!P_CheckPosition (thing, thing->x, thing->y) && !bIgnorePositionCheck)
+	{
+		thing->flags = oldflags;
+		thing->radius = oldradius;
+		thing->height = oldheight;
+		return false;
+	}
+
+	S_Sound (thing, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
+	
+	// [BC] If we're the server, tell clients to put the thing into its raise state.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		SERVERCOMMANDS_SetThingState( thing, STATE_RAISE );
+
+	thing->SetState (RaiseState);
+	thing->flags = info->flags;
+	thing->flags2 = info->flags2;
+	thing->flags3 = info->flags3;
+	thing->flags4 = info->flags4;
+	thing->flags5 = info->flags5;
+	thing->flags6 = info->flags6;
+	// [BC] Apply new ST flags as well.
+	thing->ulSTFlags = info->ulSTFlags;
+	thing->ulNetworkFlags = info->ulNetworkFlags;
+	thing->health = info->health;
+	thing->target = NULL;
+	thing->lastenemy = NULL;
+
+	// [RH] If it's a monster, it gets to count as another kill
+	if (thing->CountsAsKill())
+	{
+		level.total_monsters++;
+
+		// [BC] Update invasion's HUD.
+		if (( invasion ) && ( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		{
+			INVASION_SetNumMonstersLeft( INVASION_GetNumMonstersLeft( ) + 1 );
+
+			// [BC] If we're the server, tell the client how many monsters are left.
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				SERVERCOMMANDS_SetInvasionNumMonstersLeft( );
+		}
+	}
+
+	return true;
 }
 
 

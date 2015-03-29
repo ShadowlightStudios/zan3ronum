@@ -104,21 +104,38 @@ bool AArtiPoisonBag3::Use (bool pickup)
 {
 	AActor *mo;
 
-	mo = Spawn ("ThrowingBomb", Owner->x, Owner->y, 
+	mo = Spawn("ThrowingBomb", Owner->x, Owner->y, 
 		Owner->z-Owner->floorclip+35*FRACUNIT + (Owner->player? Owner->player->crouchoffset : 0), ALLOW_REPLACE);
 	if (mo)
 	{
-		angle_t pitch = (angle_t)Owner->pitch >> ANGLETOFINESHIFT;
+		mo->angle = Owner->angle + (((pr_poisonbag()&7) - 4) << 24);
 
-		mo->angle = Owner->angle+(((pr_poisonbag()&7)-4)<<24);
-		mo->momz = 4*FRACUNIT + 2*finesine[pitch];
-		mo->z += 2*finesine[pitch];
-		P_ThrustMobj (mo, mo->angle, mo->Speed);
-		mo->momx += Owner->momx>>1;
-		mo->momy += Owner->momy>>1;
+		/* Original flight code from Hexen
+		 * mo->momz = 4*FRACUNIT+((player->lookdir)<<(FRACBITS-4));
+		 * mo->z += player->lookdir<<(FRACBITS-4);
+		 * P_ThrustMobj(mo, mo->angle, mo->info->speed);
+		 * mo->momx += player->mo->momx>>1;
+		 * mo->momy += player->mo->momy>>1;
+		 */
+
+		// When looking straight ahead, it uses a z velocity of 4 while the xy velocity
+		// is as set by the projectile. To accomodate this with a proper trajectory, we
+		// aim the projectile ~20 degrees higher than we're looking at and increase the
+		// speed we fire at accordingly.
+		angle_t orgpitch = angle_t(-Owner->pitch) >> ANGLETOFINESHIFT;
+		angle_t modpitch = angle_t(0xDC00000 - Owner->pitch) >> ANGLETOFINESHIFT;
+		angle_t angle = mo->angle >> ANGLETOFINESHIFT;
+		fixed_t speed = fixed_t(sqrt((double)mo->Speed*mo->Speed + (4.0*65536*4*65536)));
+		fixed_t xyscale = FixedMul(speed, finecosine[modpitch]);
+
+		mo->velz = FixedMul(speed, finesine[modpitch]);
+		mo->velx = FixedMul(xyscale, finecosine[angle]) + (Owner->velx >> 1);
+		mo->vely = FixedMul(xyscale, finesine[angle]) + (Owner->vely >> 1);
+		mo->z += FixedMul(mo->Speed, finesine[orgpitch]);
+
 		mo->target = Owner;
 		mo->tics -= pr_poisonbag()&3;
-		P_CheckMissileSpawn (mo);
+		P_CheckMissileSpawn(mo);
 		return true;
 	}
 	return false;
@@ -242,7 +259,7 @@ IMPLEMENT_CLASS (APoisonCloud)
 
 void APoisonCloud::BeginPlay ()
 {
-	momx = 1; // missile objects must move to impact other objects
+	velx = 1; // missile objects must move to impact other objects
 	special1 = 24+(pr_poisoncloud()&7);
 	special2 = 0;
 }
@@ -274,9 +291,10 @@ int APoisonCloud::DoSpecialDamage (AActor *victim, int damage)
 			{
 				P_PoisonDamage (victim->player, this,
 					15+(pr_poisoncloudd()&15), false); // Don't play painsound
-				P_PoisonPlayer (victim->player, this, this->target, 50);
 
-				S_Sound (victim, CHAN_VOICE, "*poison", 1, ATTN_NORM);
+				// If successful, play the posion sound.
+				if (P_PoisonPlayer (victim->player, this, this->target, 50))
+					S_Sound (victim, CHAN_VOICE, "*poison", 1, ATTN_NORM);
 
 				// [Dusk] Play the sound on the clients
 				if( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -377,17 +395,17 @@ DEFINE_ACTION_FUNCTION(AActor, A_CheckThrowBomb)
 
 DEFINE_ACTION_FUNCTION(AActor, A_CheckThrowBomb2)
 {
-	// [RH] Check using actual velocity, although the momz < 2 check still stands
-	//if (abs(self->momx) < FRACUNIT*3/2 && abs(self->momy) < FRACUNIT*3/2
-	//	&& self->momz < 2*FRACUNIT)
-	if (self->momz < 2*FRACUNIT &&
-		TMulScale32 (self->momx, self->momx, self->momy, self->momy, self->momz, self->momz)
+	// [RH] Check using actual velocity, although the velz < 2 check still stands
+	//if (abs(self->velx) < FRACUNIT*3/2 && abs(self->vely) < FRACUNIT*3/2
+	//	&& self->velz < 2*FRACUNIT)
+	if (self->velz < 2*FRACUNIT &&
+		TMulScale32 (self->velx, self->velx, self->vely, self->vely, self->velz, self->velz)
 		< (3*3)/(2*2))
 	{
 		self->SetState (self->SpawnState + 6);
 		self->z = self->floorz;
-		self->momz = 0;
-		self->bouncetype = BOUNCE_None;
+		self->velz = 0;
+		self->BounceFlags = BOUNCE_None;
 		self->flags &= ~MF_MISSILE;
 	}
 	CALL_ACTION(A_CheckThrowBomb, self);

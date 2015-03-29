@@ -64,6 +64,9 @@ CVAR (Int, cl_rockettrails, 1, CVAR_ARCHIVE);
 CVAR (Int, cl_grenadetrails, 1, CVAR_ARCHIVE);
 CVAR (Int, cl_respawninvuleffect, 1, CVAR_ARCHIVE);
 CVAR (Bool, cl_showspawns, false, CVAR_ARCHIVE); // [CK] Particle fountains at spawns
+CVAR (Bool, r_rail_smartspiral, 0, CVAR_ARCHIVE);
+CVAR (Int, r_rail_spiralsparsity, 1, CVAR_ARCHIVE);
+CVAR (Int, r_rail_trailsparsity, 1, CVAR_ARCHIVE);
 
 #define FADEFROMTTL(a)	(255/(a))
 
@@ -337,7 +340,18 @@ static void MakeFountain (AActor *actor, int color1, int color2)
 
 void P_RunEffect (AActor *actor, int effects)
 {
-	angle_t moveangle = R_PointToAngle2(0,0,actor->momx,actor->momy);
+	angle_t moveangle;
+	
+	// 512 is the limit below which R_PointToAngle2 does no longer returns usable values.
+	if (abs(actor->velx) > 512 || abs(actor->vely) > 512)
+	{
+		moveangle = R_PointToAngle2(0,0,actor->velx,actor->vely);
+	}
+	else
+	{
+		moveangle = actor->angle;
+	}
+
 	particle_t *particle;
 	int i;
 
@@ -347,7 +361,7 @@ void P_RunEffect (AActor *actor, int effects)
 
 		fixed_t backx = actor->x - FixedMul (finecosine[(moveangle)>>ANGLETOFINESHIFT], actor->radius*2);
 		fixed_t backy = actor->y - FixedMul (finesine[(moveangle)>>ANGLETOFINESHIFT], actor->radius*2);
-		fixed_t backz = actor->z - (actor->height>>3) * (actor->momz>>16) + (2*actor->height)/3;
+		fixed_t backz = actor->z - (actor->height>>3) * (actor->velz>>16) + (2*actor->height)/3;
 
 		angle_t an = (moveangle + ANG90) >> ANGLETOFINESHIFT;
 		int speed;
@@ -355,9 +369,9 @@ void P_RunEffect (AActor *actor, int effects)
 		particle = JitterParticle (3 + (M_Random() & 31));
 		if (particle) {
 			fixed_t pathdist = M_Random()<<8;
-			particle->x = backx - FixedMul(actor->momx, pathdist);
-			particle->y = backy - FixedMul(actor->momy, pathdist);
-			particle->z = backz - FixedMul(actor->momz, pathdist);
+			particle->x = backx - FixedMul(actor->velx, pathdist);
+			particle->y = backy - FixedMul(actor->vely, pathdist);
+			particle->z = backz - FixedMul(actor->velz, pathdist);
 			speed = (M_Random () - 128) * (FRACUNIT/200);
 			particle->velx += FixedMul (speed, finecosine[an]);
 			particle->vely += FixedMul (speed, finesine[an]);
@@ -370,9 +384,9 @@ void P_RunEffect (AActor *actor, int effects)
 			particle_t *particle = JitterParticle (3 + (M_Random() & 31));
 			if (particle) {
 				fixed_t pathdist = M_Random()<<8;
-				particle->x = backx - FixedMul(actor->momx, pathdist);
-				particle->y = backy - FixedMul(actor->momy, pathdist);
-				particle->z = backz - FixedMul(actor->momz, pathdist) + (M_Random() << 10);
+				particle->x = backx - FixedMul(actor->velx, pathdist);
+				particle->y = backy - FixedMul(actor->vely, pathdist);
+				particle->z = backz - FixedMul(actor->velz, pathdist) + (M_Random() << 10);
 				speed = (M_Random () - 128) * (FRACUNIT/200);
 				particle->velx += FixedMul (speed, finecosine[an]);
 				particle->vely += FixedMul (speed, finesine[an]);
@@ -396,7 +410,7 @@ void P_RunEffect (AActor *actor, int effects)
 		P_DrawSplash2 (6,
 			actor->x - FixedMul (finecosine[(moveangle)>>ANGLETOFINESHIFT], actor->radius*2),
 			actor->y - FixedMul (finesine[(moveangle)>>ANGLETOFINESHIFT], actor->radius*2),
-			actor->z - (actor->height>>3) * (actor->momz>>16) + (2*actor->height)/3,
+			actor->z - (actor->height>>3) * (actor->velz>>16) + (2*actor->height)/3,
 			moveangle + ANG180, 2, 2);
 	}
 	if (effects & FX_FOUNTAINMASK)
@@ -587,17 +601,19 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 			}
 			else
 			{
+
 				// Only consider sound in 2D (for now, anyway)
 				// [BB] You have to devide by lengthsquared here, not multiply with it.
-				r = ((start.Y - FIXED2FLOAT(mo->y)) * (-dir.Y) -
-					(start.X - FIXED2FLOAT(mo->x)) * (dir.X)) / lengthsquared;
+
+				r = ((start.Y - FIXED2FLOAT(mo->y)) * (-dir.Y) - (start.X - FIXED2FLOAT(mo->x)) * (dir.X)) / lengthsquared;
+				r = clamp<double>(r, 0., 1.);
 
 				dirz = dir.Z;
 				dir.Z = 0;
 				point = start + r * dir;
 				dir.Z = dirz;
 
-				S_Sound (FLOAT2FIXED(point.X), FLOAT2FIXED(point.Y), mo->z,
+				S_Sound (FLOAT2FIXED(point.X), FLOAT2FIXED(point.Y), viewz,
 					CHAN_WEAPON, sound, 1, ATTN_NORM);
 			}
 		}
@@ -630,15 +646,18 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 	step = dir * 3;
 
 	// Create the outer spiral.
-	if (color1 != -1)
+	if (color1 != -1 && (!r_rail_smartspiral || color2 == -1) && r_rail_spiralsparsity > 0)
 	{
+		FVector3 spiral_step = step * r_rail_spiralsparsity;
+		int spiral_steps = steps * r_rail_spiralsparsity;
+		
 		// [BC] If color1 is -2, then we want a rainbow trail.
 		if ( color1 != -2 )
 			color1 = color1 == 0 ? -1 : ColorMatcher.Pick(RPART(color1), GPART(color1), BPART(color1));
 
 		pos = start;
 		deg = FAngle(270);
-		for (i = steps; i; i--)
+		for (i = spiral_steps; i; i--)
 		{
 			particle_t *p = NewParticle ();
 			FVector3 tempvec;
@@ -659,8 +678,8 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 			p->x = FLOAT2FIXED(tempvec.X);
 			p->y = FLOAT2FIXED(tempvec.Y);
 			p->z = FLOAT2FIXED(tempvec.Z);
-			pos += step;
-			deg += FAngle(14);
+			pos += spiral_step;
+			deg += FAngle(r_rail_spiralsparsity * 14);
 
 			if (color1 == -1)
 			{
@@ -689,8 +708,11 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 	}
 
 	// Create the inner trail.
-	if (color2 != -1)
+	if (color2 != -1 && r_rail_trailsparsity > 0)
 	{
+		FVector3 trail_step = step * r_rail_trailsparsity;
+		int trail_steps = steps * r_rail_trailsparsity;
+
 		// [BC] 
 		static LONG	s_lParticleColor = 0;
 
@@ -700,7 +722,7 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 		FVector3 diff(0, 0, 0);
 
 		pos = start;
-		for (i = steps; i; i--)
+		for (i = trail_steps; i; i--)
 		{
 			particle_t *p = JitterParticle (33);
 
@@ -726,7 +748,7 @@ void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end
 			p->z = FLOAT2FIXED(postmp.Z);
 			if (color1 != -1)
 				p->accz -= FRACUNIT/4096;
-			pos += step;
+			pos += trail_step;
 
 			if (color2 == -1)
 			{

@@ -49,6 +49,7 @@
 #include "templates.h"
 #include "timidity/timidity.h"
 #include "g_level.h"
+#include "po_man.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "deathmatch.h"
@@ -113,7 +114,7 @@ static void CalcPosVel(int type, const AActor *actor, const sector_t *sector, co
 static void CalcSectorSoundOrg(const sector_t *sec, int channum, fixed_t *x, fixed_t *y, fixed_t *z);
 static void CalcPolyobjSoundOrg(const FPolyObj *poly, fixed_t *x, fixed_t *y, fixed_t *z);
 static FSoundChan *S_StartSound(AActor *mover, const sector_t *sec, const FPolyObj *poly,
-	const FVector3 *pt, int channel, FSoundID sound_id, float volume, float attenuation);
+	const FVector3 *pt, int channel, FSoundID sound_id, float volume, float attenuation, FRolloffInfo *rolloff);
 static void S_SetListener(SoundListener &listener, AActor *listenactor);
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
@@ -171,6 +172,8 @@ void S_NoiseDebug (void)
 	screen->DrawText (SmallFont, CR_GOLD, 300, y, "chan", TAG_DONE);
 	screen->DrawText (SmallFont, CR_GOLD, 340, y, "pri", TAG_DONE);
 	screen->DrawText (SmallFont, CR_GOLD, 380, y, "flags", TAG_DONE);
+	screen->DrawText (SmallFont, CR_GOLD, 460, y, "aud", TAG_DONE);
+	screen->DrawText (SmallFont, CR_GOLD, 520, y, "pos", TAG_DONE);
 	y += 8;
 
 	if (Channels == NULL)
@@ -193,7 +196,7 @@ void S_NoiseDebug (void)
 		color = (chan->ChanFlags & CHAN_LOOP) ? CR_BROWN : CR_GREY;
 
 		// Name
-		Wads.GetLumpName (temp, chan->SfxInfo->lumpnum);
+		Wads.GetLumpName (temp, S_sfx[chan->SoundID].lumpnum);
 		temp[8] = 0;
 		screen->DrawText (SmallFont, color, 0, y, temp, TAG_DONE);
 
@@ -243,7 +246,7 @@ void S_NoiseDebug (void)
 		screen->DrawText(SmallFont, color, 340, y, temp, TAG_DONE);
 
 		// Flags
-		mysnprintf(temp, countof(temp), "%s3%sZ%sU%sM%sN%sA%sL%sE",
+		mysnprintf(temp, countof(temp), "%s3%sZ%sU%sM%sN%sA%sL%sE%sV",
 			(chan->ChanFlags & CHAN_IS3D)			? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
 			(chan->ChanFlags & CHAN_LISTENERZ)		? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
 			(chan->ChanFlags & CHAN_UI)				? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
@@ -251,8 +254,18 @@ void S_NoiseDebug (void)
 			(chan->ChanFlags & CHAN_NOPAUSE)		? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
 			(chan->ChanFlags & CHAN_AREA)			? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
 			(chan->ChanFlags & CHAN_LOOP)			? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
-			(chan->ChanFlags & CHAN_EVICTED)		? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK);
+			(chan->ChanFlags & CHAN_EVICTED)		? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK,
+			(chan->ChanFlags & CHAN_VIRTUAL)		? TEXTCOLOR_GREEN : TEXTCOLOR_BLACK);
 		screen->DrawText(SmallFont, color, 380, y, temp, TAG_DONE);
+
+		// Audibility
+		mysnprintf(temp, countof(temp), "%.4f", GSnd->GetAudibility(chan));
+		screen->DrawText(SmallFont, color, 460, y, temp, TAG_DONE);
+
+		// Position
+		mysnprintf(temp, countof(temp), "%u", GSnd->GetPosition(chan));
+		screen->DrawText(SmallFont, color, 520, y, temp, TAG_DONE);
+
 
 		y += 8;
 		if (chan->PrevChan == &Channels)
@@ -765,9 +778,9 @@ static void CalcPosVel(int type, const AActor *actor, const sector_t *sector,
 		// Only actors maintain velocity information.
 		if (type == SOURCE_Actor && actor != NULL)
 		{
-			vel->X = FIXED2FLOAT(actor->momx) * TICRATE;
-			vel->Y = FIXED2FLOAT(actor->momz) * TICRATE;
-			vel->Z = FIXED2FLOAT(actor->momy) * TICRATE;
+			vel->X = FIXED2FLOAT(actor->velx) * TICRATE;
+			vel->Y = FIXED2FLOAT(actor->velz) * TICRATE;
+			vel->Z = FIXED2FLOAT(actor->vely) * TICRATE;
 		}
 		else
 		{
@@ -838,11 +851,11 @@ static void CalcSectorSoundOrg(const sector_t *sec, int channum, fixed_t *x, fix
 
 static void CalcPolyobjSoundOrg(const FPolyObj *poly, fixed_t *x, fixed_t *y, fixed_t *z)
 {
-	seg_t *seg;
+	side_t *side;
 	sector_t *sec;
 
-	PO_ClosestPoint(poly, *x, *y, *x, *y, &seg);
-	sec = seg->frontsector;
+	poly->ClosestPoint(*x, *y, *x, *y, &side);
+	sec = side->sector;
 	*z = clamp(*z, sec->floorplane.ZatPoint(*x, *y), sec->ceilingplane.ZatPoint(*x, *y));
 }
 
@@ -857,7 +870,8 @@ static void CalcPolyobjSoundOrg(const FPolyObj *poly, fixed_t *x, fixed_t *y, fi
 //==========================================================================
 
 static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyObj *poly,
-	const FVector3 *pt, int channel, FSoundID sound_id, float volume, float attenuation)
+	const FVector3 *pt, int channel, FSoundID sound_id, float volume, float attenuation,
+	FRolloffInfo *forcedrolloff=NULL)
 {
 	sfxinfo_t *sfx;
 	int chanflags;
@@ -953,7 +967,10 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 				near_limit = S_sfx[sound_id].NearLimit;
 				limit_range = S_sfx[sound_id].LimitRange;
 			}
-			if (rolloff->MinDistance == 0) rolloff = &S_sfx[sound_id].Rolloff;
+			if (rolloff->MinDistance == 0)
+			{
+				rolloff = &S_sfx[sound_id].Rolloff;
+			}
 		}
 		else
 		{
@@ -963,13 +980,25 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 				near_limit = S_sfx[sound_id].NearLimit;
 				limit_range = S_sfx[sound_id].LimitRange;
 			}
-			if (rolloff->MinDistance == 0) rolloff = &S_sfx[sound_id].Rolloff;
+			if (rolloff->MinDistance == 0)
+			{
+				rolloff = &S_sfx[sound_id].Rolloff;
+			}
 		}
 		sfx = &S_sfx[sound_id];
 	}
 
-	// If no valid rolloff was set use the global default
-	if (rolloff->MinDistance == 0) rolloff = &S_Rolloff;
+	// The passed rolloff overrides any sound-specific rolloff.
+	if (forcedrolloff != NULL && forcedrolloff->MinDistance != 0)
+	{
+		rolloff = forcedrolloff;
+	}
+
+	// If no valid rolloff was set, use the global default.
+	if (rolloff->MinDistance == 0)
+	{
+		rolloff = &S_Rolloff;
+	}
 
 	// If this is a singular sound, don't play it if it's already playing.
 	if (sfx->bSingular && S_CheckSingular(sound_id))
@@ -1112,6 +1141,7 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 	if (chan == NULL && (chanflags & CHAN_LOOP))
 	{
 		chan = (FSoundChan*)S_GetChannel(NULL);
+		GSnd->MarkStartTime(chan);
 		chanflags |= CHAN_EVICTED;
 	}
 	if (attenuation > 0)
@@ -1126,7 +1156,6 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 	{
 		chan->SoundID = sound_id;
 		chan->OrgID = FSoundID(org_id);
-		chan->SfxInfo = sfx;
 		chan->EntChannel = channel;
 		chan->Volume = volume;
 		chan->ChanFlags |= chanflags;
@@ -1159,10 +1188,9 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 void S_RestartSound(FSoundChan *chan)
 {
 	assert(chan->ChanFlags & CHAN_EVICTED);
-	assert(chan->SfxInfo != NULL);
 
 	FSoundChan *ochan;
-	sfxinfo_t *sfx = chan->SfxInfo;
+	sfxinfo_t *sfx = &S_sfx[chan->SoundID];
 
 	// If this is a singular sound, don't play it if it's already playing.
 	if (sfx->bSingular && S_CheckSingular(chan->SoundID))
@@ -1184,7 +1212,6 @@ void S_RestartSound(FSoundChan *chan)
 	if (chan->ChanFlags & (CHAN_UI|CHAN_NOPAUSE)) startflags |= SNDF_NOPAUSE;
 	if (chan->ChanFlags & CHAN_ABSTIME) startflags |= SNDF_ABSTIME;
 
-	chan->ChanFlags &= ~(CHAN_EVICTED|CHAN_ABSTIME);
 	if (chan->ChanFlags & CHAN_IS3D)
 	{
 		FVector3 pos, vel;
@@ -1201,11 +1228,13 @@ void S_RestartSound(FSoundChan *chan)
 		SoundListener listener;
 		S_SetListener(listener, players[consoleplayer].camera);
 
+		chan->ChanFlags &= ~(CHAN_EVICTED|CHAN_ABSTIME);
 		ochan = (FSoundChan*)GSnd->StartSound3D(sfx->data, &listener, chan->Volume, &chan->Rolloff, chan->DistanceScale, chan->Pitch,
 			chan->Priority, pos, vel, chan->EntChannel, startflags, chan);
 	}
 	else
 	{
+		chan->ChanFlags &= ~(CHAN_EVICTED|CHAN_ABSTIME);
 		ochan = (FSoundChan*)GSnd->StartSound(sfx->data, chan->Volume, chan->Pitch, startflags, chan);
 	}
 	assert(ochan == NULL || ochan == chan);
@@ -1237,6 +1266,27 @@ void S_Sound (AActor *ent, int channel, FSoundID sound_id, float volume, float a
 	if (ent == NULL || ent->Sector->Flags & SECF_SILENT)
 		return;
 	S_StartSound (ent, NULL, NULL, NULL, channel, sound_id, volume, attenuation);
+}
+
+//==========================================================================
+//
+// S_SoundMinMaxDist - An actor is source
+//
+// Attenuation is specified as min and max distances, rather than a scalar.
+//
+//==========================================================================
+
+void S_SoundMinMaxDist(AActor *ent, int channel, FSoundID sound_id, float volume, float mindist, float maxdist)
+{
+	if (ent == NULL || ent->Sector->Flags & SECF_SILENT)
+		return;
+
+	FRolloffInfo rolloff;
+
+	rolloff.RolloffType = ROLLOFF_Linear;
+	rolloff.MinDistance = mindist;
+	rolloff.MaxDistance = maxdist;
+	S_StartSound(ent, NULL, NULL, NULL, channel, sound_id, volume, 1, &rolloff);
 }
 
 //==========================================================================
@@ -1320,7 +1370,7 @@ sfxinfo_t *S_LoadSound(sfxinfo_t *sfx)
 			FWadLump wlump = Wads.OpenLumpNum(sfx->lumpnum);
 			sfxstart = sfxdata = new BYTE[size];
 			wlump.Read(sfxdata, size);
-			SDWORD len = ((SDWORD *)sfxdata)[1];
+			SDWORD len = LittleLong(((SDWORD *)sfxdata)[1]);
 
 			// If the sound is raw, just load it as such.
 			// Otherwise, try the sound as DMX format.
@@ -1337,14 +1387,14 @@ sfxinfo_t *S_LoadSound(sfxinfo_t *sfx)
 				}
 				else
 				{
-					frequency = ((WORD *)sfxdata)[1];
+					frequency = LittleShort(((WORD *)sfxdata)[1]);
 					if (frequency == 0)
 					{
 						frequency = 11025;
 					}
 					sfxstart = sfxdata + 8;
 				}
-				sfx->data = GSnd->LoadSoundRaw(sfxstart, len, frequency, 1, 8);
+				sfx->data = GSnd->LoadSoundRaw(sfxstart, len, frequency, 1, 8, sfx->LoopStart);
 			}
 			else
 			{
@@ -1409,7 +1459,7 @@ bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, floa
 	
 	for (chan = Channels, count = 0; chan != NULL && count < near_limit; chan = chan->NextChan)
 	{
-		if (!(chan->ChanFlags & CHAN_EVICTED) && chan->SfxInfo == sfx)
+		if (!(chan->ChanFlags & CHAN_EVICTED) && &S_sfx[chan->SoundID] == sfx)
 		{
 			FVector3 chanorigin;
 
@@ -1421,6 +1471,17 @@ bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, floa
 		}
 	}
 	return count >= near_limit;
+}
+
+//==========================================================================
+//
+// [BB] S_IsMusicPaused
+//
+//==========================================================================
+
+bool S_IsMusicPaused ( void )
+{
+	return ( MusicPaused );
 }
 
 //==========================================================================
@@ -1733,7 +1794,7 @@ bool S_IsActorPlayingSomething (AActor *actor, int channel, int sound_id)
 // Stop music and sound effects, during game PAUSE.
 //==========================================================================
 
-void S_PauseSound (bool notmusic)
+void S_PauseSound (bool notmusic, bool notsfx)
 {
 	// [BC] Server doesn't use music/sound.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1744,8 +1805,11 @@ void S_PauseSound (bool notmusic)
 		I_PauseSong (mus_playing.handle);
 		MusicPaused = true;
 	}
-	SoundPaused = true;
-	GSnd->SetSfxPaused (true, 0);
+	if (!notsfx)
+	{
+		SoundPaused = true;
+		GSnd->SetSfxPaused (true, 0);
+	}
 }
 
 //==========================================================================
@@ -1755,7 +1819,7 @@ void S_PauseSound (bool notmusic)
 // Resume music and sound effects, after game PAUSE.
 //==========================================================================
 
-void S_ResumeSound ()
+void S_ResumeSound (bool notsfx)
 {
 	// [BC] Server doesn't use music/sound.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1766,8 +1830,61 @@ void S_ResumeSound ()
 		I_ResumeSong (mus_playing.handle);
 		MusicPaused = false;
 	}
-	SoundPaused = false;
-	GSnd->SetSfxPaused (false, 0);
+	if (!notsfx)
+	{
+		SoundPaused = false;
+		GSnd->SetSfxPaused (false, 0);
+	}
+}
+
+//==========================================================================
+//
+// S_SetSoundPaused
+//
+// Called with state non-zero when the app is active, zero when it isn't.
+//
+//==========================================================================
+
+void S_SetSoundPaused (int state)
+{
+	if (state)
+	{
+		if (paused <= 0)
+		{
+			S_ResumeSound(true);
+			if (GSnd != NULL)
+			{
+				GSnd->SetInactive(false);
+			}
+			if ((NETWORK_GetState( ) == NETSTATE_SINGLE)
+#ifdef _DEBUG
+				&& !demoplayback
+#endif
+				)
+			{
+				paused = 0;
+			}
+		}
+	}
+	else
+	{
+		if (paused == 0)
+		{
+			S_PauseSound(false, true);
+			if (GSnd !=  NULL)
+			{
+				GSnd->SetInactive(true);
+			}
+			if ((NETWORK_GetState( ) == NETSTATE_SINGLE)
+#ifdef _DEBUG
+				&& !demoplayback
+#endif
+				)
+			{
+				paused = -1;
+			}
+		}
+	}
 }
 
 //==========================================================================
@@ -1792,6 +1909,11 @@ void S_EvictAllChannels()
 			chan->ChanFlags |= CHAN_EVICTED;
 			if (chan->SysChannel != NULL)
 			{
+				if (!(chan->ChanFlags & CHAN_ABSTIME))
+				{
+					chan->StartTime.AsOne = GSnd ? GSnd->GetPosition(chan) : 0;
+					chan->ChanFlags |= CHAN_ABSTIME;
+				}
 				S_StopChannel(chan);
 			}
 //			assert(chan->NextChan == next);
@@ -1917,9 +2039,9 @@ static void S_SetListener(SoundListener &listener, AActor *listenactor)
 	{
 		listener.angle = (float)(listenactor->angle) * ((float)PI / 2147483648.f);
 		/*
-		listener.velocity.X = listenactor->momx * (TICRATE/65536.f);
-		listener.velocity.Y = listenactor->momz * (TICRATE/65536.f);
-		listener.velocity.Z = listenactor->momy * (TICRATE/65536.f);
+		listener.velocity.X = listenactor->velx * (TICRATE/65536.f);
+		listener.velocity.Y = listenactor->velz * (TICRATE/65536.f);
+		listener.velocity.Z = listenactor->vely * (TICRATE/65536.f);
 		*/
 		listener.velocity.Zero();
 		listener.position.X = FIXED2FLOAT(listenactor->x);
@@ -2024,10 +2146,10 @@ void S_ChannelEnded(FISoundChannel *ichan)
 		{
 			evicted = true;
 		}
-		else if (schan->SfxInfo != NULL)
+		else
 		{ 
 			unsigned int pos = GSnd->GetPosition(schan);
-			unsigned int len = GSnd->GetSampleLength(schan->SfxInfo->data);
+			unsigned int len = GSnd->GetSampleLength(S_sfx[schan->SoundID].data);
 			if (pos == 0)
 			{
 				evicted = !!(schan->ChanFlags & CHAN_JUSTSTARTED);
@@ -2037,10 +2159,12 @@ void S_ChannelEnded(FISoundChannel *ichan)
 				evicted = (pos < len);
 			}
 		}
+		/*
 		else
 		{
 			evicted = false;
 		}
+		*/
 		if (!evicted)
 		{
 			S_ReturnChannel(schan);
@@ -2050,6 +2174,25 @@ void S_ChannelEnded(FISoundChannel *ichan)
 			schan->ChanFlags |= CHAN_EVICTED;
 			schan->SysChannel = NULL;
 		}
+	}
+}
+
+//==========================================================================
+//
+// S_ChannelVirtualChanged (callback for sound interface code)
+//
+//==========================================================================
+
+void S_ChannelVirtualChanged(FISoundChannel *ichan, bool is_virtual)
+{
+	FSoundChan *schan = static_cast<FSoundChan*>(ichan);
+	if (is_virtual)
+	{
+		schan->ChanFlags |= CHAN_VIRTUAL;
+	}
+	else
+	{
+		schan->ChanFlags &= ~CHAN_VIRTUAL;
 	}
 }
 
@@ -2071,13 +2214,11 @@ void S_StopChannel(FSoundChan *chan)
 		if (!(chan->ChanFlags & CHAN_EVICTED))
 		{
 			chan->ChanFlags |= CHAN_FORGETTABLE;
+			if (chan->SourceType == SOURCE_Actor)
+			{
+				chan->Actor = NULL;
+			}
 		}
-
-		if (chan->SourceType == SOURCE_Actor)
-		{
-			chan->Actor = NULL;
-		}
-
 		GSnd->StopChannel(chan);
 	}
 	else
@@ -2139,10 +2280,6 @@ static FArchive &operator<<(FArchive &arc, FSoundChan &chan)
 		<< chan.Rolloff.MaxDistance
 		<< chan.LimitRange;
 
-	if (arc.IsLoading())
-	{
-		chan.SfxInfo = &S_sfx[chan.SoundID];
-	}
 	return arc;
 }
 
@@ -2294,7 +2431,7 @@ bool S_StartMusic (const char *m_id)
 // specified, it will only be played if the specified CD is in a drive.
 //==========================================================================
 
-TArray<char> musiccache;
+TArray<BYTE> musiccache;
 
 bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 {
@@ -2326,7 +2463,8 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 		// Don't choke if the map doesn't have a song attached
 		S_StopMusic (true);
 		mus_playing.name = "";
-		return false;
+		LastSong = "";
+		return true;
 	}
 
 	FString DEH_Music;
@@ -2343,7 +2481,10 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 		}
 	}
 
-	if (!mus_playing.name.IsEmpty() && stricmp (mus_playing.name, musicname) == 0)
+	if (!mus_playing.name.IsEmpty() &&
+		mus_playing.handle != NULL &&
+		stricmp (mus_playing.name, musicname) == 0 &&
+		mus_playing.handle->m_Looping == looping)
 	{
 		if (order != mus_playing.baseorder)
 		{

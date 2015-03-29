@@ -44,15 +44,16 @@
 #include "m_misc.h"
 #include "c_cvars.h"
 #include "gameconfigfile.h"
+#include "resourcefiles/resourcefile.h"
 // [BB] New #includes.
 #include "doomerrors.h"
 #include "version.h"
 
 
-EIWADType gameiwad;
-
 CVAR (Bool, queryiwad, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 CVAR (String, defaultiwad, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
+
+EIWADType gameiwad;
 
 // If autoname is NULL, that's either because that game doesn't allow
 // loading of external wads or because it's already caught by the
@@ -60,18 +61,18 @@ CVAR (String, defaultiwad, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 const IWADInfo IWADInfos[NUM_IWAD_TYPES] =
 {
 	// banner text,								autoname,	fg color,				bg color
-	{ "Final Doom: TNT - Evilution",			"TNT",		MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/tnt.txt",		GI_MAPxx },
-	{ "Final Doom: Plutonia Experiment",		"Plutonia",	MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/plutonia.txt",	GI_MAPxx },
-	{ "Hexen: Beyond Heretic",					NULL,		MAKERGB(240,240,240),	MAKERGB(107,44,24),		GAME_Hexen,		"mapinfo/hexen.txt",	GI_MAPxx },
-	{ "Hexen: Deathkings of the Dark Citadel",	"HexenDK",	MAKERGB(240,240,240),	MAKERGB(139,68,9),		GAME_Hexen,		"mapinfo/hexen.txt",	GI_MAPxx },
+	{ "Final Doom: TNT - Evilution",			"TNT",		MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/tnt.txt",		GI_MAPxx | GI_COMPATSHORTTEX | GI_COMPATSTAIRS },
+	{ "Final Doom: Plutonia Experiment",		"Plutonia",	MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/plutonia.txt",	GI_MAPxx | GI_COMPATSHORTTEX },
+	{ "Hexen: Beyond Heretic",					NULL,		MAKERGB(240,240,240),	MAKERGB(107,44,24),		GAME_Hexen,		"mapinfo/hexen.txt",	GI_MAPxx | GI_COMPATPOLY1 },
+	{ "Hexen: Deathkings of the Dark Citadel",	"HexenDK",	MAKERGB(240,240,240),	MAKERGB(139,68,9),		GAME_Hexen,		"mapinfo/hexen.txt",	GI_MAPxx | GI_COMPATPOLY1 | GI_COMPATPOLY2 },
 	{ "Hexen: Demo Version",					"HexenDemo",MAKERGB(240,240,240),	MAKERGB(107,44,24),		GAME_Hexen,		"mapinfo/hexen.txt",	GI_MAPxx | GI_SHAREWARE },
-	{ "DOOM 2: Hell on Earth",					"Doom2",	MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom2.txt",	GI_MAPxx },
+	{ "DOOM 2: Hell on Earth",					"Doom2",	MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom2.txt",	GI_MAPxx | GI_COMPATSHORTTEX },
 	{ "Heretic Shareware",						NULL,		MAKERGB(252,252,0),		MAKERGB(168,0,0),		GAME_Heretic,	"mapinfo/hereticsw.txt",GI_SHAREWARE },
 	{ "Heretic: Shadow of the Serpent Riders",	NULL,		MAKERGB(252,252,0),		MAKERGB(168,0,0),		GAME_Heretic,	"mapinfo/heretic.txt",	GI_MENUHACK_EXTENDED },
 	{ "Heretic",								NULL,		MAKERGB(252,252,0),		MAKERGB(168,0,0),		GAME_Heretic,	"mapinfo/heretic.txt" },
-	{ "DOOM Shareware",							NULL,		MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom1.txt",	GI_SHAREWARE },
-	{ "The Ultimate DOOM",						"Doom1",	MAKERGB(84,84,84),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/ultdoom.txt" },
-	{ "DOOM Registered",						"Doom1",	MAKERGB(84,84,84),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom1.txt" },
+	{ "DOOM Shareware",							NULL,		MAKERGB(168,0,0),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom1.txt",	GI_SHAREWARE | GI_COMPATSHORTTEX },
+	{ "The Ultimate DOOM",						"Doom1",	MAKERGB(84,84,84),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/ultdoom.txt",	GI_COMPATSHORTTEX },
+	{ "DOOM Registered",						"Doom1",	MAKERGB(84,84,84),		MAKERGB(168,168,168),	GAME_Doom,		"mapinfo/doom1.txt",	GI_COMPATSHORTTEX },
 	{ "Strife: Quest for the Sigil",			NULL,		MAKERGB(224,173,153),	MAKERGB(0,107,101),		GAME_Strife,	"mapinfo/strife.txt",	GI_MAPxx },
 	{ "Strife: Teaser (Old Version)",			NULL,		MAKERGB(224,173,153),	MAKERGB(0,107,101),		GAME_Strife,	"mapinfo/strife.txt",	GI_MAPxx | GI_SHAREWARE },
 	{ "Strife: Teaser (New Version)",			NULL,		MAKERGB(224,173,153),	MAKERGB(0,107,101),		GAME_Strife,	"mapinfo/strife.txt",	GI_MAPxx | GI_SHAREWARE | GI_TEASER2 },
@@ -79,8 +80,11 @@ const IWADInfo IWADInfos[NUM_IWAD_TYPES] =
 	{ "Ultimate Freedoom",						"Freedoom1",MAKERGB(50,84,67),		MAKERGB(198,220,209),	GAME_Doom,		"mapinfo/doom1.txt" },
 	{ "Freedoom \"Demo\"",						NULL,		MAKERGB(50,84,67),		MAKERGB(198,220,209),	GAME_Doom,		"mapinfo/doom1.txt" },
 	{ "FreeDM",									"FreeDM",	MAKERGB(50,84,67),		MAKERGB(198,220,209),	GAME_Doom,		"mapinfo/doom2.txt",	GI_MAPxx },
+	{ "Blasphemer",								"Blasphemer",MAKERGB(115,0,0),		MAKERGB(0,0,0),			GAME_Heretic,	"mapinfo/heretic.txt" },
 	{ "Chex(R) Quest",							"Chex1",	MAKERGB(255,255,0),		MAKERGB(0,192,0),		GAME_Chex,		"mapinfo/chex.txt" },
 	{ "Chex(R) Quest 3",						"Chex3",	MAKERGB(255,255,0),		MAKERGB(0,192,0),		GAME_Chex,		"mapinfo/chex3.txt" },
+	{ "Action Doom 2: Urban Brawl",				"UrbanBrawl",MAKERGB(168,168,0),	MAKERGB(168,0,0),		GAME_Doom,		"mapinfo/doom2.txt",	GI_MAPxx  },
+	{ "Harmony",								"Harmony",	MAKERGB(110,180,230),	MAKERGB(69,79,126),		GAME_Doom,		"mapinfo/doom2.txt",	GI_MAPxx  },
 	//{ "ZDoom Engine",							NULL,		MAKERGB(168,0,0),		MAKERGB(168,168,168) },
 };
 
@@ -106,8 +110,12 @@ static const char *IWADNames[] =
 	"freedoom1.wad",
 	"freedoomu.wad",
 	"freedm.wad",
+	"blasphem.wad",
+	"blasphemer.wad",
 	"chex.wad",
 	"chex3.wad",
+	"action2.wad",
+	"harm1.wad",
 #ifdef unix
 	"DOOM2.WAD",    // Also look for all-uppercase names
 	"PLUTONIA.WAD",
@@ -126,8 +134,12 @@ static const char *IWADNames[] =
 	"FREEDOOM1.WAD",
 	"FREEDOOMU.WAD",
 	"FREEDM.WAD",
+	"BLASPHEM.WAD",
+	"BLASPHEMER.WAD",
 	"CHEX.WAD",
 	"CHEX3.WAD",
+	"ACTION2.WAD",
+	"HARM1.WAD",
 #endif
 	NULL
 };
@@ -143,6 +155,7 @@ static EIWADType ScanIWAD (const char *iwad)
 {
 	static const char checklumps[][8] =
 	{
+		"AD2LIB",
 		"E1M1",
 		"E4M2",
 		"MAP01",
@@ -156,11 +169,15 @@ static EIWADType ScanIWAD (const char *iwad)
 		"MAP33",
 		"INVCURS",
 		{ 'F','R','E','E','D','O','O','M' },
+		{ 'B','L','A','S','P','H','E','M' },
 		"W94_1",
 		{ 'P','O','S','S','H','0','M','0' },
 		"CYCLA1",
 		"FLMBA1",
 		"MAPINFO",
+		"0HAWK01",
+		"0CARA3",
+		"0NOSE1",
 		{ 'G','A','M','E','I','N','F','O' },
 		"E2M1","E2M2","E2M3","E2M4","E2M5","E2M6","E2M7","E2M8","E2M9",
 		"E3M1","E3M2","E3M3","E3M4","E3M5","E3M6","E3M7","E3M8","E3M9",
@@ -168,9 +185,10 @@ static EIWADType ScanIWAD (const char *iwad)
 		{ 'S','P','I','D','A','1','D','1' },
 
 	};
-#define NUM_CHECKLUMPS (sizeof(checklumps)/8)
+#define NUM_CHECKLUMPS (countof(checklumps))
 	enum
 	{
+		Check_ad2lib,
 		Check_e1m1,
 		Check_e4m1,
 		Check_map01,
@@ -184,43 +202,69 @@ static EIWADType ScanIWAD (const char *iwad)
 		Check_map33,
 		Check_invcurs,
 		Check_FreeDoom,
+		Check_Blasphem,
 		Check_W94_1,
 		Check_POSSH0M0,
 		Check_Cycla1,
 		Check_Flmba1,
 		Check_Mapinfo,
+		Check_Hawk,
+		Check_Car,
+		Check_Nose,
 		Check_Gameinfo,
 		Check_e2m1
 	};
-	int lumpsfound[NUM_CHECKLUMPS];
+	bool lumpsfound[NUM_CHECKLUMPS];
 	size_t i;
-	wadinfo_t header;
-	FILE *f;
 
 	memset (lumpsfound, 0, sizeof(lumpsfound));
-	if ( (f = fopen (iwad, "rb")) )
-	{
-		fread (&header, sizeof(header), 1, f);
-		if (header.Magic == IWAD_ID || header.Magic == PWAD_ID)
-		{
-			header.NumLumps = LittleLong(header.NumLumps);
-			if (0 == fseek (f, LittleLong(header.InfoTableOfs), SEEK_SET))
-			{
-				for (i = 0; i < (size_t)header.NumLumps; i++)
-				{
-					wadlump_t lump;
-					size_t j;
+	FResourceFile *iwadfile = FResourceFile::OpenResourceFile(iwad, NULL, true);
 
-					if (0 == fread (&lump, sizeof(lump), 1, f))
+	if (iwadfile != NULL)
+	{
+		for(DWORD ii = 0; ii < iwadfile->LumpCount(); ii++)
+		{
+			FResourceLump *lump = iwadfile->GetLump(ii);
+			size_t j;
+
+			for (j = 0; j < NUM_CHECKLUMPS; j++)
+			{
+				if (!lumpsfound[j])
+				{
+					if (strnicmp (lump->Name, checklumps[j], 8) == 0)
+					{
+						lumpsfound[j] = true;
 						break;
-					for (j = 0; j < NUM_CHECKLUMPS; j++)
-						if (strnicmp (lump.Name, checklumps[j], 8) == 0)
-							lumpsfound[j]++;
+					}
+					// Check for maps inside zips, too.
+					else if (lump->FullName != NULL)
+					{
+						if (checklumps[j][0] == 'E' && checklumps[j][2] == 'M' && checklumps[j][4] == '\0')
+						{
+							if (strnicmp(lump->FullName, "maps/", 5) == 0 &&
+								strnicmp(lump->FullName + 5, checklumps[j], 4) == 0 &&
+								stricmp(lump->FullName + 9, ".wad") == 0)
+							{
+								lumpsfound[j] = true;
+								break;
+							}
+						}
+						else if (checklumps[j][0] == 'M' && checklumps[j][1] == 'A' && checklumps[j][2] == 'P' &&
+								 checklumps[j][5] == '\0')
+						{
+							if (strnicmp(lump->FullName, "maps/", 5) == 0 &&
+								strnicmp(lump->FullName + 5, checklumps[j], 5) == 0 &&
+								stricmp(lump->FullName + 10, ".wad") == 0)
+							{
+								lumpsfound[j] = true;
+								break;
+							}
+						}
+					}
 				}
 			}
 		}
-
-		fclose (f);
+		delete iwadfile;
 	}
 
 	// Always check for custom iwads first.
@@ -242,16 +286,24 @@ static EIWADType ScanIWAD (const char *iwad)
 		}
 		else if (lumpsfound[Check_invcurs])
 		{
-			return IWAD_StrifeTeaser2;
+			return IWAD_StrifeTeaser2;	// Strife0.wad from 14 Mar 1996
 		}
 		else
 		{
-			return IWAD_StrifeTeaser;
+			return IWAD_StrifeTeaser;	// Strife0.wad from 22 Feb 1996
 		}
 	}
 	else if (lumpsfound[Check_map01])
 	{
-		if (lumpsfound[Check_FreeDoom])
+		if (lumpsfound[Check_ad2lib])
+		{
+			return IWAD_ActionDoom2;
+		}
+		else if (lumpsfound[Check_Hawk] && lumpsfound[Check_Car] && lumpsfound[Check_Nose])
+		{
+			return IWAD_Harmony;
+		}
+		else if (lumpsfound[Check_FreeDoom])
 		{
 			// Is there a 100% reliable way to tell FreeDoom and FreeDM
 			// apart based solely on the lump names?
@@ -301,7 +353,11 @@ static EIWADType ScanIWAD (const char *iwad)
 			}
 			else
 			{
-				if (lumpsfound[Check_Extended])
+				if (lumpsfound[Check_Blasphem])
+				{
+					return IWAD_Blasphemer;
+				}
+				else if (lumpsfound[Check_Extended])
 				{
 					return IWAD_HereticExtended;
 				}
@@ -393,8 +449,7 @@ static int CheckIWAD (const char *doomwaddir, WadStuff *wads)
 			FString iwad;
 			
 			iwad.Format ("%s%s%s", doomwaddir, slash, IWADNames[i]);
-			FixPathSeperator (iwad.LockBuffer());
-			iwad.UnlockBuffer();
+			FixPathSeperator (iwad);
 			if (FileExists (iwad))
 			{
 				wads[i].Type = ScanIWAD (iwad);
@@ -444,7 +499,7 @@ bool D_DoesDirectoryHaveIWADs( const char *pszPath )
 //
 //==========================================================================
 
-static EIWADType IdentifyVersion (const char *zdoom_wad)
+static EIWADType IdentifyVersion (TArray<FString> &wadfiles, const char *iwad, const char *zdoom_wad)
 {
 	WadStuff wads[countof(IWADNames)];
 	size_t foundwads[NUM_IWAD_TYPES] = { 0 };
@@ -455,10 +510,15 @@ static EIWADType IdentifyVersion (const char *zdoom_wad)
 	bool iwadparmfound = false;
 	FString custwad;
 
+	if (iwadparm == NULL && iwad != NULL && *iwad != 0)
+	{
+		iwadparm = iwad;
+	}
+
 	if (iwadparm)
 	{
 		custwad = iwadparm;
-		FixPathSeperator (custwad.LockBuffer());
+		FixPathSeperator (custwad);
 		if (CheckIWAD (custwad, wads))
 		{ // -iwad parameter was a directory
 			iwadparm = NULL;
@@ -484,8 +544,7 @@ static EIWADType IdentifyVersion (const char *zdoom_wad)
 				if (stricmp (key, "Path") == 0)
 				{
 					FString nice = NicePath(value);
-					FixPathSeperator(nice.LockBuffer());
-					nice.UnlockBuffer();
+					FixPathSeperator(nice);
 					CheckIWAD(nice, wads);
 				}
 			}
@@ -595,14 +654,14 @@ static EIWADType IdentifyVersion (const char *zdoom_wad)
 		exit (0);
 
 	// zdoom.pk3 must always be the first file loaded and the IWAD second.
-	D_AddFile (zdoom_wad);
+	D_AddFile (wadfiles, zdoom_wad);
 
 	if (wads[pickwad].Type == IWAD_HexenDK)
 	{ // load hexen.wad before loading hexdd.wad
-		D_AddFile (wads[foundwads[IWAD_Hexen]-1].Path);
+		D_AddFile (wadfiles, wads[foundwads[IWAD_Hexen]-1].Path);
 	}
 
-	D_AddFile (wads[pickwad].Path);
+	D_AddFile (wadfiles, wads[pickwad].Path);
 
 	if (wads[pickwad].Type == IWAD_Strife)
 	{ // Try to load voices.wad along with strife1.wad
@@ -618,17 +677,18 @@ static EIWADType IdentifyVersion (const char *zdoom_wad)
 			path = FString (wads[pickwad].Path.GetChars(), lastslash + 1);
 		}
 		path += "voices.wad";
-		D_AddFile (path);
+		D_AddFile (wadfiles, path);
 	}
 
 	return wads[pickwad].Type;
 }
 
 
-const IWADInfo *D_FindIWAD(const char *basewad)
+const IWADInfo *D_FindIWAD(TArray<FString> &wadfiles, const char *iwad, const char *basewad)
 {
-	gameiwad = IdentifyVersion(basewad);
-	const IWADInfo *iwad_info = &IWADInfos[gameiwad];
+	EIWADType iwadType = IdentifyVersion(wadfiles, iwad, basewad);
+	gameiwad = iwadType;
+	const IWADInfo *iwad_info = &IWADInfos[iwadType];
 	I_SetIWADInfo(iwad_info);
 	return iwad_info;
 }

@@ -73,14 +73,26 @@ extern void ChildSigHandler (int signum);
 #include "stats.h"
 #include "timidity/timidity.h"
 
-//[BB] fmod.h is not needed here.
-//#include <fmod.h>
+#define GZIP_ID1		31
+#define GZIP_ID2		139
+#define GZIP_CM			8
+#define GZIP_ID			MAKE_ID(GZIP_ID1,GZIP_ID2,GZIP_CM,0)
+
+#define GZIP_FTEXT		1
+#define GZIP_FHCRC		2
+#define GZIP_FEXTRA		4
+#define GZIP_FNAME		8
+#define GZIP_FCOMMENT	16
+
+extern int MUSHeaderSearch(const BYTE *head, int len);
 
 EXTERN_CVAR (Int, snd_samplerate)
 EXTERN_CVAR (Int, snd_mididevice)
 
 
 static bool MusicDown = true;
+
+static BYTE *ungzip(BYTE *data, int *size);
 
 MusInfo *currSong;
 int		nomusic = 0;
@@ -148,6 +160,18 @@ void MusInfo::MusicVolumeChanged()
 }
 
 void MusInfo::TimidityVolumeChanged()
+{
+}
+
+void MusInfo::FluidSettingInt(const char *, int)
+{
+}
+
+void MusInfo::FluidSettingNum(const char *, double)
+{
+}
+
+void MusInfo::FluidSettingStr(const char *, const char *)
 {
 }
 
@@ -282,11 +306,18 @@ MusInfo *I_RegisterURLSong (const char *url)
 	return NULL;
 }
 
-MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int len, int device)
+MusInfo *I_RegisterSong (const char *filename, BYTE *musiccache, int offset, int len, int device)
 {
 	FILE *file;
 	MusInfo *info = NULL;
-	DWORD id;
+	union
+	{
+		DWORD id[32/4];
+		BYTE idstr[32];
+	};
+	const char *fmt;
+	BYTE *ungzipped;
+	int i;
 
 	if (nomusic)
 	{
@@ -311,28 +342,73 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 		{
 			fseek (file, offset, SEEK_SET);
 		}
-
-		if (fread (&id, 4, 1, file) != 1)
+		if (len < 32)
+		{
+			return 0;
+		}
+		if (fread (id, 4, 32/4, file) != 32/4)
 		{
 			fclose (file);
 			return 0;
 		}
-		fseek (file, -4, SEEK_CUR);
+		fseek (file, -32, SEEK_CUR);
 	}
 	else 
 	{
 		file = NULL;
-		memcpy(&id, &musiccache[0], 4);
+		if (len < 32)
+		{
+			return 0;
+		}
+		for (i = 0; i < 32/4; ++i)
+		{
+			id[i] = ((DWORD *)musiccache)[i];
+		}
 	}
 
 #ifndef _WIN32
-	// non-windows platforms don't support MDEV_MIDI so map to MDEV_FMOD
-	if (device == MDEV_MMAPI) device = MDEV_FMOD;
+	// non-Windows platforms don't support MDEV_MMAPI so map to MDEV_FMOD
+	if (device == MDEV_MMAPI)
+		device = MDEV_FMOD;
 #endif
 
+	// Check for gzip compression. Some formats are expected to have players
+	// that can handle it, so it simplifies things if we make all songs
+	// gzippable.
+	ungzipped = NULL;
+	if ((id[0] & MAKE_ID(255,255,255,0)) == GZIP_ID)
+	{
+		if (offset != -1)
+		{
+			BYTE *gzipped = new BYTE[len];
+			if (fread(gzipped, 1, len, file) != (size_t)len)
+			{
+				delete[] gzipped;
+				fclose(file);
+				return NULL;
+			}
+			ungzipped = ungzip(gzipped, &len);
+			delete[] gzipped;
+		}
+		else
+		{
+			ungzipped = ungzip(musiccache, &len);
+		}
+		if (ungzipped == NULL)
+		{
+			fclose(file);
+			return NULL;
+		}
+		musiccache = ungzipped;
+		for (i = 0; i < 32/4; ++i)
+		{
+			id[i] = ((DWORD *)musiccache)[i];
+		}
+	}
 
 	// Check for MUS format
-	if (id == MAKE_ID('M','U','S',0x1a))
+	// Tolerate sloppy wads by searching up to 32 bytes for the header
+	if (MUSHeaderSearch(idstr, sizeof(idstr)) >= 0)
 	{
 		/*	MUS are played as:
 		- OPL: 
@@ -365,6 +441,12 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 		{
 			info = new MUSSong2(file, musiccache, len, MIDI_Timidity);
 		}
+#ifdef HAVE_FLUIDSYNTH
+		else if (snd_mididevice == -5 && device == MDEV_DEFAULT)
+		{
+			info = new MUSSong2(file, musiccache, len, MIDI_Fluid);
+		}
+#endif
 		if (info != NULL && !info->IsValid())
 		{
 			delete info;
@@ -378,7 +460,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 
 			if (file == NULL)
 			{
-				midi_made = ProduceMIDI((BYTE *)musiccache, midi);
+				midi_made = ProduceMIDI((BYTE *)musiccache, len, midi);
 			}
 			else
 			{
@@ -386,7 +468,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 				size_t did_read = fread(mus, 1, len, file);
 				if (did_read == (size_t)len)
 				{
-					midi_made = ProduceMIDI(mus, midi);
+					midi_made = ProduceMIDI(mus, len, midi);
 				}
 				fseek(file, -(long)did_read, SEEK_CUR);
 				delete[] mus;
@@ -411,7 +493,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 	// Check for MIDI format
 	else 
 	{
-		if (id == MAKE_ID('M','T','h','d'))
+		if (id[0] == MAKE_ID('M','T','h','d'))
 		{
 			// This is a midi file
 
@@ -424,7 +506,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 				- if explicitly selected by $mididevice 
 				- when snd_mididevice  is -2 and no midi device is set for the song
 
-			  FMod:
+			  FMOD:
 				- if explicitly selected by $mididevice 
 				- when snd_mididevice  is -1 and no midi device is set for the song
 				- as fallback when Timidity failed unless snd_mididevice is >= 0
@@ -446,6 +528,12 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 			{
 				info = new MIDISong2(file, musiccache, len, MIDI_Timidity);
 			}
+#ifdef HAVE_FLUIDSYNTH
+			else if (snd_mididevice == -5 && device == MDEV_DEFAULT)
+			{
+				info = new MIDISong2(file, musiccache, len, MIDI_Fluid);
+			}
+#endif
 			if (info != NULL && !info->IsValid())
 			{
 				delete info;
@@ -460,33 +548,17 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 #endif // _WIN32
 		}
 		// Check for various raw OPL formats
-		else if (len >= 12 &&
-			(id == MAKE_ID('R','A','W','A') ||		// Rdos Raw OPL
-			 id == MAKE_ID('D','B','R','A') ||		// DosBox Raw OPL
-			  id == MAKE_ID('A','D','L','I')))		// Martin Fernandez's modified IMF
+		else if (
+			(id[0] == MAKE_ID('R','A','W','A') && id[1] == MAKE_ID('D','A','T','A')) ||		// Rdos Raw OPL
+			(id[0] == MAKE_ID('D','B','R','A') && id[1] == MAKE_ID('W','O','P','L')) ||		// DosBox Raw OPL
+			(id[0] == MAKE_ID('A','D','L','I') && *((BYTE *)id + 4) == 'B'))		// Martin Fernandez's modified IMF
 		{
-			DWORD fullsig[2];
-
-			if (file != NULL)
-			{
-				if (fread (fullsig, 4, 2, file) != 2)
-				{
-					fclose (file);
-					return 0;
-				}
-				fseek (file, -8, SEEK_CUR);
-			}
-			else
-			{
-				memcpy(fullsig, musiccache, 8);
-			}
-
-			if ((fullsig[0] == MAKE_ID('R','A','W','A') && fullsig[1] == MAKE_ID('D','A','T','A')) ||
-				(fullsig[0] == MAKE_ID('D','B','R','A') && fullsig[1] == MAKE_ID('W','O','P','L')) ||
-				(fullsig[0] == MAKE_ID('A','D','L','I') && (fullsig[1] & MAKE_ID(255,255,0,0)) == MAKE_ID('B',1,0,0)))
-			{
-				info = new OPLMUSSong (file, musiccache, len);
-			}
+			info = new OPLMUSSong (file, musiccache, len);
+		}
+		// Check for game music
+		else if ((fmt = GME_CheckFormat(id[0])) != NULL && fmt[0] != '\0')
+		{
+			info = GME_OpenSong(file, musiccache, len, fmt);
 		}
 		// Check for module formats
 		else
@@ -498,7 +570,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 	if (info == NULL)
 	{
 		// Check for CDDA "format"
-		if (id == (('R')|(('I')<<8)|(('F')<<16)|(('F')<<24)))
+		if (id[0] == (('R')|(('I')<<8)|(('F')<<16)|(('F')<<24)))
 		{
 			if (file != NULL)
 			{
@@ -525,7 +597,7 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 		// smaller than this can't possibly be a valid music file if it hasn't
 		// been identified already, so don't even bother trying to load it.
 		// Of course MIDIs shorter than 1024 bytes should pass.
-		if (info == NULL && (len >= 1024 || id == MAKE_ID('M','T','h','d')))
+		if (info == NULL && (len >= 1024 || id[0] == MAKE_ID('M','T','h','d')))
 		{
 			// Let FMOD figure out what it is.
 			if (file != NULL)
@@ -533,20 +605,22 @@ MusInfo *I_RegisterSong (const char *filename, char *musiccache, int offset, int
 				fclose (file);
 				file = NULL;
 			}
-			info = new StreamSong (offset >=0 ? filename : musiccache, offset, len);
+			info = new StreamSong (offset >= 0 ? filename : (const char *)musiccache, offset, len);
 		}
 	}
-
 
 	if (info && !info->IsValid ())
 	{
 		delete info;
 		info = NULL;
 	}
-
 	if (file != NULL)
 	{
 		fclose (file);
+	}
+	if (ungzipped != NULL)
+	{
+		delete[] ungzipped;
 	}
 
 	return info;
@@ -563,6 +637,88 @@ MusInfo *I_RegisterCDSong (int track, int id)
 	}
 
 	return info;
+}
+
+//==========================================================================
+//
+// ungzip
+//
+// VGZ files are compressed with gzip, so we need to uncompress them before
+// handing them to GME.
+//
+//==========================================================================
+
+BYTE *ungzip(BYTE *data, int *complen)
+{
+	const BYTE *max = data + *complen - 8;
+	const BYTE *compstart = data + 10;
+	BYTE flags = data[3];
+	unsigned isize;
+	BYTE *newdata;
+	z_stream stream;
+	int err;
+
+	// Find start of compressed data stream
+	if (flags & GZIP_FEXTRA)
+	{
+		compstart += 2 + LittleShort(*(WORD *)(data + 10));
+	}
+	if (flags & GZIP_FNAME)
+	{
+		while (compstart < max && *compstart != 0)
+		{
+			compstart++;
+		}
+	}
+	if (flags & GZIP_FCOMMENT)
+	{
+		while (compstart < max && *compstart != 0)
+		{
+			compstart++;
+		}
+	}
+	if (flags & GZIP_FHCRC)
+	{
+		compstart += 2;
+	}
+	if (compstart >= max - 1)
+	{
+		return NULL;
+	}
+
+	// Decompress
+	isize = LittleLong(*(DWORD *)(data + *complen - 4));
+	newdata = new BYTE[isize];
+
+	stream.next_in = (Bytef *)compstart;
+	stream.avail_in = (uInt)(max - compstart);
+	stream.next_out = newdata;
+	stream.avail_out = isize;
+	stream.zalloc = (alloc_func)0;
+	stream.zfree = (free_func)0;
+
+	err = inflateInit2(&stream, -MAX_WBITS);
+	if (err != Z_OK)
+	{
+		delete[] newdata;
+		return NULL;
+	}
+
+	err = inflate(&stream, Z_FINISH);
+	if (err != Z_STREAM_END)
+	{
+		inflateEnd(&stream);
+		delete[] newdata;
+		return NULL;
+	}
+	err = inflateEnd(&stream);
+	if (err != Z_OK)
+	{
+		delete[] newdata;
+		return NULL;
+	}
+	*complen = isize;
+	return newdata;
 }
 
 void I_UpdateMusic()
@@ -653,7 +809,7 @@ CCMD (writeopl)
 	}
 	else
 	{
-		Printf ("Usage: writeopl <filename>");
+		Printf ("Usage: writeopl <filename>\n");
 	}
 }
 

@@ -46,6 +46,7 @@
 #include "a_sharedglobal.h"
 #include "r_interpolate.h"
 #include "g_level.h"
+#include "po_man.h"
 // [BB] New #includes.
 #include "deathmatch.h"
 #include "cl_demo.h"
@@ -55,6 +56,7 @@ static void CopyPlayer (player_t *dst, player_t *src, const char *name);
 static void ReadOnePlayer (FArchive &arc, bool skipload);
 static void ReadMultiplePlayers (FArchive &arc, int numPlayers, int numPlayersNow, bool skipload);
 static void SpawnExtraPlayers ();
+
 
 //
 // P_ArchivePlayers
@@ -248,6 +250,8 @@ static void CopyPlayer (player_t *dst, player_t *src, const char *name)
 	// needs to come from the save for bots.
 	userinfo_t uibackup = dst->userinfo;
 	int chasecam = dst->cheats & CF_CHASECAM;	// Remember the chasecam setting
+	bool attackdown = dst->attackdown;
+	bool usedown = dst->usedown;
 	*dst = *src;
 	dst->cheats |= chasecam;
 
@@ -257,6 +261,9 @@ static void CopyPlayer (player_t *dst, player_t *src, const char *name)
 	{
 		dst->mo->player = dst;
 	}
+	// These 2 variables may not be overwritten.
+	dst->attackdown = attackdown;
+	dst->usedown = usedown;
 }
 
 static void SpawnExtraPlayers ()
@@ -335,11 +342,20 @@ void P_SerializeWorld (FArchive &arc)
 			<< sec->Flags
 			<< sec->FloorSkyBox << sec->CeilingSkyBox
 			<< sec->ZoneNumber
-			<< sec->oldspecial
+			<< sec->secretsector
 			<< sec->interpolations[0]
 			<< sec->interpolations[1]
 			<< sec->interpolations[2]
 			<< sec->interpolations[3];
+
+		if (SaveVersion < 2492)
+		{
+			sec->SeqName = NAME_None;
+		}
+		else
+		{
+			arc << sec->SeqName;
+		}
 
 		sec->e->Serialize(arc);
 		if (arc.IsStoring ())
@@ -429,19 +445,18 @@ void P_SerializeWorld (FArchive &arc)
 
 		for (j = 0; j < 2; j++)
 		{
-			if (li->sidenum[j] == NO_SIDE)
+			if (li->sidedef[j] == NULL)
 				continue;
 
-			side_t *si = &sides[li->sidenum[j]];
+			side_t *si = li->sidedef[j];
 			arc << si->textures[side_t::top]
 				<< si->textures[side_t::mid]
 				<< si->textures[side_t::bottom]
 				<< si->Light
 				<< si->Flags
 				<< si->LeftSide
-				<< si->RightSide;
-			if (SaveVersion >= 1575)
-				arc << si->Index;
+				<< si->RightSide
+				<< si->Index;
 			DBaseDecal::SerializeChain (arc, &si->AttachedDecals);
 			// [BC]
 			arc << si->SavedFlags
@@ -486,7 +501,8 @@ void extsector_t::Serialize(FArchive &arc)
 
 FArchive &operator<< (FArchive &arc, side_t::part &p)
 {
-	arc << p.xoffset << p.yoffset << p.interpolation << p.texture;// << p.Light;
+	arc << p.xoffset << p.yoffset << p.interpolation << p.texture 
+		<< p.xscale << p.yscale;// << p.Light;
 	return arc;
 }
 
@@ -558,8 +574,8 @@ void P_SerializePolyobjs (FArchive &arc)
 		arc << seg << po_NumPolyobjs;
 		for(i = 0, po = polyobjs; i < po_NumPolyobjs; i++, po++)
 		{
-			arc << po->tag << po->angle << po->startSpot[0] <<
-				po->startSpot[1] << po->interpolation;
+			arc << po->tag << po->angle << po->StartSpot.x <<
+				po->StartSpot.y << po->interpolation;
   		}
 	}
 	else
@@ -585,11 +601,11 @@ void P_SerializePolyobjs (FArchive &arc)
 				I_Error ("UnarchivePolyobjs: Invalid polyobj tag");
 			}
 			arc << angle;
-			PO_RotatePolyobj (po->tag, angle);
+			po->RotatePolyobj (angle);
 			arc << deltaX << deltaY << po->interpolation;
-			deltaX -= po->startSpot[0];
-			deltaY -= po->startSpot[1];
-			PO_MovePolyobj (po->tag, deltaX, deltaY, true);
+			deltaX -= po->StartSpot.x;
+			deltaY -= po->StartSpot.y;
+			po->MovePolyobj (deltaX, deltaY, true);
 		}
 	}
 }

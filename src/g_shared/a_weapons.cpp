@@ -59,8 +59,6 @@ void AWeapon::Serialize (FArchive &arc)
 		<< AmmoGive1 << AmmoGive2
 		<< MinAmmo1 << MinAmmo2
 		<< AmmoUse1 << AmmoUse2
-		// [BC] Also archive the amount of ammo used in DM.
-//		<< AmmoUseDM1 << AmmoUseDM2
 		<< Kickback
 		<< YAdjust
 		<< UpSound << ReadySound
@@ -70,11 +68,9 @@ void AWeapon::Serialize (FArchive &arc)
 		<< MoveCombatDist
 		<< Ammo1 << Ammo2 << SisterWeapon << GivenAsMorphWeapon
 		<< bAltFire
-		<< ReloadCounter;
-	if (SaveVersion >= 1688)
-	{
-		arc << FOVScale;
-	}
+		<< ReloadCounter
+		<< FOVScale
+		<< Crosshair;
 }
 
 //===========================================================================
@@ -352,7 +348,7 @@ void AWeapon::AttachToOwner (AActor *other)
 			// [ZZ] Changed code so it only treats switchonpickup == 2 as "always switch"
 			// [BC] Handle the "switchonpickup" userinfo cvar. If it's == 2, then
 			// we always want to switch our weapon when we pickup a new one.
-			if ( (Owner->player->userinfo.switchonpickup == 2) || ( compatflags & COMPATF_OLD_WEAPON_SWITCH ) )
+			if ( (Owner->player->userinfo.switchonpickup == 2) || ( zacompatflags & ZACOMPATF_OLD_WEAPON_SWITCH ) )
 			{
 				// [Spleen] Weapon switching is done client-side unless it's a bot.
 				if ( ( NETWORK_GetState( ) != NETSTATE_SERVER ) || ( Owner->player->bIsBot ) )
@@ -539,7 +535,7 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 	int count1, count2;
 	int enough, enoughmask;
 
-	if (dmflags & DF_INFINITE_AMMO)
+	if ((dmflags & DF_INFINITE_AMMO) || (Owner->player->cheats & CF_INFINITEAMMO))
 	{
 		return true;
 	}
@@ -560,13 +556,7 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 	count1 = (Ammo1 != NULL) ? Ammo1->Amount : 0;
 	count2 = (Ammo2 != NULL) ? Ammo2->Amount : 0;
 
-	// [BC] If this is deathmatch, then use the ammo usage levels for DM instead.
-/*
-	if ( deathmatch || teamgame )
-		enough = (count1 >= AmmoUseDM1) | ((count2 >= AmmoUseDM2) << 1);
-	else
-*/
-		enough = (count1 >= AmmoUse1) | ((count2 >= AmmoUse2) << 1);
+	enough = (count1 >= AmmoUse1) | ((count2 >= AmmoUse2) << 1);
 	if (WeaponFlags & (WIF_PRIMARY_USES_BOTH << altFire))
 	{
 		enoughmask = 3;
@@ -579,7 +569,7 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 	{ // If this weapon has no alternate fire, then there is never enough ammo for it
 		enough &= 1;
 	}
-	if ((enough & enoughmask) == enoughmask)
+	if (((enough & enoughmask) == enoughmask) || (enough && (WeaponFlags & WIF_AMMO_CHECKBOTH)))
 	{
 		return true;
 	}
@@ -610,7 +600,7 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 
 bool AWeapon::DepleteAmmo (bool altFire, bool checkEnough)
 {
-	if (!(dmflags & DF_INFINITE_AMMO))
+	if (!((dmflags & DF_INFINITE_AMMO) || (Owner->player->cheats & CF_INFINITEAMMO)))
 	{
 		if (checkEnough && !CheckAmmo (altFire ? AltFire : PrimaryFire, false))
 		{
@@ -620,46 +610,22 @@ bool AWeapon::DepleteAmmo (bool altFire, bool checkEnough)
 		{
 			if (Ammo1 != NULL)
 			{
-				// [BC] If this is deathmatch, then use the ammo usage levels for DM instead.
-/*
-				if ( deathmatch || teamgame )
-					Ammo1->Amount -= AmmoUseDM1;
-				else
-*/
-					Ammo1->Amount -= AmmoUse1;
+				Ammo1->Amount -= AmmoUse1;
 			}
 			if ((WeaponFlags & WIF_PRIMARY_USES_BOTH) && Ammo2 != NULL)
 			{
-				// [BC] If this is deathmatch, then use the ammo usage levels for DM instead.
-/*
-				if ( deathmatch || teamgame )
-					Ammo2->Amount -= AmmoUseDM2;
-				else
-*/
-					Ammo2->Amount -= AmmoUse2;
+				Ammo2->Amount -= AmmoUse2;
 			}
 		}
 		else
 		{
 			if (Ammo2 != NULL)
 			{
-				// [BC] If this is deathmatch, then use the ammo usage levels for DM instead.
-/*
-				if ( deathmatch || teamgame )
-					Ammo2->Amount -= AmmoUseDM2;
-				else
-*/
-					Ammo2->Amount -= AmmoUse2;
+				Ammo2->Amount -= AmmoUse2;
 			}
 			if ((WeaponFlags & WIF_ALT_USES_BOTH) && Ammo1 != NULL)
 			{
-				// [BC] If this is deathmatch, then use the ammo usage levels for DM instead.
-/*
-				if ( deathmatch || teamgame )
-					Ammo1->Amount -= AmmoUseDM1;
-				else
-*/
-					Ammo1->Amount -= AmmoUse1;
+				Ammo1->Amount -= AmmoUse1;
 			}
 		}
 		if (Ammo1 != NULL && Ammo1->Amount < 0)
@@ -947,7 +913,7 @@ int FWeaponSlot::LocateWeapon(const PClass *type)
 //
 //===========================================================================
 
-AWeapon *FWeaponSlot::PickWeapon(player_t *player)
+AWeapon *FWeaponSlot::PickWeapon(player_t *player, bool checkammo)
 {
 	int i, j;
 
@@ -970,16 +936,19 @@ AWeapon *FWeaponSlot::PickWeapon(player_t *player)
 				 player->ReadyWeapon->SisterWeapon != NULL &&
 				 player->ReadyWeapon->SisterWeapon->GetClass() == Weapons[i].Type))
 			{
-				for (j = (unsigned)(i - 1) % Weapons.Size();
+				for (j = (i == 0 ? Weapons.Size() - 1 : i - 1);
 					j != i;
-					j = (unsigned)(j + Weapons.Size() - 1) % Weapons.Size())	// + Weapons.Size is to avoid underflows
+					j = (j == 0 ? Weapons.Size() - 1 : j - 1))
 				{
 					AWeapon *weap = static_cast<AWeapon *> (player->mo->FindInventory(Weapons[j].Type));
 
-					// [BC] New cl_noammoswitch option: Allow users to switch to weapons even if they're out of ammo for them.
-					if (weap != NULL && weap->IsKindOf(RUNTIME_CLASS(AWeapon)) && ( cl_noammoswitch || ( weap->CheckAmmo(AWeapon::EitherFire, false) )))
+					if (weap != NULL && weap->IsKindOf(RUNTIME_CLASS(AWeapon)))
 					{
-						return weap;
+						// [BC] New cl_noammoswitch option: Allow users to switch to weapons even if they're out of ammo for them.
+						if ( cl_noammoswitch || !checkammo || weap->CheckAmmo(AWeapon::EitherFire, false))
+						{
+							return weap;
+						}
 					}
 				}
 			}
@@ -989,10 +958,13 @@ AWeapon *FWeaponSlot::PickWeapon(player_t *player)
 	{
 		AWeapon *weap = static_cast<AWeapon *> (player->mo->FindInventory(Weapons[i].Type));
 
-		// [BC] New cl_noammoswitch option: Allow users to switch to weapons even if they're out of ammo for them.
-		if (weap != NULL && weap->IsKindOf(RUNTIME_CLASS(AWeapon)) && ( cl_noammoswitch || ( weap->CheckAmmo(AWeapon::EitherFire, false) )))
+		if (weap != NULL && weap->IsKindOf(RUNTIME_CLASS(AWeapon)))
 		{
-			return weap;
+			// [BC] New cl_noammoswitch option: Allow users to switch to weapons even if they're out of ammo for them.
+			if (cl_noammoswitch || !checkammo || weap->CheckAmmo(AWeapon::EitherFire, false))
+			{
+				return weap;
+			}
 		}
 	}
 	return player->ReadyWeapon;
@@ -1185,6 +1157,7 @@ static bool FindMostRecentWeapon(player_t *player, int *slot, int *index)
 AWeapon *FWeaponSlots::PickNextWeapon(player_t *player)
 {
 	int startslot, startindex;
+	int slotschecked = 0;
 
 	if (player->mo == NULL)
 	{
@@ -1212,6 +1185,7 @@ AWeapon *FWeaponSlots::PickNextWeapon(player_t *player)
 			if (++index >= Slots[slot].Size())
 			{
 				index = 0;
+				slotschecked++;
 				if (++slot >= NUM_WEAPON_SLOTS)
 				{
 					slot = 0;
@@ -1225,7 +1199,7 @@ AWeapon *FWeaponSlots::PickNextWeapon(player_t *player)
 				return weap;
 			}
 		}
-		while (slot != startslot || index != startindex);
+		while ((slot != startslot || index != startindex) && slotschecked < NUM_WEAPON_SLOTS);
 	}
 	return player->ReadyWeapon;
 }
@@ -1243,6 +1217,7 @@ AWeapon *FWeaponSlots::PickNextWeapon(player_t *player)
 AWeapon *FWeaponSlots::PickPrevWeapon (player_t *player)
 {
 	int startslot, startindex;
+	int slotschecked = 0;
 
 	if (player->mo == NULL)
 	{
@@ -1269,6 +1244,7 @@ AWeapon *FWeaponSlots::PickPrevWeapon (player_t *player)
 		{
 			if (--index < 0)
 			{
+				slotschecked++;
 				if (--slot < 0)
 				{
 					slot = NUM_WEAPON_SLOTS - 1;
@@ -1283,7 +1259,7 @@ AWeapon *FWeaponSlots::PickPrevWeapon (player_t *player)
 				return weap;
 			}
 		}
-		while (slot != startslot || index != startindex);
+		while ((slot != startslot || index != startindex) && slotschecked < NUM_WEAPON_SLOTS);
 	}
 	return player->ReadyWeapon;
 }
@@ -1592,17 +1568,6 @@ CCMD (setslot)
 			Net_WriteWeapon(PClass::FindClass(argv[i]));
 		}
 	}
-
-	/* [BB] Some old code from before ZDoom completely changed how weapon slots are handled.
-			const PClass *replacee;
-			replacee = PClass::FindClass (argv[i]);
-			// [BB] This weapon has been replaced. It's reasonable to add the replacement to the same slot.
-			if( replacee && replacee->ActorInfo->Replacement )
-			{
-				LocalWeapons.Slots[slot].AddWeapon ( replacee->ActorInfo->Replacement->Class->TypeName.GetChars() );
-				Printf( "%s is replaced, adding %s to slot %d too.\n", argv[i], replacee->ActorInfo->Replacement->Class->TypeName.GetChars(), slot );
-			}
-	*/
 }
 
 //===========================================================================
@@ -1936,5 +1901,22 @@ DEFINE_ACTION_FUNCTION_PARAMS(AWeapon, A_ZoomFactor)
 			zoom = -zoom;
 		}
 		self->player->ReadyWeapon->FOVScale = zoom;
+	}
+}
+
+//===========================================================================
+//
+// A_SetCrosshair
+//
+//===========================================================================
+
+DEFINE_ACTION_FUNCTION_PARAMS(AWeapon, A_SetCrosshair)
+{
+	ACTION_PARAM_START(1);
+	ACTION_PARAM_INT(xhair, 0);
+
+	if (self->player != NULL && self->player->ReadyWeapon != NULL)
+	{
+		self->player->ReadyWeapon->Crosshair = xhair;
 	}
 }
