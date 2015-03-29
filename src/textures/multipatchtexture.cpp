@@ -218,6 +218,7 @@ FMultiPatchTexture::FMultiPatchTexture (const void *texdef, FPatchLookup *patchl
 	int i;
 
 	mtexture.d = (const maptexture_t *)texdef;
+	bMultiPatch = true;
 
 	if (strife)
 	{
@@ -416,34 +417,26 @@ const BYTE *FMultiPatchTexture::GetColumn (unsigned int column, const Span **spa
 
 //==========================================================================
 //
-// FMultiPatchTexture :: GetColumn
+// GetBlendMap
 //
 //==========================================================================
 
-BYTE * GetBlendMap(PalEntry blend, BYTE *blendwork)
+BYTE *GetBlendMap(PalEntry blend, BYTE *blendwork)
 {
 
-	switch (blend.a==0 ? blend.r : -1)
+	switch (blend.a==0 ? int(blend) : -1)
 	{
-	case BLEND_INVERSEMAP:
-		return InverseColormap;
-
-	case BLEND_GOLDMAP:
-		return GoldColormap;
-
-	case BLEND_REDMAP:
-		return RedColormap;
-
-	case BLEND_GREENMAP:
-		return GreenColormap;
-
 	case BLEND_ICEMAP:
 		return TranslationToTable(TRANSLATION(TRANSLATION_Standard, 7))->Remap;
 
 	default:
-		if (blend.r >= BLEND_DESATURATE1 && blend.r <= BLEND_DESATURATE31)
+		if (blend >= BLEND_SPECIALCOLORMAP1 && blend < BLEND_SPECIALCOLORMAP1 + SpecialColormaps.Size())
 		{
-			return DesaturateColormap[blend.r - BLEND_DESATURATE1];
+			return SpecialColormaps[blend - BLEND_SPECIALCOLORMAP1].Colormap;
+		}
+		else if (blend >= BLEND_DESATURATE1 && blend <= BLEND_DESATURATE31)
+		{
+			return DesaturateColormap[blend - BLEND_DESATURATE1];
 		}
 		else 
 		{
@@ -494,31 +487,32 @@ void FMultiPatchTexture::MakeTexture ()
 	Pixels = new BYTE[numpix];
 	memset (Pixels, 0, numpix);
 
-	// This is not going to be easy for paletted output. Using the
-	// real time mixing tables gives results that just look bad and
-	// downconverting a true color image also has its problems so the only
-	// real choice is to do normal compositing with any translucent patch
-	// just masking the affected pixels, then do a full true color composition
-	// and merge these pixels in.
 	for (int i = 0; i < NumParts; ++i)
 	{
-		BYTE *trans = Parts[i].Translation ? Parts[i].Translation->Remap : NULL;
 		if (Parts[i].op != OP_COPY)
 		{
 			hasTranslucent = true;
 		}
-		else
-		{
-			if (Parts[i].Blend != 0)
-			{
-				trans = GetBlendMap(Parts[i].Blend, blendwork);
-			}
-			Parts[i].Texture->CopyToBlock (Pixels, Width, Height,
-				Parts[i].OriginX, Parts[i].OriginY, Parts[i].Rotate, trans);
-		}
 	}
 
-	if (hasTranslucent)
+	if (!hasTranslucent)
+	{
+		for (int i = 0; i < NumParts; ++i)
+		{
+			if (Parts[i].Texture->bHasCanvas) continue;	// cannot use camera textures as patch.
+		
+			BYTE *trans = Parts[i].Translation ? Parts[i].Translation->Remap : NULL;
+			{
+				if (Parts[i].Blend != 0)
+				{
+					trans = GetBlendMap(Parts[i].Blend, blendwork);
+				}
+				Parts[i].Texture->CopyToBlock (Pixels, Width, Height,
+					Parts[i].OriginX, Parts[i].OriginY, Parts[i].Rotate, trans);
+			}
+		}
+	}
+	else
 	{
 		// In case there are translucent patches let's do the composition in
 		// True color to keep as much precision as possible before downconverting to the palette.
@@ -556,11 +550,26 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 	int retv = -1;
 	FCopyInfo info;
 
-	for(int i=0;i<NumParts;i++)
+	// When compositing a multipatch texture with multipatch parts
+	// drawing must be restricted to the actual area which is covered by this texture.
+	FClipRect saved_cr = bmp->GetClipRect();
+	bmp->IntersectClipRect(x, y, Width, Height);
+
+	if (inf != NULL && inf->op == OP_OVERWRITE)
+	{
+		bmp->Zero();
+	}
+
+	for(int i = 0; i < NumParts; i++)
 	{
 		int ret = -1;
+		
+		if (Parts[i].Texture->bHasCanvas) continue;	// cannot use camera textures as patch.
 
-		if (!Parts[i].Texture->bComplex || inf == NULL)
+		// rotated multipatch parts cannot be composited directly
+		bool rotatedmulti = Parts[i].Rotate != 0 && Parts[i].Texture->bMultiPatch;
+
+		if ((!Parts[i].Texture->bComplex || inf == NULL) && !rotatedmulti)
 		{
 			memset (&info, 0, sizeof (info));
 			info.alpha = Parts[i].Alpha;
@@ -574,9 +583,9 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 			else
 			{
 				PalEntry b = Parts[i].Blend;
-				if (b.a == 0 && b.r != BLEND_NONE)
+				if (b.a == 0 && b != BLEND_NONE)
 				{
-					info.blend = EBlend(b.r);
+					info.blend = EBlend(b.d);
 				}
 				else if (b.a != 0)
 				{
@@ -609,14 +618,17 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 			FBitmap bmp1;
 			if (bmp1.Create(Parts[i].Texture->GetWidth(), Parts[i].Texture->GetHeight()))
 			{
+				bmp1.Zero();
 				Parts[i].Texture->CopyTrueColorPixels(&bmp1, 0, 0);
 				bmp->CopyPixelDataRGB(x+Parts[i].OriginX, y+Parts[i].OriginY, bmp1.GetPixels(), 
-					bmp1.GetWidth(), bmp1.GetHeight(), 4, bmp1.GetPitch()*4, Parts[i].Rotate, CF_BGRA, inf);
+					bmp1.GetWidth(), bmp1.GetHeight(), 4, bmp1.GetPitch(), Parts[i].Rotate, CF_BGRA, inf);
 			}
 		}
 
 		if (ret > retv) retv = ret;
 	}
+	// Restore previous clipping rectangle.
+	bmp->SetClipRect(saved_cr);
 	return retv;
 }
 
@@ -1033,22 +1045,29 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part)
 			}
 			else if (sc.Compare("Translation"))
 			{
+				int match;
+
 				bComplex = true;
 				if (part.Translation != NULL) delete part.Translation;
 				part.Translation = NULL;
 				part.Blend = 0;
-				static const char *maps[] = { "inverse", "gold", "red", "green", "ice", "desaturate", NULL };
+				static const char *maps[] = { "inverse", "gold", "red", "green", "blue", NULL };
 				sc.MustGetString();
-				int match = sc.MatchString(maps);
+
+				match = sc.MatchString(maps);
 				if (match >= 0)
 				{
-					part.Blend.r = 1 + match;
-					if (part.Blend.r == BLEND_DESATURATE1)
-					{
-						sc.MustGetStringName(",");
-						sc.MustGetNumber();
-						part.Blend.r += clamp(sc.Number-1, 0, 30);
-					}
+					part.Blend = BLEND_SPECIALCOLORMAP1 + match;
+				}
+				else if (sc.Compare("ICE"))
+				{
+					part.Blend = BLEND_ICEMAP;
+				}
+				else if (sc.Compare("DESATURATE"))
+				{
+					sc.MustGetStringName(",");
+					sc.MustGetNumber();
+					part.Blend = BLEND_DESATURATE1 + clamp(sc.Number-1, 0, 30);
 				}
 				else
 				{
@@ -1063,6 +1082,36 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part)
 					while (sc.CheckString(","));
 				}
 
+			}
+			else if (sc.Compare("Colormap"))
+			{
+				float r1,g1,b1;
+				float r2,g2,b2;
+
+				sc.MustGetFloat();
+				r1 = (float)sc.Float;
+				sc.MustGetStringName(",");
+				sc.MustGetFloat();
+				g1 = (float)sc.Float;
+				sc.MustGetStringName(",");
+				sc.MustGetFloat();
+				b1 = (float)sc.Float;
+				if (!sc.CheckString(","))
+				{
+					part.Blend = AddSpecialColormap(0,0,0, r1, g1, b1);
+				}
+				else
+				{
+					sc.MustGetFloat();
+					r2 = (float)sc.Float;
+					sc.MustGetStringName(",");
+					sc.MustGetFloat();
+					g2 = (float)sc.Float;
+					sc.MustGetStringName(",");
+					sc.MustGetFloat();
+					b2 = (float)sc.Float;
+					part.Blend = AddSpecialColormap(r1, g1, b1, r2, g2, b2);
+				}
 			}
 			else if (sc.Compare("Blend"))
 			{
@@ -1090,10 +1139,14 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part)
 					sc.MustGetStringName(",");
 					part.Blend = MAKERGB(r, g, b);
 				}
+				// Blend.a may never be 0 here.
 				if (sc.CheckString(","))
 				{
 					sc.MustGetFloat();
-					part.Blend.a = clamp<int>(int(sc.Float*255), 1, 254);
+					if (sc.Float > 0.f)
+						part.Blend.a = clamp<int>(int(sc.Float*255), 1, 254);
+					else
+						part.Blend = 0;
 				}
 				else part.Blend.a = 255;
 			}
@@ -1108,7 +1161,7 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part)
 				static const char *styles[] = {"copy", "translucent", "add", "subtract", "reversesubtract", "modulate", "copyalpha", NULL };
 				sc.MustGetString();
 				part.op = sc.MustMatchString(styles);
-				bComplex = (part.op != OP_COPY);
+				bComplex |= (part.op != OP_COPY);
 				bTranslucentPatches = bComplex;
 			}
 		}
@@ -1135,6 +1188,7 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 {
 	TArray<TexPart> parts;
 
+	bMultiPatch = true;
 	sc.SetCMode(true);
 	sc.MustGetString();
 	uppercopy(Name, sc.String);

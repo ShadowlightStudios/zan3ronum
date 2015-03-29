@@ -254,7 +254,7 @@ void CLIENTCOMMANDS_ClientMove( void )
 	if ( pCmd->ucmd.buttons )
 	{
 		ulBits |= CLIENT_UPDATE_BUTTONS;
-		if ( compatflags2 & COMPATF2_CLIENTS_SEND_FULL_BUTTON_INFO )
+		if ( zacompatflags & ZACOMPATF_CLIENTS_SEND_FULL_BUTTON_INFO )
 			ulBits |= CLIENT_UPDATE_BUTTONS_LONG;
 	}
 	if ( pCmd->ucmd.forwardmove )
@@ -596,11 +596,12 @@ void CLIENTCOMMANDS_FullUpdateReceived ( void )
 
 //*****************************************************************************
 // [Dusk]
-void CLIENTCOMMANDS_Linetarget( AActor* mobj )
+void CLIENTCOMMANDS_InfoCheat( AActor* mobj, bool extended )
 {
 	if ( mobj == NULL || mobj->lNetID == -1 )
 		return;
 
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_LINETARGET );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_INFOCHEAT );
 	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, mobj->lNetID );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, extended );
 }

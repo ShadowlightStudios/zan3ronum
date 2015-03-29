@@ -3,7 +3,7 @@
 ** Implements an archiver for DObject serialization.
 **
 **---------------------------------------------------------------------------
-** Copyright 1998-2006 Randy Heit
+** Copyright 1998-2009 Randy Heit
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -92,8 +92,10 @@ static inline DWORD SWAP_DWORD(DWORD x)		{ return _byteswap_ulong(x); }
 static inline QWORD SWAP_QWORD(QWORD x)		{ return _byteswap_uint64(x); }
 static inline void SWAP_DOUBLE(double &dst, double &src)
 {
-	union twiddle { QWORD q; double d; } *tdst = (twiddle *)&dst, *tsrc = (twiddle *)&src;
-	tdst->q = _byteswap_uint64(tsrc->q);
+	union twiddle { QWORD q; double d; } tdst, tsrc;
+	tsrc.d = src;
+	tdst.q = _byteswap_uint64(tsrc.q);
+	dst = tdst.d;
 }
 #else
 static inline WORD  SWAP_WORD(WORD x)		{ return (((x)<<8) | ((x)>>8)); }
@@ -108,17 +110,22 @@ static inline QWORD SWAP_QWORD(QWORD x)
 }
 static inline void SWAP_DOUBLE(double &dst, double &src)
 {
-	union twiddle { double f; DWORD d[2]; } *tdst = (twiddle *)&dst, *tsrc = (twiddle *)&src;
+	union twiddle { double f; DWORD d[2]; } tdst, tsrc;
 	DWORD t;
-	t = tsrc->d[0];
-	tdst->d[0] = SWAP_DWORD(tsrc->d[1]);
-	tdst->d[1] = SWAP_DWORD(t);
+
+	tsrc.f = src;
+	t = tsrc.d[0];
+	tdst.d[0] = SWAP_DWORD(tsrc.d[1]);
+	tdst.d[1] = SWAP_DWORD(t);
+	dst = tdst.f;
 }
 #endif
 static inline void SWAP_FLOAT(float &x)
 {
-	union twiddle { DWORD i; float f; } *t = (twiddle *)&x;
-	t->i = SWAP_DWORD(t->i);
+	union twiddle { DWORD i; float f; } t;
+	t.f = x;
+	t.i = SWAP_DWORD(t.i);
+	x = t.f;
 }
 #endif
 
@@ -1067,6 +1074,7 @@ FArchive &FArchive::WriteObject (DObject *obj)
 			WriteClass (type);
 //			Printf ("Make class %s (%u)\n", type->Name, m_File->Tell());
 			MapObject (obj);
+			obj->SerializeUserVars (*this);
 			obj->Serialize (*this);
 			obj->CheckIfSerialized ();
 		}
@@ -1098,6 +1106,7 @@ FArchive &FArchive::WriteObject (DObject *obj)
 				WriteCount (m_TypeMap[type->ClassIndex].toArchive);
 //				Printf ("Reuse class %s (%u)\n", type->Name, m_File->Tell());
 				MapObject (obj);
+				obj->SerializeUserVars (*this);
 				obj->Serialize (*this);
 				obj->CheckIfSerialized ();
 			}
@@ -1153,6 +1162,7 @@ FArchive &FArchive::ReadObject (DObject* &obj, PClass *wanttype)
 			// stored in the archive.
 			AActor *tempobj = static_cast<AActor *>(type->CreateNew ());
 			MapObject (obj != NULL ? obj : tempobj);
+			tempobj->SerializeUserVars (*this);
 			tempobj->Serialize (*this);
 			tempobj->CheckIfSerialized ();
 			// If this player is not present anymore, keep the new body
@@ -1180,6 +1190,7 @@ FArchive &FArchive::ReadObject (DObject* &obj, PClass *wanttype)
 //		Printf ("New class: %s (%u)\n", type->Name, m_File->Tell());
 		obj = type->CreateNew ();
 		MapObject (obj);
+		obj->SerializeUserVars (*this);
 		obj->Serialize (*this);
 		obj->CheckIfSerialized ();
 		break;
@@ -1194,6 +1205,7 @@ FArchive &FArchive::ReadObject (DObject* &obj, PClass *wanttype)
 
 			AActor *tempobj = static_cast<AActor *>(type->CreateNew ());
 			MapObject (obj != NULL ? obj : tempobj);
+			tempobj->SerializeUserVars (*this);
 			tempobj->Serialize (*this);
 			tempobj->CheckIfSerialized ();
 			if (obj != NULL)
@@ -1218,6 +1230,7 @@ FArchive &FArchive::ReadObject (DObject* &obj, PClass *wanttype)
 //		Printf ("Use class: %s (%u)\n", type->Name, m_File->Tell());
 		obj = type->CreateNew ();
 		MapObject (obj);
+		obj->SerializeUserVars (*this);
 		obj->Serialize (*this);
 		obj->CheckIfSerialized ();
 		break;
@@ -1278,11 +1291,11 @@ int FArchive::ReadSprite ()
 		Read (&name, 4);
 		hint = ReadCount ();
 
-		if (hint >= NumStdSprites || *(DWORD *)&sprites[hint].name != name)
+		if (hint >= NumStdSprites || sprites[hint].dwName != name)
 		{
 			for (hint = NumStdSprites; hint-- != 0; )
 			{
-				if (*(DWORD *)&sprites[hint].name == name)
+				if (sprites[hint].dwName == name)
 				{
 					break;
 				}
@@ -1382,7 +1395,7 @@ const PClass *FArchive::ReadClass ()
 	FName zaname(typeName.val, true);
 	if (zaname != NAME_None)
 	{
-		for (unsigned int i = 0; i < PClass::m_Types.Size(); i++)
+		for (unsigned int i = PClass::m_Types.Size(); i-- > 0; )
 		{
 			if (PClass::m_Types[i]->TypeName == zaname)
 			{

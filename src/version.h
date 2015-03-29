@@ -42,13 +42,13 @@
 
 #define GAME_MAJOR_VERSION 1
 #define GAME_MINOR_VERSION 2
-#define GAMEVER_STRING "1.4"
+#define GAMEVER_STRING "2.0"
 #define DOTVERSIONSTR GAMEVER_STRING "-alpha"
 #define DOTVERSIONSTR_NOREV DOTVERSIONSTR
 
-#define ZDVER_STRING "2.3.1"
-#define ZD_SVN_REVISION_STRING "1551"
-#define ZD_SVN_REVISION_NUMBER 1551
+#define ZDVER_STRING "2.5.0"
+#define ZD_SVN_REVISION_STRING "2560"
+#define ZD_SVN_REVISION_NUMBER 2560
 
 // [BB] The version string that includes revision / compatibility data.
 #define DOTVERSIONSTR_REV DOTVERSIONSTR "-r" SVN_REVISION_STRING
@@ -87,21 +87,24 @@
 // be able to migrate in FGameConfigFile::DoGlobalSetup().
 #define LASTRUNVERSION "210"
 
+// [TP] Same as above except for Zandronum-specific changes
+#define LASTZARUNVERSION "181"
+
 // Protocol version used in demos.
 // Bump it if you change existing DEM_ commands or add new ones.
 // Otherwise, it should be safe to leave it alone.
-#define DEMOGAMEVERSION 0x210
+#define DEMOGAMEVERSION 0x213
 
 // Minimum demo version we can play.
 // Bump it whenever you change or remove existing DEM_ commands.
-#define MINDEMOVERSION 0x210
+#define MINDEMOVERSION 0x213
 
 // SAVEVER is the version of the information stored in level snapshots.
 // Note that SAVEVER is not directly comparable to VERSION.
 // SAVESIG should match SAVEVER.
 
 // MINSAVEVER is the minimum level snapshot version that can be loaded.
-#define MINSAVEVER 1507
+#define MINSAVEVER 1848
 
 #if ZD_SVN_REVISION_NUMBER < MINSAVEVER
 // Never write a savegame with a version lower than what we need
@@ -129,6 +132,8 @@ static inline const char *MakeSaveSig()
 #define SAVESIG			"ZDOOMSAVE"ZD_SVN_REVISION_STRING
 #endif
 
+#define DYNLIGHT
+
 // This is so that derivates can use the same savegame versions without worrying about engine compatibility
 #define GAMESIG "ZANDRONUM"
 #define BASEWAD "zandronum.pk3"
@@ -144,6 +149,7 @@ static inline const char *MakeSaveSig()
 #define	SERVERCONSOLE_TITLESTRING	GAMENAME " v" DOTVERSIONSTR " Server"
 
 #ifdef unix
+#define HOME_DIR "~/." GAMENAMELOWERCASE
 #define GAME_DIR "." GAMENAMELOWERCASE
 #elif defined(__APPLE__)
 #define GAME_DIR GAMENAME

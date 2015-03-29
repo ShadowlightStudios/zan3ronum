@@ -131,6 +131,21 @@ FUNC(LS_Polyobj_MoveTimes8)
 	return EV_MovePoly (ln, arg0, SPEED(arg1), BYTEANGLE(arg2), arg3 * FRACUNIT * 8, false);
 }
 
+FUNC(LS_Polyobj_MoveTo)
+// Polyobj_MoveTo (po, speed, x, y)
+{
+	return EV_MovePolyTo (ln, arg0, SPEED(arg1), arg2 << FRACBITS, arg3 << FRACBITS, false);
+}
+
+FUNC(LS_Polyobj_MoveToSpot)
+// Polyobj_MoveToSpot (po, speed, tid)
+{
+	FActorIterator iterator (arg2);
+	AActor *spot = iterator.Next();
+	if (spot == NULL) return false;
+	return EV_MovePolyTo (ln, arg0, SPEED(arg1), spot->x, spot->y, false);
+}
+
 FUNC(LS_Polyobj_DoorSwing)
 // Polyobj_DoorSwing (po, speed, angle, delay)
 {
@@ -167,6 +182,27 @@ FUNC(LS_Polyobj_OR_MoveTimes8)
 	return EV_MovePoly (ln, arg0, SPEED(arg1), BYTEANGLE(arg2), arg3 * FRACUNIT * 8, true);
 }
 
+FUNC(LS_Polyobj_OR_MoveTo)
+// Polyobj_OR_MoveTo (po, speed, x, y)
+{
+	return EV_MovePolyTo (ln, arg0, SPEED(arg1), arg2 << FRACBITS, arg3 << FRACBITS, true);
+}
+
+FUNC(LS_Polyobj_OR_MoveToSpot)
+// Polyobj_OR_MoveToSpot (po, speed, tid)
+{
+	FActorIterator iterator (arg2);
+	AActor *spot = iterator.Next();
+	if (spot == NULL) return false;
+	return EV_MovePolyTo (ln, arg0, SPEED(arg1), spot->x, spot->y, true);
+}
+
+FUNC(LS_Polyobj_Stop)
+// Polyobj_Stop (po)
+{
+	return EV_StopPoly (arg0);
+}
+
 FUNC(LS_Door_Close)
 // Door_Close (tag, speed, lighttag)
 {
@@ -199,8 +235,11 @@ FUNC(LS_Door_CloseWaitOpen)
 }
 
 FUNC(LS_Door_Animated)
-// Door_Animated (tag, speed, delay)
+// Door_Animated (tag, speed, delay, lock)
 {
+	if (arg3 != 0 && !P_CheckKeys (it, arg3, arg0 != 0))
+		return false;
+
 	return EV_SlidingDoor (ln, it, arg0, arg1, arg2);
 }
 
@@ -351,13 +390,13 @@ FUNC(LS_Floor_LowerToLowestTxTy)
 FUNC(LS_Floor_Waggle)
 // Floor_Waggle (tag, amplitude, frequency, delay, time)
 {
-	return EV_StartWaggle (arg0, arg1, arg2, arg3, arg4, false);
+	return EV_StartWaggle (arg0, ln, arg1, arg2, arg3, arg4, false);
 }
 
 FUNC(LS_Ceiling_Waggle)
 // Ceiling_Waggle (tag, amplitude, frequency, delay, time)
 {
-	return EV_StartWaggle (arg0, arg1, arg2, arg3, arg4, true);
+	return EV_StartWaggle (arg0, ln, arg1, arg2, arg3, arg4, true);
 }
 
 FUNC(LS_Floor_TransferTrigger)
@@ -375,7 +414,7 @@ FUNC(LS_Floor_TransferNumeric)
 FUNC(LS_Floor_Donut)
 // Floor_Donut (pillartag, pillarspeed, slimespeed)
 {
-	return EV_DoDonut (arg0, SPEED(arg1), SPEED(arg2));
+	return EV_DoDonut (arg0, ln, SPEED(arg1), SPEED(arg2));
 }
 
 FUNC(LS_Generic_Floor)
@@ -708,9 +747,25 @@ FUNC(LS_Plat_UpNearestWaitDownStay)
 }
 
 FUNC(LS_Plat_RaiseAndStayTx0)
-// Plat_RaiseAndStayTx0 (tag, speed)
+// Plat_RaiseAndStayTx0 (tag, speed, lockout)
 {
-	return EV_DoPlat (arg0, ln, DPlat::platRaiseAndStay, 0, SPEED(arg1), 0, 0, 1);
+	DPlat::EPlatType type;
+
+	switch (arg3)
+	{
+		case 1:
+			type = DPlat::platRaiseAndStay;
+			break;
+		case 2:
+			type = DPlat::platRaiseAndStayLockout;
+			break;
+		default:
+			type = gameinfo.gametype == GAME_Heretic? DPlat::platRaiseAndStayLockout : DPlat::platRaiseAndStay;
+			break;
+	}
+
+
+	return EV_DoPlat (arg0, ln, type, 0, SPEED(arg1), 0, 0, 1);
 }
 
 FUNC(LS_Plat_UpByValueStayTx)
@@ -783,7 +838,7 @@ FUNC(LS_Teleport_NewMap)
 
 		if (info && CheckIfExitIsGood (it, info))
 		{
-			G_ChangeLevel(info->mapname, arg1, !!arg2);
+			G_ChangeLevel(info->mapname, arg1, arg2 ? CHANGELEVEL_KEEPFACING : 0);
 			return true;
 		}
 	}
@@ -890,12 +945,12 @@ static void ThrustThingHelper (AActor *it, angle_t angle, int force, INTBOOL nol
 		return;
 
 	angle >>= ANGLETOFINESHIFT;
-	it->momx += force * finecosine[angle];
-	it->momy += force * finesine[angle];
+	it->velx += force * finecosine[angle];
+	it->vely += force * finesine[angle];
 	if (!nolimit)
 	{
-		it->momx = clamp<fixed_t> (it->momx, -MAXMOVE, MAXMOVE);
-		it->momy = clamp<fixed_t> (it->momy, -MAXMOVE, MAXMOVE);
+		it->velx = clamp<fixed_t> (it->velx, -MAXMOVE, MAXMOVE);
+		it->vely = clamp<fixed_t> (it->vely, -MAXMOVE, MAXMOVE);
 	}
 
 	// [BC] If we're the server, update the thing's momentum.
@@ -923,9 +978,9 @@ FUNC(LS_ThrustThingZ)	// [BC]
 			if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
 			{
 				if (!arg3)
-					victim->momz = thrust;
+					victim->velz = thrust;
 				else
-					victim->momz += thrust;
+					victim->velz += thrust;
 			}
 
 			// [BC] If we're the server, update the thing's momentum.
@@ -942,9 +997,9 @@ FUNC(LS_ThrustThingZ)	// [BC]
 		if ( ( NETWORK_IsConsolePlayerOrNotInClientMode ( it->player ) ) || ( it->ulNetworkFlags & NETFL_CLIENTSIDEONLY ) )
 		{
 			if (!arg3)
-				it->momz = thrust;
+				it->velz = thrust;
 			else
-				it->momz += thrust;
+				it->velz += thrust;
 		}
 
 		// [BC] If we're the server, update the thing's momentum.
@@ -1043,8 +1098,8 @@ FUNC(LS_DamageThing)
 			else
 			{
 				it->health -= arg0;
-				if (it->GetDefault()->health < it->health)
-					it->health = it->GetDefault()->health;
+				if (it->SpawnHealth() < it->health)
+					it->health = it->SpawnHealth();
 			}
 		}
 		else if (arg0 > 0)
@@ -1053,7 +1108,7 @@ FUNC(LS_DamageThing)
 		}
 		else
 		{ // If zero damage, guarantee a kill
-			P_DamageMobj (it, NULL, NULL, 1000000, MODtoDamageType (arg1));
+			P_DamageMobj (it, NULL, NULL, TELEFRAG_DAMAGE, MODtoDamageType (arg1));
 		}
 	}
 
@@ -1114,6 +1169,30 @@ FUNC(LS_HealThing)
 	return it ? true : false;
 }
 
+// So that things activated/deactivated by ACS or DECORATE *and* by 
+// the BUMPSPECIAL or USESPECIAL flags work correctly both ways.
+void DoActivateThing(AActor * thing, AActor * activator)
+{
+	if (thing->activationtype & THINGSPEC_Activate)
+	{
+		thing->activationtype &= ~THINGSPEC_Activate; // Clear flag
+		if (thing->activationtype & THINGSPEC_Switch) // Set other flag if switching
+			thing->activationtype |= THINGSPEC_Deactivate;
+	}
+	thing->Activate (activator);
+}
+
+void DoDeactivateThing(AActor * thing, AActor * activator)
+{
+	if (thing->activationtype & THINGSPEC_Deactivate)
+	{
+		thing->activationtype &= ~THINGSPEC_Deactivate; // Clear flag
+		if (thing->activationtype & THINGSPEC_Switch) // Set other flag if switching
+			thing->activationtype |= THINGSPEC_Activate;
+	}
+	thing->Deactivate (activator);
+}
+
 FUNC(LS_Thing_Activate)
 // Thing_Activate (tid)
 {
@@ -1134,7 +1213,7 @@ FUNC(LS_Thing_Activate)
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				SERVERCOMMANDS_ThingActivate( actor, it );
 
-			actor->Activate (it);
+			DoActivateThing(actor, it);
 			actor = temp;
 			count++;
 		}
@@ -1147,7 +1226,7 @@ FUNC(LS_Thing_Activate)
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_ThingActivate( it, it );
 
-		it->Activate(it);
+		DoActivateThing(it, it);
 		return true;
 	}
 	return false;
@@ -1173,7 +1252,7 @@ FUNC(LS_Thing_Deactivate)
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				SERVERCOMMANDS_ThingDeactivate( actor, it );
 
-			actor->Deactivate (it);
+			DoDeactivateThing(actor, it);
 			actor = temp;
 			count++;
 		}
@@ -1186,7 +1265,7 @@ FUNC(LS_Thing_Deactivate)
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_ThingDeactivate( it, it );
 
-		it->Deactivate(it);
+		DoDeactivateThing(it, it);
 		return true;
 	}
 	return false;
@@ -1234,7 +1313,7 @@ FUNC(LS_Thing_Destroy)
 		{
 			AActor *temp = iterator.Next ();
 			if (actor->flags & MF_SHOOTABLE)
-				P_DamageMobj (actor, NULL, it, arg1 ? 1000000 : actor->health, NAME_None);
+				P_DamageMobj (actor, NULL, it, arg1 ? TELEFRAG_DAMAGE : actor->health, NAME_None);
 			actor = temp;
 		}
 	}
@@ -1463,84 +1542,6 @@ FUNC(LS_Thing_SpawnFacing)
 	return P_Thing_Spawn (arg0, it, arg1, ANGLE_MAX, arg2 ? false : true, arg3);
 }
 
-// [BC] No longer static so clients can call this function.
-// [BB] Added bIgnorePositionCheck: If the server instructs the client to raise
-// a thing with SERVERCOMMANDS_SetThingState, the client has to ignore the
-// P_CheckPosition check. For example this is relevant if an Archvile raised
-// the thing.
-/*static*/ bool DoThingRaise(AActor *thing, bool bIgnorePositionCheck = false)
-{
-	if (thing == NULL)
-		return false;	// not valid
-
-	if (!(thing->flags & MF_CORPSE) )
-		return true;	// not a corpse
-	
-	if (thing->tics != -1)
-		return true;	// not lying still yet
-	
-	FState * RaiseState = thing->FindState(NAME_Raise);
-	if (RaiseState == NULL)
-		return true;	// monster doesn't have a raise state
-	
-	AActor *info = thing->GetDefault ();
-
-	thing->momx = thing->momy = 0;
-
-	// [RH] Check against real height and radius
-	fixed_t oldheight = thing->height;
-	fixed_t oldradius = thing->radius;
-	int oldflags = thing->flags;
-
-	thing->flags |= MF_SOLID;
-	thing->height = info->height;	// [RH] Use real height
-	thing->radius = info->radius;	// [RH] Use real radius
-	if (!P_CheckPosition (thing, thing->x, thing->y) && !bIgnorePositionCheck)
-	{
-		thing->flags = oldflags;
-		thing->radius = oldradius;
-		thing->height = oldheight;
-		return false;
-	}
-
-	S_Sound (thing, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
-	
-	// [BC] If we're the server, tell clients to put the thing into its raise state.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SetThingState( thing, STATE_RAISE );
-
-	thing->SetState (RaiseState);
-	thing->flags = info->flags;
-	thing->flags2 = info->flags2;
-	thing->flags3 = info->flags3;
-	thing->flags4 = info->flags4;
-	// [BC] Apply new ST flags as well.
-	thing->flags5 = info->flags5;
-	thing->ulSTFlags = info->ulSTFlags;
-	thing->ulNetworkFlags = info->ulNetworkFlags;
-	thing->health = info->health;
-	thing->target = NULL;
-	thing->lastenemy = NULL;
-
-	// [RH] If it's a monster, it gets to count as another kill
-	if (thing->CountsAsKill())
-	{
-		level.total_monsters++;
-
-		// [BC] Update invasion's HUD.
-		if (( invasion ) && ( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
-		{
-			INVASION_SetNumMonstersLeft( INVASION_GetNumMonstersLeft( ) + 1 );
-
-			// [BC] If we're the server, tell the client how many monsters are left.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetInvasionNumMonstersLeft( );
-		}
-	}
-
-	return true;
-}
-
 FUNC(LS_Thing_Raise)
 // Thing_Raise(tid)
 {
@@ -1549,7 +1550,7 @@ FUNC(LS_Thing_Raise)
 
 	if (arg0==0)
 	{
-		ok = DoThingRaise (it);
+		ok = P_Thing_Raise (it);
 	}
 	else
 	{
@@ -1557,7 +1558,7 @@ FUNC(LS_Thing_Raise)
 
 		while ( (target = iterator.Next ()) )
 		{
-			ok |= DoThingRaise(target);
+			ok |= P_Thing_Raise(target);
 		}
 	}
 	return ok;
@@ -1573,8 +1574,8 @@ FUNC(LS_Thing_Stop)
 	{
 		if (it != NULL)
 		{
-			it->momx = it->momy = it->momz = 0;
-			if (it->player != NULL) it->player->momx = it->player->momy = 0;
+			it->velx = it->vely = it->velz = 0;
+			if (it->player != NULL) it->player->velx = it->player->vely = 0;
 
 			// [Dusk] tell the clients about this
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1589,8 +1590,8 @@ FUNC(LS_Thing_Stop)
 
 		while ( (target = iterator.Next ()) )
 		{
-			target->momx = target->momy = target->momz = 0;
-			if (target->player != NULL) target->player->momx = target->player->momy = 0;
+			target->velx = target->vely = target->velz = 0;
+			if (target->player != NULL) target->player->velx = target->player->vely = 0;
 
 			// [Dusk] tell the clients about this
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1920,7 +1921,7 @@ FUNC(LS_Light_Stop)
 FUNC(LS_Radius_Quake)
 // Radius_Quake (intensity, duration, damrad, tremrad, tid)
 {
-	return P_StartQuake (it, arg4, arg0, arg1, arg2, arg3);
+	return P_StartQuake (it, arg4, arg0, arg1, arg2*64, arg3*64, "world/quake");
 }
 
 FUNC(LS_UsePuzzleItem)
@@ -2197,8 +2198,8 @@ FUNC(LS_Sector_SetLink)
 		{
 			int wallnum = scroller->GetWallNum ();
 
-			if (wallnum >= 0 && lines[sides[wallnum].linenum].id == id &&
-				lines[sides[wallnum].linenum].sidenum[sidechoice] == (DWORD)wallnum &&
+			if (wallnum >= 0 && sides[wallnum].linedef->id == id &&
+				int(sides[wallnum].linedef->sidedef[sidechoice] - sides) == wallnum &&
 				Where == scroller->GetScrollParts())
 			{
 				scroller->Destroy ();
@@ -2216,8 +2217,8 @@ FUNC(LS_Sector_SetLink)
 			while ( (collect.Obj = iterator.Next ()) )
 			{
 				if ((collect.RefNum = ((DScroller *)collect.Obj)->GetWallNum ()) != -1 &&
-					lines[sides[collect.RefNum].linenum].id == id &&
-					lines[sides[collect.RefNum].linenum].sidenum[sidechoice] == (DWORD)collect.RefNum &&
+					sides[collect.RefNum].linedef->id == id &&
+					int(sides[collect.RefNum].linedef->sidedef[sidechoice] - sides) == collect.RefNum &&
 					Where == ((DScroller *)collect.Obj)->GetScrollParts())
 				{
 					((DScroller *)collect.Obj)->SetRate (dx, dy);
@@ -2232,17 +2233,18 @@ FUNC(LS_Sector_SetLink)
 		// Now create scrollers for any walls that don't already have them.
 		while ((linenum = P_FindLineFromID (id, linenum)) >= 0)
 		{
-			unsigned int i;
-			for (i = 0; i < numcollected; i++)
+			if (lines[linenum].sidedef[sidechoice] != NULL)
 			{
-				if ((DWORD)Collection[i].RefNum == lines[linenum].sidenum[sidechoice])
-					break;
-			}
-			if (i == numcollected)
-			{
-				if (lines[linenum].sidenum[sidechoice] != NO_SIDE)
+				int sidenum = int(lines[linenum].sidedef[sidechoice] - sides);
+				unsigned int i;
+				for (i = 0; i < numcollected; i++)
 				{
-					new DScroller (DScroller::sc_side, dx, dy, -1, lines[linenum].sidenum[sidechoice], 0, Where);
+					if (Collection[i].RefNum == sidenum)
+						break;
+				}
+				if (i == numcollected)
+				{
+					new DScroller (DScroller::sc_side, dx, dy, -1, sidenum, 0, Where);
 				}
 			}
 		}
@@ -2640,9 +2642,9 @@ FUNC(LS_Line_SetTextureOffset)
 
 	for(int line = -1; (line = P_FindLineFromID (arg0, line)) >= 0; )
 	{
-		if (lines[line].sidenum[arg3] != NO_SIDE)
+		side_t *side = lines[line].sidedef[arg3];
+		if (side != NULL)
 		{
-			side_t *side = &sides[lines[line].sidenum[arg3]];
 
 			if ((arg4&8)==0)
 			{
@@ -2674,6 +2676,56 @@ FUNC(LS_Line_SetTextureOffset)
 					if (arg4&1) side->AddTextureYOffset(side_t::top, arg2);
 					if (arg4&2) side->AddTextureYOffset(side_t::mid, arg2);
 					if (arg4&4) side->AddTextureYOffset(side_t::bottom, arg2);
+				}
+			}
+		}
+	}
+	return true;
+}
+
+FUNC(LS_Line_SetTextureScale)
+// Line_SetTextureScale (id, x, y, side, flags)
+{
+	const fixed_t NO_CHANGE = 32767<<FRACBITS;
+
+	if (arg0 == 0 || arg3 < 0 || arg3 > 1)
+		return false;
+
+	for(int line = -1; (line = P_FindLineFromID (arg0, line)) >= 0; )
+	{
+		side_t *side = lines[line].sidedef[arg3];
+		if (side != NULL)
+		{
+			if ((arg4&8)==0)
+			{
+				// set
+				if (arg1 != NO_CHANGE)
+				{
+					if (arg4&1) side->SetTextureXScale(side_t::top, arg1);
+					if (arg4&2) side->SetTextureXScale(side_t::mid, arg1);
+					if (arg4&4) side->SetTextureXScale(side_t::bottom, arg1);
+				}
+				if (arg2 != NO_CHANGE)
+				{
+					if (arg4&1) side->SetTextureYScale(side_t::top, arg2);
+					if (arg4&2) side->SetTextureYScale(side_t::mid, arg2);
+					if (arg4&4) side->SetTextureYScale(side_t::bottom, arg2);
+				}
+			}
+			else
+			{
+				// add
+				if (arg1 != NO_CHANGE)
+				{
+					if (arg4&1) side->MultiplyTextureXScale(side_t::top, arg1);
+					if (arg4&2) side->MultiplyTextureXScale(side_t::mid, arg1);
+					if (arg4&4) side->MultiplyTextureXScale(side_t::bottom, arg1);
+				}
+				if (arg2 != NO_CHANGE)
+				{
+					if (arg4&1) side->MultiplyTextureYScale(side_t::top, arg2);
+					if (arg4&2) side->MultiplyTextureYScale(side_t::mid, arg2);
+					if (arg4&4) side->MultiplyTextureYScale(side_t::bottom, arg2);
 				}
 			}
 		}
@@ -2820,6 +2872,7 @@ enum
 	PROP_UNUSED1,
 	PROP_UNUSED2,
 	PROP_SPEED,
+	PROP_BUDDHA,
 };
 
 FUNC(LS_SetPlayerProperty)
@@ -2869,7 +2922,10 @@ FUNC(LS_SetPlayerProperty)
 				if (power != 4)
 				{
 					APowerup *item = static_cast<APowerup*>(it->GiveInventoryType (powers[power]));
-					if (item != NULL && power == 0) item->BlendColor = INVERSECOLOR;
+					if (item != NULL && power == 0 && arg1 == 1) 
+					{
+						item->BlendColor = MakeSpecialColormap(INVERSECOLORMAP);
+					}
 
 					// [WS] Inform clients of the powerup and blend color.
 					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -2919,8 +2975,11 @@ FUNC(LS_SetPlayerProperty)
 				{ // Give power
 					if (power != 4)
 					{
-						// [WS] Changes to ZDoom code here. We need the item.
-						AActor *item = players[i].mo->GiveInventoryType (powers[power]);
+						APowerup *item = static_cast<APowerup*>(players[i].mo->GiveInventoryType (powers[power]));
+						if (item != NULL && power == 0 && arg1 == 1) 
+						{
+							item->BlendColor = MakeSpecialColormap(INVERSECOLORMAP);
+						}
 
 						// [WS] Inform clients of powerup.
 						if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -2958,6 +3017,9 @@ FUNC(LS_SetPlayerProperty)
 	// Set or clear a flag
 	switch (arg2)
 	{
+	case PROP_BUDDHA:
+		mask = CF_BUDDHA;
+		break;
 	case PROP_FROZEN:
 		mask = CF_FROZEN;
 		break;
@@ -3219,8 +3281,8 @@ FUNC(LS_ClearForceField)
 			{
 				line->flags &= ~(ML_BLOCKING|ML_BLOCKEVERYTHING);
 				line->special = 0;
-				sides[line->sidenum[0]].SetTexture(side_t::mid, FNullTextureID());
-				sides[line->sidenum[1]].SetTexture(side_t::mid, FNullTextureID());
+				line->sidedef[0]->SetTexture(side_t::mid, FNullTextureID());
+				line->sidedef[1]->SetTexture(side_t::mid, FNullTextureID());
 
 				// [BC] Mark this line's texture change flags.
 				line->ulTexChangeFlags |= TEXCHANGE_FRONTMEDIUM|TEXCHANGE_BACKMEDIUM;
@@ -3250,11 +3312,11 @@ FUNC(LS_GlassBreak)
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_SetSomeLineFlags( ULONG( ln - lines ));
 
-	switched = P_ChangeSwitchTexture (&sides[ln->sidenum[0]], false, 0, &quest1);
+	switched = P_ChangeSwitchTexture (ln->sidedef[0], false, 0, &quest1);
 	ln->special = 0;
-	if (ln->sidenum[1] != NO_SIDE)
+	if (ln->sidedef[1] != NULL)
 	{
-		switched |= P_ChangeSwitchTexture (&sides[ln->sidenum[1]], false, 0, &quest2);
+		switched |= P_ChangeSwitchTexture (ln->sidedef[1], false, 0, &quest2);
 	}
 	else
 	{
@@ -3284,9 +3346,9 @@ FUNC(LS_GlassBreak)
 				glass->angle = an;
 				an >>= ANGLETOFINESHIFT;
 				speed = pr_glass() & 3;
-				glass->momx = finecosine[an] * speed;
-				glass->momy = finesine[an] * speed;
-				glass->momz = (pr_glass() & 7) << FRACBITS;
+				glass->velx = finecosine[an] * speed;
+				glass->vely = finesine[an] * speed;
+				glass->velz = (pr_glass() & 7) << FRACBITS;
 				// [RH] Let the shards stick around longer than they did in Strife.
 				glass->tics += pr_glass();
 			}
@@ -3380,276 +3442,287 @@ FUNC(LS_Sector_SetPlaneReflection)
 
 lnSpecFunc LineSpecials[256] =
 {
-	LS_NOP,
-	LS_NOP,		// Polyobj_StartLine,
-	LS_Polyobj_RotateLeft,
-	LS_Polyobj_RotateRight,
-	LS_Polyobj_Move,
-	LS_NOP,		// Polyobj_ExplicitLine
-	LS_Polyobj_MoveTimes8,
-	LS_Polyobj_DoorSwing,
-	LS_Polyobj_DoorSlide,
-	LS_NOP,		// Line_Horizon
-	LS_Door_Close,
-	LS_Door_Open,
-	LS_Door_Raise,
-	LS_Door_LockedRaise,
-	LS_Door_Animated,
-	LS_Autosave,
-	LS_NOP,		// Transfer_WallLight
-	LS_Thing_Raise,
-	LS_StartConversation,
-	LS_Thing_Stop,
-	LS_Floor_LowerByValue,
-	LS_Floor_LowerToLowest,
-	LS_Floor_LowerToNearest,
-	LS_Floor_RaiseByValue,
-	LS_Floor_RaiseToHighest,
-	LS_Floor_RaiseToNearest,
-	LS_Stairs_BuildDown,
-	LS_Stairs_BuildUp,
-	LS_Floor_RaiseAndCrush,
-	LS_Pillar_Build,
-	LS_Pillar_Open,
-	LS_Stairs_BuildDownSync,
-	LS_Stairs_BuildUpSync,
-	LS_ForceField,
-	LS_ClearForceField,
-	LS_Floor_RaiseByValueTimes8,
-	LS_Floor_LowerByValueTimes8,
-	LS_Floor_MoveToValue,
-	LS_Ceiling_Waggle,
-	LS_Teleport_ZombieChanger,
-	LS_Ceiling_LowerByValue,
-	LS_Ceiling_RaiseByValue,
-	LS_Ceiling_CrushAndRaise,
-	LS_Ceiling_LowerAndCrush,
-	LS_Ceiling_CrushStop,
-	LS_Ceiling_CrushRaiseAndStay,
-	LS_Floor_CrushStop,
-	LS_Ceiling_MoveToValue,
-	LS_NOP,		// Sector_Attach3dMidtex
-	LS_GlassBreak,
-	LS_NOP,		// 50: ExtraFloor_LightOnly
-	LS_Sector_SetLink,
-	LS_Scroll_Wall,
-	LS_Line_SetTextureOffset,
-	LS_Sector_ChangeFlags,
-	LS_Line_SetBlocking,
-	LS_NOP,		// 56
-	LS_NOP,		// 57
-	LS_NOP,		// 58
-	LS_NOP,		// 59
-	LS_Plat_PerpetualRaise,
-	LS_Plat_Stop,
-	LS_Plat_DownWaitUpStay,
-	LS_Plat_DownByValue,
-	LS_Plat_UpWaitDownStay,
-	LS_Plat_UpByValue,
-	LS_Floor_LowerInstant,
-	LS_Floor_RaiseInstant,
-	LS_Floor_MoveToValueTimes8,
-	LS_Ceiling_MoveToValueTimes8,
-	LS_Teleport,
-	LS_Teleport_NoFog,
-	LS_ThrustThing,
-	LS_DamageThing,
-	LS_Teleport_NewMap,
-	LS_Teleport_EndGame,
-	LS_TeleportOther,
-	LS_TeleportGroup,
-	LS_TeleportInSector,
-	LS_NOP,		// 79
-	LS_ACS_Execute,
-	LS_ACS_Suspend,
-	LS_ACS_Terminate,
-	LS_ACS_LockedExecute,
-	LS_ACS_ExecuteWithResult,
-	LS_ACS_LockedExecuteDoor,
-	LS_NOP,		// 86
-	LS_NOP,		// 87
-	LS_NOP,		// 88
-	LS_NOP,		// 89
-	LS_Polyobj_OR_RotateLeft,
-	LS_Polyobj_OR_RotateRight,
-	LS_Polyobj_OR_Move,
-	LS_Polyobj_OR_MoveTimes8,
-	LS_Pillar_BuildAndCrush,
-	LS_FloorAndCeiling_LowerByValue,
-	LS_FloorAndCeiling_RaiseByValue,
-	LS_NOP,		// 97
-	LS_NOP,		// 98
-	LS_NOP,		// 99
-	LS_NOP,		// Scroll_Texture_Left
-	LS_NOP,		// Scroll_Texture_Right
-	LS_NOP,		// Scroll_Texture_Up
-	LS_NOP,		// Scroll_Texture_Down
-	LS_NOP,		// 104
-	LS_NOP,		// 105
-	LS_NOP,		// 106
-	LS_NOP,		// 107
-	LS_NOP,		// 108
-	LS_Light_ForceLightning,
-	LS_Light_RaiseByValue,
-	LS_Light_LowerByValue,
-	LS_Light_ChangeToValue,
-	LS_Light_Fade,
-	LS_Light_Glow,
-	LS_Light_Flicker,
-	LS_Light_Strobe,
-	LS_Light_Stop,
-	LS_NOP,		// 118
-	LS_Thing_Damage,
-	LS_Radius_Quake,
-	LS_NOP,		// Line_SetIdentification
-	LS_NOP,		// Thing_SetGravity			// [BC] Start
-	LS_NOP,		// Thing_ReverseGravity
-	LS_NOP,		// Thing_RevertGravity
-	LS_Thing_Move,
-	LS_NOP,		// LS_Thing_SetFrame
-	LS_Thing_SetSpecial,
-	LS_ThrustThingZ,						// [BC] End
-	LS_UsePuzzleItem,
-	LS_Thing_Activate,
-	LS_Thing_Deactivate,
-	LS_Thing_Remove,
-	LS_Thing_Destroy,
-	LS_Thing_Projectile,
-	LS_Thing_Spawn,
-	LS_Thing_ProjectileGravity,
-	LS_Thing_SpawnNoFog,
-	LS_Floor_Waggle,
-	LS_Thing_SpawnFacing,
-	LS_Sector_ChangeSound,
-	LS_NOP,		// 141 Music_Pause			// [BC] Start
-	LS_NOP,		// 142 Music_Change
-	LS_NOP,		// 143 Player_RemoveItem,
-	LS_NOP,		// 144 Player_GiveItem,
-	LS_Player_SetTeam,
-	LS_NOP,		// 146 Player_SetLeader
-	LS_NOP,		// 147 Team_InitFP
-	LS_NOP,		// 148 TeleportAll
-	LS_NOP,		// 149 TeleportAll_NoFog
-	LS_NOP,		// 150 Team_GiveFP
-	LS_NOP,		// 151 Team_UseFP
-	LS_Team_Score,
-	LS_Team_GivePoints,
-	LS_Teleport_NoStop,
-	LS_NOP,		// 155 Team_RemoveItem
-	LS_NOP,		// 156 Team_GiveItem		// [BC] End
-	LS_NOP,		// 157
-	LS_NOP,		// 158
-	LS_Sector_SetPlaneReflection,
-	LS_NOP,		// 160
-	LS_NOP,		// 161
-	LS_NOP,		// 162
-	LS_NOP,		// 163
-	LS_NOP,		// 164
-	LS_NOP,		// 165
-	LS_NOP,		// 166
-	LS_NOP,		// 167
-	LS_NOP,		// 168
-	LS_Generic_Crusher2,
-	LS_Sector_SetCeilingScale2,
-	LS_Sector_SetFloorScale2,
-	LS_Plat_UpNearestWaitDownStay,
-	LS_NoiseAlert,
-	LS_SendToCommunicator,
-	LS_Thing_ProjectileIntercept,
-	LS_Thing_ChangeTID,
-	LS_Thing_Hate,
-	LS_Thing_ProjectileAimed,
-	LS_ChangeSkill,
-	LS_Thing_SetTranslation,
-	LS_NOP,		// Plane_Align
-	LS_NOP,		// Line_Mirror
-	LS_Line_AlignCeiling,
-	LS_Line_AlignFloor,
-	LS_Sector_SetRotation,
-	LS_Sector_SetCeilingPanning,
-	LS_Sector_SetFloorPanning,
-	LS_Sector_SetCeilingScale,
-	LS_Sector_SetFloorScale,
-	LS_NOP,		// Static_Init
-	LS_SetPlayerProperty,
-	LS_Ceiling_LowerToHighestFloor,
-	LS_Ceiling_LowerInstant,
-	LS_Ceiling_RaiseInstant,
-	LS_Ceiling_CrushRaiseAndStayA,
-	LS_Ceiling_CrushAndRaiseA,
-	LS_Ceiling_CrushAndRaiseSilentA,
-	LS_Ceiling_RaiseByValueTimes8,
-	LS_Ceiling_LowerByValueTimes8,
-	LS_Generic_Floor,
-	LS_Generic_Ceiling,
-	LS_Generic_Door,
-	LS_Generic_Lift,
-	LS_Generic_Stairs,
-	LS_Generic_Crusher,
-	LS_Plat_DownWaitUpStayLip,
-	LS_Plat_PerpetualRaiseLip,
-	LS_TranslucentLine,
-	LS_NOP,		// Transfer_Heights
-	LS_NOP,		// Transfer_FloorLight
-	LS_NOP,		// Transfer_CeilingLight
-	LS_Sector_SetColor,
-	LS_Sector_SetFade,
-	LS_Sector_SetDamage,
-	LS_Teleport_Line,
-	LS_Sector_SetGravity,
-	LS_Stairs_BuildUpDoom,
-	LS_Sector_SetWind,
-	LS_Sector_SetFriction,
-	LS_Sector_SetCurrent,
-	LS_Scroll_Texture_Both,
-	LS_NOP,		// Scroll_Texture_Model
-	LS_Scroll_Floor,
-	LS_Scroll_Ceiling,
-	LS_NOP,		// Scroll_Texture_Offsets
-	LS_ACS_ExecuteAlways,
-	LS_PointPush_SetForce,
-	LS_Plat_RaiseAndStayTx0,
-	LS_Thing_SetGoal,
-	LS_Plat_UpByValueStayTx,
-	LS_Plat_ToggleCeiling,
-	LS_Light_StrobeDoom,
-	LS_Light_MinNeighbor,
-	LS_Light_MaxNeighbor,
-	LS_Floor_TransferTrigger,
-	LS_Floor_TransferNumeric,
-	LS_ChangeCamera,
-	LS_Floor_RaiseToLowestCeiling,
-	LS_Floor_RaiseByValueTxTy,
-	LS_Floor_RaiseByTexture,
-	LS_Floor_LowerToLowestTxTy,
-	LS_Floor_LowerToHighest,
-	LS_Exit_Normal,
-	LS_Exit_Secret,
-	LS_Elevator_RaiseToNearest,
-	LS_Elevator_MoveToFloor,
-	LS_Elevator_LowerToNearest,
-	LS_HealThing,
-	LS_Door_CloseWaitOpen,
-	LS_Floor_Donut,
-	LS_FloorAndCeiling_LowerRaise,
-	LS_Ceiling_RaiseToNearest,
-	LS_Ceiling_LowerToLowest,
-	LS_Ceiling_LowerToFloor,
-	LS_Ceiling_CrushRaiseAndStaySilA
+	/*   0 */ LS_NOP,
+	/*   1 */ LS_NOP,		// Polyobj_StartLine,
+	/*   2 */ LS_Polyobj_RotateLeft,
+	/*   3 */ LS_Polyobj_RotateRight,
+	/*   4 */ LS_Polyobj_Move,
+	/*   5 */ LS_NOP,		// Polyobj_ExplicitLine
+	/*   6 */ LS_Polyobj_MoveTimes8,
+	/*   7 */ LS_Polyobj_DoorSwing,
+	/*   8 */ LS_Polyobj_DoorSlide,
+	/*   9 */ LS_NOP,		// Line_Horizon
+	/*  10 */ LS_Door_Close,
+	/*  11 */ LS_Door_Open,
+	/*  12 */ LS_Door_Raise,
+	/*  13 */ LS_Door_LockedRaise,
+	/*  14 */ LS_Door_Animated,
+	/*  15 */ LS_Autosave,
+	/*  16 */ LS_NOP,		// Transfer_WallLight
+	/*  17 */ LS_Thing_Raise,
+	/*  18 */ LS_StartConversation,
+	/*  19 */ LS_Thing_Stop,
+	/*  20 */ LS_Floor_LowerByValue,
+	/*  21 */ LS_Floor_LowerToLowest,
+	/*  22 */ LS_Floor_LowerToNearest,
+	/*  23 */ LS_Floor_RaiseByValue,
+	/*  24 */ LS_Floor_RaiseToHighest,
+	/*  25 */ LS_Floor_RaiseToNearest,
+	/*  26 */ LS_Stairs_BuildDown,
+	/*  27 */ LS_Stairs_BuildUp,
+	/*  28 */ LS_Floor_RaiseAndCrush,
+	/*  29 */ LS_Pillar_Build,
+	/*  30 */ LS_Pillar_Open,
+	/*  31 */ LS_Stairs_BuildDownSync,
+	/*  32 */ LS_Stairs_BuildUpSync,
+	/*  33 */ LS_ForceField,
+	/*  34 */ LS_ClearForceField,
+	/*  35 */ LS_Floor_RaiseByValueTimes8,
+	/*  36 */ LS_Floor_LowerByValueTimes8,
+	/*  37 */ LS_Floor_MoveToValue,
+	/*  38 */ LS_Ceiling_Waggle,
+	/*  39 */ LS_Teleport_ZombieChanger,
+	/*  40 */ LS_Ceiling_LowerByValue,
+	/*  41 */ LS_Ceiling_RaiseByValue,
+	/*  42 */ LS_Ceiling_CrushAndRaise,
+	/*  43 */ LS_Ceiling_LowerAndCrush,
+	/*  44 */ LS_Ceiling_CrushStop,
+	/*  45 */ LS_Ceiling_CrushRaiseAndStay,
+	/*  46 */ LS_Floor_CrushStop,
+	/*  47 */ LS_Ceiling_MoveToValue,
+	/*  48 */ LS_NOP,		// Sector_Attach3dMidtex
+	/*  49 */ LS_GlassBreak,
+	/*  50 */ LS_NOP,		// ExtraFloor_LightOnly
+	/*  51 */ LS_Sector_SetLink,
+	/*  52 */ LS_Scroll_Wall,
+	/*  53 */ LS_Line_SetTextureOffset,
+	/*  54 */ LS_Sector_ChangeFlags,
+	/*  55 */ LS_Line_SetBlocking,
+	/*  56 */ LS_Line_SetTextureScale,
+	/*  57 */ LS_NOP,		// Sector_SetPortal
+	/*  58 */ LS_NOP,		// Sector_CopyScroller
+	/*  59 */ LS_Polyobj_OR_MoveToSpot,
+	/*  60 */ LS_Plat_PerpetualRaise,
+	/*  61 */ LS_Plat_Stop,
+	/*  62 */ LS_Plat_DownWaitUpStay,
+	/*  63 */ LS_Plat_DownByValue,
+	/*  64 */ LS_Plat_UpWaitDownStay,
+	/*  65 */ LS_Plat_UpByValue,
+	/*  66 */ LS_Floor_LowerInstant,
+	/*  67 */ LS_Floor_RaiseInstant,
+	/*  68 */ LS_Floor_MoveToValueTimes8,
+	/*  69 */ LS_Ceiling_MoveToValueTimes8,
+	/*  70 */ LS_Teleport,
+	/*  71 */ LS_Teleport_NoFog,
+	/*  72 */ LS_ThrustThing,
+	/*  73 */ LS_DamageThing,
+	/*  74 */ LS_Teleport_NewMap,
+	/*  75 */ LS_Teleport_EndGame,
+	/*  76 */ LS_TeleportOther,
+	/*  77 */ LS_TeleportGroup,
+	/*  78 */ LS_TeleportInSector,
+	/*  79 */ LS_NOP,
+	/*  80 */ LS_ACS_Execute,
+	/*  81 */ LS_ACS_Suspend,
+	/*  82 */ LS_ACS_Terminate,
+	/*  83 */ LS_ACS_LockedExecute,
+	/*  84 */ LS_ACS_ExecuteWithResult,
+	/*  85 */ LS_ACS_LockedExecuteDoor,
+	/*  86 */ LS_Polyobj_MoveToSpot,
+	/*  87 */ LS_Polyobj_Stop,
+	/*  88 */ LS_Polyobj_MoveTo,
+	/*  89 */ LS_Polyobj_OR_MoveTo,
+	/*  90 */ LS_Polyobj_OR_RotateLeft,
+	/*  91 */ LS_Polyobj_OR_RotateRight,
+	/*  92 */ LS_Polyobj_OR_Move,
+	/*  93 */ LS_Polyobj_OR_MoveTimes8,
+	/*  94 */ LS_Pillar_BuildAndCrush,
+	/*  95 */ LS_FloorAndCeiling_LowerByValue,
+	/*  96 */ LS_FloorAndCeiling_RaiseByValue,
+	/*  97 */ LS_NOP,
+	/*  98 */ LS_NOP,
+	/*  99 */ LS_NOP,
+	/* 100 */ LS_NOP,		// Scroll_Texture_Left
+	/* 101 */ LS_NOP,		// Scroll_Texture_Right
+	/* 102 */ LS_NOP,		// Scroll_Texture_Up
+	/* 103 */ LS_NOP,		// Scroll_Texture_Down
+	/* 104 */ LS_NOP,
+	/* 105 */ LS_NOP,
+	/* 106 */ LS_NOP,
+	/* 107 */ LS_NOP,
+	/* 108 */ LS_NOP,
+	/* 109 */ LS_Light_ForceLightning,
+	/* 110 */ LS_Light_RaiseByValue,
+	/* 111 */ LS_Light_LowerByValue,
+	/* 112 */ LS_Light_ChangeToValue,
+	/* 113 */ LS_Light_Fade,
+	/* 114 */ LS_Light_Glow,
+	/* 115 */ LS_Light_Flicker,
+	/* 116 */ LS_Light_Strobe,
+	/* 117 */ LS_Light_Stop,
+	/* 118 */ LS_NOP,		// Plane_Copy
+	/* 119 */ LS_Thing_Damage,
+	/* 120 */ LS_Radius_Quake,
+	/* 121 */ LS_NOP,		// Line_SetIdentification
+	/* 122 */ LS_NOP,
+	/* 123 */ LS_NOP,
+	/* 124 */ LS_NOP,
+	/* 125 */ LS_Thing_Move,
+	/* 126 */ LS_NOP,
+	/* 127 */ LS_Thing_SetSpecial,
+	/* 128 */ LS_ThrustThingZ,
+	/* 129 */ LS_UsePuzzleItem,
+	/* 130 */ LS_Thing_Activate,
+	/* 131 */ LS_Thing_Deactivate,
+	/* 132 */ LS_Thing_Remove,
+	/* 133 */ LS_Thing_Destroy,
+	/* 134 */ LS_Thing_Projectile,
+	/* 135 */ LS_Thing_Spawn,
+	/* 136 */ LS_Thing_ProjectileGravity,
+	/* 137 */ LS_Thing_SpawnNoFog,
+	/* 138 */ LS_Floor_Waggle,
+	/* 139 */ LS_Thing_SpawnFacing,
+	/* 140 */ LS_Sector_ChangeSound,
+	/* 141 */ LS_NOP,
+	/* 142 */ LS_NOP,
+	/* 143 */ LS_NOP,
+	/* 144 */ LS_NOP,
+	/* 145 */ LS_Player_SetTeam,
+	/* 146 */ LS_NOP,
+	/* 147 */ LS_NOP,
+	/* 148 */ LS_NOP,
+	/* 149 */ LS_NOP,
+	/* 150 */ LS_NOP,
+	/* 151 */ LS_NOP,
+	/* 152 */ LS_Team_Score,
+	/* 153 */ LS_Team_GivePoints,
+	/* 154 */ LS_Teleport_NoStop,
+	/* 155 */ LS_NOP,
+	/* 156 */ LS_NOP,
+	/* 157 */ LS_NOP,		// SetGlobalFogParameter // in GZDoom
+	/* 158 */ LS_NOP,		// FS_Execute in GZDoom
+	/* 159 */ LS_Sector_SetPlaneReflection,
+	/* 160 */ LS_NOP,		// Sector_Set3DFloor in GZDoom and Vavoom
+	/* 161 */ LS_NOP,		// Sector_SetContents in GZDoom and Vavoom
+	/* 162 */ LS_NOP,
+	/* 163 */ LS_NOP,
+	/* 164 */ LS_NOP,
+	/* 165 */ LS_NOP,
+	/* 166 */ LS_NOP,
+	/* 167 */ LS_NOP,
+	/* 168 */ LS_NOP,
+	/* 169 */ LS_Generic_Crusher2,
+	/* 170 */ LS_Sector_SetCeilingScale2,
+	/* 171 */ LS_Sector_SetFloorScale2,
+	/* 172 */ LS_Plat_UpNearestWaitDownStay,
+	/* 173 */ LS_NoiseAlert,
+	/* 174 */ LS_SendToCommunicator,
+	/* 175 */ LS_Thing_ProjectileIntercept,
+	/* 176 */ LS_Thing_ChangeTID,
+	/* 177 */ LS_Thing_Hate,
+	/* 178 */ LS_Thing_ProjectileAimed,
+	/* 179 */ LS_ChangeSkill,
+	/* 180 */ LS_Thing_SetTranslation,
+	/* 181 */ LS_NOP,		// Plane_Align
+	/* 182 */ LS_NOP,		// Line_Mirror
+	/* 183 */ LS_Line_AlignCeiling,
+	/* 184 */ LS_Line_AlignFloor,
+	/* 185 */ LS_Sector_SetRotation,
+	/* 186 */ LS_Sector_SetCeilingPanning,
+	/* 187 */ LS_Sector_SetFloorPanning,
+	/* 188 */ LS_Sector_SetCeilingScale,
+	/* 189 */ LS_Sector_SetFloorScale,
+	/* 190 */ LS_NOP,		// Static_Init
+	/* 191 */ LS_SetPlayerProperty,
+	/* 192 */ LS_Ceiling_LowerToHighestFloor,
+	/* 193 */ LS_Ceiling_LowerInstant,
+	/* 194 */ LS_Ceiling_RaiseInstant,
+	/* 195 */ LS_Ceiling_CrushRaiseAndStayA,
+	/* 196 */ LS_Ceiling_CrushAndRaiseA,
+	/* 197 */ LS_Ceiling_CrushAndRaiseSilentA,
+	/* 198 */ LS_Ceiling_RaiseByValueTimes8,
+	/* 199 */ LS_Ceiling_LowerByValueTimes8,
+	/* 200 */ LS_Generic_Floor,
+	/* 201 */ LS_Generic_Ceiling,
+	/* 202 */ LS_Generic_Door,
+	/* 203 */ LS_Generic_Lift,
+	/* 204 */ LS_Generic_Stairs,
+	/* 205 */ LS_Generic_Crusher,
+	/* 206 */ LS_Plat_DownWaitUpStayLip,
+	/* 207 */ LS_Plat_PerpetualRaiseLip,
+	/* 208 */ LS_TranslucentLine,
+	/* 209 */ LS_NOP,		// Transfer_Heights
+	/* 210 */ LS_NOP,		// Transfer_FloorLight
+	/* 211 */ LS_NOP,		// Transfer_CeilingLight
+	/* 212 */ LS_Sector_SetColor,
+	/* 213 */ LS_Sector_SetFade,
+	/* 214 */ LS_Sector_SetDamage,
+	/* 215 */ LS_Teleport_Line,
+	/* 216 */ LS_Sector_SetGravity,
+	/* 217 */ LS_Stairs_BuildUpDoom,
+	/* 218 */ LS_Sector_SetWind,
+	/* 219 */ LS_Sector_SetFriction,
+	/* 220 */ LS_Sector_SetCurrent,
+	/* 221 */ LS_Scroll_Texture_Both,
+	/* 222 */ LS_NOP,		// Scroll_Texture_Model
+	/* 223 */ LS_Scroll_Floor,
+	/* 224 */ LS_Scroll_Ceiling,
+	/* 225 */ LS_NOP,		// Scroll_Texture_Offsets
+	/* 226 */ LS_ACS_ExecuteAlways,
+	/* 227 */ LS_PointPush_SetForce,
+	/* 228 */ LS_Plat_RaiseAndStayTx0,
+	/* 229 */ LS_Thing_SetGoal,
+	/* 230 */ LS_Plat_UpByValueStayTx,
+	/* 231 */ LS_Plat_ToggleCeiling,
+	/* 232 */ LS_Light_StrobeDoom,
+	/* 233 */ LS_Light_MinNeighbor,
+	/* 234 */ LS_Light_MaxNeighbor,
+	/* 235 */ LS_Floor_TransferTrigger,
+	/* 236 */ LS_Floor_TransferNumeric,
+	/* 237 */ LS_ChangeCamera,
+	/* 238 */ LS_Floor_RaiseToLowestCeiling,
+	/* 239 */ LS_Floor_RaiseByValueTxTy,
+	/* 240 */ LS_Floor_RaiseByTexture,
+	/* 241 */ LS_Floor_LowerToLowestTxTy,
+	/* 242 */ LS_Floor_LowerToHighest,
+	/* 243 */ LS_Exit_Normal,
+	/* 244 */ LS_Exit_Secret,
+	/* 245 */ LS_Elevator_RaiseToNearest,
+	/* 246 */ LS_Elevator_MoveToFloor,
+	/* 247 */ LS_Elevator_LowerToNearest,
+	/* 248 */ LS_HealThing,
+	/* 249 */ LS_Door_CloseWaitOpen,
+	/* 250 */ LS_Floor_Donut,
+	/* 251 */ LS_FloorAndCeiling_LowerRaise,
+	/* 252 */ LS_Ceiling_RaiseToNearest,
+	/* 253 */ LS_Ceiling_LowerToLowest,
+	/* 254 */ LS_Ceiling_LowerToFloor,
+	/* 255 */ LS_Ceiling_CrushRaiseAndStaySilA
 };
 
-struct FLineSpecial
-{
-	const char *name;
-	BYTE number;
-	SBYTE min_args;
-	SBYTE max_args;
-};
-
-#define DEFINE_SPECIAL(name, num, min, max) {#name, num, min, max},
-static FLineSpecial LineSpecialNames[]={
+#define DEFINE_SPECIAL(name, num, min, max, mmax) {#name, num, min, max, mmax},
+static FLineSpecial LineSpecialNames[] = {
 #include "actionspecials.h"
 };
+const FLineSpecial *LineSpecialsInfo[256];
+
+static int STACK_ARGS lscmp (const void * a, const void * b)
+{
+	return stricmp( ((FLineSpecial*)a)->name, ((FLineSpecial*)b)->name);
+}
+
+static struct InitLineSpecials
+{
+	InitLineSpecials()
+	{
+		qsort(LineSpecialNames, countof(LineSpecialNames), sizeof(FLineSpecial), lscmp);
+		for (size_t i = 0; i < countof(LineSpecialNames); ++i)
+		{
+			assert(LineSpecialsInfo[LineSpecialNames[i].number] == NULL);
+			LineSpecialsInfo[LineSpecialNames[i].number] = &LineSpecialNames[i];
+		}
+	}
+} DoInit;
 
 //==========================================================================
 //
@@ -3658,22 +3731,9 @@ static FLineSpecial LineSpecialNames[]={
 // Finds a line special and also returns the min and max argument count.
 //
 //==========================================================================
-static int STACK_ARGS lscmp (const void * a, const void * b)
-{
-	return stricmp( ((FLineSpecial*)a)->name, ((FLineSpecial*)b)->name);
-}
-
 
 int P_FindLineSpecial (const char *string, int *min_args, int *max_args)
 {
-	static bool sorted=false;
-
-	if (!sorted)
-	{
-		qsort(LineSpecialNames, countof(LineSpecialNames), sizeof(FLineSpecial), lscmp);
-		sorted = true;
-	}
-
 	int min = 0, max = countof(LineSpecialNames) - 1;
 
 	while (min <= max)
@@ -3697,4 +3757,3 @@ int P_FindLineSpecial (const char *string, int *min_args, int *max_args)
 	}
 	return 0;
 }
-

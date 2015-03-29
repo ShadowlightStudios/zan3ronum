@@ -7,6 +7,7 @@ ACTOR MWeapWand : MageWeapon
 	Weapon.SelectionOrder 3600
 	Weapon.KickBack 0
 	Weapon.YAdjust 9
+	Tag "$TAG_MWEAPWAND"
 
 	States
 	{
@@ -46,7 +47,7 @@ ACTOR MageWandSmoke
 
 // Wand Missile -------------------------------------------------------------
 
-ACTOR MageWandMissile : FastProjectile native
+ACTOR MageWandMissile : FastProjectile
 {
 	Speed 184
 	Radius 12
@@ -54,7 +55,9 @@ ACTOR MageWandMissile : FastProjectile native
 	Damage 2
 	+RIPPER +CANNOTPUSH +NODAMAGETHRUST
 	+SPAWNSOUNDSOURCE
+	MissileType "MageWandSmoke"
 	SeeSound "MageWandFire"
+	Obituary "$OB_MPMWEAPWAND"
 	States
 	{
 	Spawn:

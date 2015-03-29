@@ -159,13 +159,23 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 			ptrval = va_arg (tags, void*);
 			break;
 
+		case DTA_CleanNoMove_1:
+			boolval = va_arg (tags, INTBOOL);
+			if (boolval)
+			{
+				scalex = CleanXfac_1;
+				scaley = CleanYfac_1;
+				maxwidth = Width - (Width % (int)scalex);
+			}
+			break;
+
 		case DTA_CleanNoMove:
 			boolval = va_arg (tags, INTBOOL);
 			if (boolval)
 			{
 				scalex = CleanXfac;
 				scaley = CleanYfac;
-				maxwidth = Width - (Width % (int)CleanYfac);
+				maxwidth = Width - (Width % (int)scalex);
 			}
 			break;
 
@@ -281,7 +291,7 @@ int FFont::StringWidth (const BYTE *string) const
 					++string;
 				}
 			}
-			else if (*string != '\0')
+			if (*string != '\0')
 			{
 				++string;
 			}
@@ -883,14 +893,15 @@ FBrokenLines *V_BreakLines (FFont *font, int maxwidth, const BYTE *string)
 	FBrokenLines lines[128];	// Support up to 128 lines (should be plenty)
 
 	const BYTE *space = NULL, *start = string;
-	int i, c, w, nw;
+	size_t i, ii;
+	int c, w, nw;
 	FString lastcolor, linecolor;
 	bool lastWasSpace = false;
 	int kerning = font->GetDefaultKerning ();
 
 	i = w = 0;
 
-	while ( (c = *string++) && i < 128 )
+	while ( (c = *string++) && i < countof(lines) )
 	{
 		if (c == TEXTCOLOR_ESCAPE)
 		{
@@ -966,7 +977,7 @@ FBrokenLines *V_BreakLines (FFont *font, int maxwidth, const BYTE *string)
 	}
 
 	// String here is pointing one character after the '\0'
-	if (i < 128 && --string - start >= 1)
+	if (i < countof(lines) && --string - start >= 1)
 	{
 		const BYTE *s = start;
 
@@ -984,11 +995,11 @@ FBrokenLines *V_BreakLines (FFont *font, int maxwidth, const BYTE *string)
 	// Make a copy of the broken lines and return them
 	FBrokenLines *broken = new FBrokenLines[i+1];
 
-	for (c = 0; c < i; ++c)
+	for (ii = 0; ii < i; ++ii)
 	{
-		broken[c] = lines[c];
+		broken[ii] = lines[ii];
 	}
-	broken[c].Width = -1;
+	broken[ii].Width = -1;
 
 	return broken;
 }

@@ -42,6 +42,10 @@
 #define GI_SHAREWARE			0x00000002
 #define GI_MENUHACK_EXTENDED	0x00000004	// (Heretic)
 #define GI_TEASER2				0x00000008	// Alternate version of the Strife Teaser
+#define GI_COMPATSHORTTEX		0x00000010	// always force COMPAT_SHORTTEX for IWAD maps.
+#define GI_COMPATSTAIRS			0x00000020	// same for stairbuilding
+#define GI_COMPATPOLY1			0x00000040	// Hexen's MAP36 needs old polyobject drawing
+#define GI_COMPATPOLY2			0x00000080	// so does HEXDD's MAP47
 
 #include "gametype.h"
 
@@ -69,6 +73,7 @@ struct gameinfo_t
 	char titlePage[9];
 	bool drawreadthis;
 	bool noloopfinalemusic;
+	bool intermissioncounter;
 	TArray<FName> creditPages;
 	TArray<FName> finalePages;
 	TArray<FName> infoPages;
@@ -81,18 +86,29 @@ struct gameinfo_t
 	FString chatSound;
 	FString finaleMusic;
 	char finaleFlat[9];
-	FString quitSound;
 	char borderFlat[9];
+	char SkyFlatName[9];
+	char ArmorIcon1[9];
+	char ArmorIcon2[9];
+	char Endoom[9];
+	fixed_t Armor2Percent;
+	FString quitSound;
 	gameborder_t *border;
 	int telefogheight;
 	int defKickback;
-	char SkyFlatName[9];
 	FString translator;
 	DWORD defaultbloodcolor;
 	DWORD defaultbloodparticlecolor;
 	FString backpacktype;
 	FString statusbar;
 	FString intermissionMusic;
+	DWORD dimcolor;
+	float dimamount;
+	int definventorymaxamount;
+	int defaultrespawntime;
+	int defaultdropstyle;
+	int player5start;
+	DWORD pickupcolor;
 
 	const char *GetFinalePage(unsigned int num) const;
 };

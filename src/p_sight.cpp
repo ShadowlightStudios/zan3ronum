@@ -18,6 +18,7 @@
 #include "m_bbox.h"
 #include "p_lnspec.h"
 #include "g_level.h"
+#include "po_man.h"
 
 // State.
 #include "r_state.h"
@@ -53,7 +54,7 @@ class SightCheck
 	fixed_t lastzbottom;				// z at last line
 	sector_t * lastsector;			// last sector being entered by trace
 	fixed_t topslope, bottomslope;	// slopes to top and bottom of target
-	int SeePastBlockEverything, SeePastShootableLines;
+	int Flags;
 	divline_t trace;
 	int myseethrough;
 
@@ -73,9 +74,8 @@ public:
 		seeingthing=t2;
 		bottomslope = t2->z - sightzstart;
 		topslope = bottomslope + t2->height;
+		Flags = flags;
 
-		SeePastBlockEverything = flags & 6;
-		SeePastShootableLines = flags & 4;
 		myseethrough = FF_SEETHROUGH;
 	}
 };
@@ -144,6 +144,7 @@ bool SightCheck::PTR_SightTraverse (intercept_t *in)
 				F3DFloor*  rover=s->e->XFloor.ffloors[j];
 
 				if((rover->flags & FF_SEETHROUGH) == myseethrough || !(rover->flags & FF_EXISTS)) continue;
+				if ((Flags & SF_IGNOREWATERBOUNDARY) && (rover->flags & FF_SOLID) == 0) continue;
 				
 				fixed_t ff_bottom=rover->bottom.plane->ZatPoint(trX, trY);
 				fixed_t ff_top=rover->top.plane->ZatPoint(trX, trY);
@@ -176,14 +177,15 @@ bool SightCheck::PTR_SightTraverse (intercept_t *in)
 						F3DFloor*  rover2=sb->e->XFloor.ffloors[k];
 
 						if((rover2->flags & FF_SEETHROUGH) == myseethrough || !(rover2->flags & FF_EXISTS)) continue;
+						if ((Flags & SF_IGNOREWATERBOUNDARY) && (rover->flags & FF_SOLID) == 0) continue;
 						
 						fixed_t ffb_bottom=rover2->bottom.plane->ZatPoint(trX, trY);
 						fixed_t ffb_top=rover2->top.plane->ZatPoint(trX, trY);
 
-						if ((ffb_bottom >= ff_bottom && ffb_bottom<=ff_top) ||
+						if ( (ffb_bottom >= ff_bottom && ffb_bottom<=ff_top) ||
 							(ffb_top <= ff_top && ffb_top >= ff_bottom) ||
 							(ffb_top >= ff_top && ffb_bottom <= ff_bottom) ||
-							(ffb_top <= ff_top && ffb_bottom >= ff_bottom))
+							(ffb_top <= ff_top && ffb_bottom >= ff_bottom) )
 						{
 							return false;
 						}
@@ -255,7 +257,7 @@ bool SightCheck::P_SightCheckLine (line_t *ld)
 	// [RH] don't see past block everything lines
 	if (ld->flags & ML_BLOCKEVERYTHING)
 	{
-		if (!SeePastBlockEverything)
+		if (!(Flags & SF_SEEPASTBLOCKEVERYTHING))
 		{
 			return false;
 		}
@@ -263,7 +265,7 @@ bool SightCheck::P_SightCheckLine (line_t *ld)
 		// that runs a script on the current map. Used to prevent monsters
 		// from trying to attack through a block everything line unless
 		// there's a chance their attack will make it nonblocking.
-		if (!SeePastShootableLines)
+		if (!(Flags & SF_SEEPASTSHOOTABLELINES))
 		{
 			if (!(ld->activation & SPAC_Impact))
 			{
@@ -304,7 +306,7 @@ bool SightCheck::P_SightBlockLinesIterator (int x, int y)
 	int *list;
 
 	polyblock_t *polyLink;
-	int i;
+	unsigned int i;
 	extern polyblock_t **PolyBlockMap;
 
 	offset = y*bmapwidth+x;
@@ -317,9 +319,9 @@ bool SightCheck::P_SightBlockLinesIterator (int x, int y)
 			if (polyLink->polyobj->validcount != validcount)
 			{
 				polyLink->polyobj->validcount = validcount;
-				for (i = 0; i < polyLink->polyobj->numlines; i++)
+				for (i = 0; i < polyLink->polyobj->Linedefs.Size(); i++)
 				{
-					if (!P_SightCheckLine (polyLink->polyobj->lines[i]))
+					if (!P_SightCheckLine (polyLink->polyobj->Linedefs[i]))
 						return false;
 				}
 			}
@@ -407,6 +409,7 @@ bool SightCheck::P_SightTraverseIntercepts ()
 			F3DFloor*  rover = lastsector->e->XFloor.ffloors[i];
 
 			if((rover->flags & FF_SOLID) == myseethrough || !(rover->flags & FF_EXISTS)) continue;
+			if ((Flags & SF_IGNOREWATERBOUNDARY) && (rover->flags & FF_SOLID) == 0) continue;
 			
 			fixed_t ff_bottom=rover->bottom.plane->ZatPoint(seeingthing->x, seeingthing->y);
 			fixed_t ff_top=rover->top.plane->ZatPoint(seeingthing->x, seeingthing->y);
@@ -670,7 +673,7 @@ sightcounts[0]++;
 //
 	// [RH] Andy Baker's stealth monsters:
 	// Cannot see an invisible object
-	if ((flags & 1) == 0 && ((t2->renderflags & RF_INVISIBLE) || !t2->RenderStyle.IsVisible(t2->alpha)))
+	if ((flags & SF_IGNOREVISIBILITY) == 0 && ((t2->renderflags & RF_INVISIBLE) || !t2->RenderStyle.IsVisible(t2->alpha)))
 	{ // small chance of an attack being made anyway
 		if (pr_checksight() > 50)
 		{
@@ -681,20 +684,23 @@ sightcounts[0]++;
 
 	// killough 4/19/98: make fake floors and ceilings block monster view
 
-	if ((s1->heightsec && !(s1->heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC) &&
-		((t1->z + t1->height <= s1->heightsec->floorplane.ZatPoint (t1->x, t1->y) &&
-		  t2->z >= s1->heightsec->floorplane.ZatPoint (t2->x, t2->y)) ||
-		 (t1->z >= s1->heightsec->ceilingplane.ZatPoint (t1->x, t1->y) &&
-		  t2->z + t1->height <= s1->heightsec->ceilingplane.ZatPoint (t2->x, t2->y))))
-		||
-		(s2->heightsec && !(s2->heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC) &&
-		 ((t2->z + t2->height <= s2->heightsec->floorplane.ZatPoint (t2->x, t2->y) &&
-		   t1->z >= s2->heightsec->floorplane.ZatPoint (t1->x, t1->y)) ||
-		  (t2->z >= s2->heightsec->ceilingplane.ZatPoint (t2->x, t2->y) &&
-		   t1->z + t2->height <= s2->heightsec->ceilingplane.ZatPoint (t1->x, t1->y)))))
+	if (!(flags & SF_IGNOREWATERBOUNDARY))
 	{
-		res = false;
-		goto done;
+		if ((s1->GetHeightSec() &&
+			((t1->z + t1->height <= s1->heightsec->floorplane.ZatPoint (t1->x, t1->y) &&
+			  t2->z >= s1->heightsec->floorplane.ZatPoint (t2->x, t2->y)) ||
+			 (t1->z >= s1->heightsec->ceilingplane.ZatPoint (t1->x, t1->y) &&
+			  t2->z + t1->height <= s1->heightsec->ceilingplane.ZatPoint (t2->x, t2->y))))
+			||
+			(s2->GetHeightSec() &&
+			 ((t2->z + t2->height <= s2->heightsec->floorplane.ZatPoint (t2->x, t2->y) &&
+			   t1->z >= s2->heightsec->floorplane.ZatPoint (t1->x, t1->y)) ||
+			  (t2->z >= s2->heightsec->ceilingplane.ZatPoint (t2->x, t2->y) &&
+			   t1->z + t2->height <= s2->heightsec->ceilingplane.ZatPoint (t1->x, t1->y)))))
+		{
+			res = false;
+			goto done;
+		}
 	}
 
 	// An unobstructed LOS is possible.

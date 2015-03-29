@@ -3,6 +3,27 @@
 
 #include "doomtype.h"
 
+struct FloatRect
+{
+	float left,top;
+	float width,height;
+
+
+	void Offset(float xofs,float yofs)
+	{
+		left+=xofs;
+		top+=yofs;
+	}
+	void Scale(float xfac,float yfac)
+	{
+		left*=xfac;
+		width*=xfac;
+		top*=yfac;
+		height*=yfac;
+	}
+};
+
+
 class FBitmap;
 struct FRemapTable;
 struct FCopyInfo;
@@ -13,6 +34,8 @@ class FArchive;
 // Texture IDs
 class FTextureManager;
 class FTerrainTypeArray;
+class FGLTexture;
+class FMaterial;
 
 class FTextureID
 {
@@ -41,6 +64,8 @@ protected:
 	FTextureID(int num) { texnum = num; }
 private:
 	int texnum;
+
+	friend void AddTiles (void *tiles);
 };
 
 class FNullTextureID : public FTextureID
@@ -83,7 +108,6 @@ enum FTextureFormat
 };
 
 class FNativeTexture;
-class FGLTexture;
 
 // Base texture class
 class FTexture
@@ -101,8 +125,13 @@ public:
 	fixed_t		yScale;
 
 	int SourceLump;
+	FTextureID id;
 
-	char Name[9];
+	union
+	{
+		char Name[9];
+		DWORD dwName;		// Used with sprites
+	};
 	BYTE UseType;	// This texture's primary purpose
 
 	BYTE bNoDecals:1;		// Decals should not stick to texture
@@ -115,8 +144,10 @@ public:
 	BYTE bComplex:1;		// Will be used to mark extended MultipatchTextures that have to be
 							// fully composited before subjected to any kinf of postprocessing instead of
 							// doing it per patch.
+	BYTE bMultiPatch:1;		// This is a multipatch texture (we really could use real type info for textures...)
 
 	WORD Rotations;
+	SWORD SkyOffset;
 
 	enum // UseTypes
 	{
@@ -153,6 +184,7 @@ public:
 	virtual bool UseBasePalette();
 	virtual int GetSourceLump() { return SourceLump; }
 	virtual FTexture *GetRedirect(bool wantwarped);
+	FTextureID GetID() const { return id; }
 
 	virtual void Unload () = 0;
 
@@ -173,9 +205,13 @@ public:
 
 	int GetScaledWidth () { int foo = (Width << 17) / xScale; return (foo >> 1) + (foo & 1); }
 	int GetScaledHeight () { int foo = (Height << 17) / yScale; return (foo >> 1) + (foo & 1); }
+	double GetScaledWidthDouble () { return (Width * 65536.f) / xScale; }
+	double GetScaledHeightDouble () { return (Height * 65536.f) / yScale; }
 
 	int GetScaledLeftOffset () { int foo = (LeftOffset << 17) / xScale; return (foo >> 1) + (foo & 1); }
 	int GetScaledTopOffset () { int foo = (TopOffset << 17) / yScale; return (foo >> 1) + (foo & 1); }
+	double GetScaledLeftOffsetDouble() { return (LeftOffset * 65536.f) / xScale; }
+	double GetScaledTopOffsetDouble() { return (TopOffset * 65536.f) / yScale; }
 
 	virtual void SetFrontSkyLayer();
 
@@ -226,6 +262,8 @@ protected:
 		bNoDecals = other->bNoDecals;
 		Rotations = other->Rotations;
 		gl_info = other->gl_info;
+		gl_info.Brightmap = NULL;
+		gl_info.areas = NULL;
 	}
 
 	static void FlipSquareBlock (BYTE *block, int x, int y);
@@ -239,17 +277,24 @@ public:
 
 	struct MiscGLInfo
 	{
-		FGLTexture *GLTexture;
+		FMaterial *Material;
+		FGLTexture *SystemTexture;
 		FTexture *Brightmap;
+		FTexture *DecalTexture;					// This is needed for decals of UseType TEX_MiscPatch-
 		PalEntry GlowColor;
 		PalEntry FloorSkyColor;
 		PalEntry CeilingSkyColor;
 		int GlowHeight;
+		FloatRect *areas;
+		int areacount;
+		int shaderindex;
+		float shaderspeed;
+		int mIsTransparent:2;
 		bool bGlowing:1;						// Texture glows
 		bool bFullbright:1;						// always draw fullbright
 		bool bSkybox:1;							// This is a skybox
 		bool bSkyColorDone:1;					// Fill color for sky
-		char bBrightmapChecked:2;				// 0: not initialized yet, -1 not checked, 1 checked
+		char bBrightmapChecked:1;				// Set to 1 if brightmap has been checked
 		bool bBrightmap:1;						// This is a brightmap
 		bool bBrightmapDisablesFullbright:1;	// This disables fullbright display
 
@@ -261,8 +306,14 @@ public:
 	virtual void PrecacheGL();
 	virtual void UncacheGL();
 	void GetGlowColor(float *data);
+	PalEntry GetSkyCapColor(bool bottom);
 	bool isGlowing() { return gl_info.bGlowing; }
 	bool isFullbright() { return gl_info.bFullbright; }
+	void CreateDefaultBrightmap();
+	bool FindHoles(const unsigned char * buffer, int w, int h);
+	static bool SmoothEdges(unsigned char * buffer,int w, int h);
+	void CheckTrans(unsigned char * buffer, int size, int trans);
+	bool ProcessData(unsigned char * buffer, int w, int h, bool ispatch);
 };
 
 // Texture manager
@@ -304,6 +355,12 @@ public:
 		return Textures[Translation[texnum.texnum]].Texture;
 	}
 
+	FTexture *ByIndexTranslated(int i)
+	{
+		if (unsigned(i) >= Textures.Size()) return NULL;
+		return Textures[Translation[i]].Texture;
+	}
+
 	void SetTranslation (FTextureID fromtexnum, FTextureID totexnum)
 	{
 		if ((size_t)fromtexnum.texnum < Translation.Size())
@@ -330,7 +387,7 @@ public:
 
 	void AddTexturesLump (const void *lumpdata, int lumpsize, int deflumpnum, int patcheslump, int firstdup=0, bool texture1=false);
 	void AddTexturesLumps (int lump1, int lump2, int patcheslump);
-	void AddGroup(int wadnum, const char * startlump, const char * endlump, int ns, int usetype);
+	void AddGroup(int wadnum, int ns, int usetype);
 	void AddPatches (int lumpnum);
 	void AddTiles (void *tileFile);
 	void AddHiresTextures (int wadnum);

@@ -40,6 +40,7 @@
 #include "d_event.h"
 #include "sbar.h"
 #include "sbarinfo.h"
+#include "templates.h"
 
 #define ST_RAMPAGEDELAY 		(2*TICRATE)
 #define ST_MUCHPAIN 			20
@@ -75,7 +76,7 @@ FMugShotFrame::~FMugShotFrame()
 //
 //===========================================================================
 
-FTexture *FMugShotFrame::GetTexture(const char *default_face, FPlayerSkin *skin, int random, int level,
+FTexture *FMugShotFrame::GetTexture(const char *default_face, const char *skin_face, int random, int level,
 	int direction, bool uses_levels, bool health2, bool healthspecial, bool directional)
 {
 	int index = !directional ? random % Graphic.Size() : direction;
@@ -83,7 +84,7 @@ FTexture *FMugShotFrame::GetTexture(const char *default_face, FPlayerSkin *skin,
 	{
 		index = Graphic.Size() - 1;
 	}
-	FString sprite(skin->face[0] != 0 ? skin->face : default_face, 3);
+	FString sprite(skin_face != NULL && skin_face[0] != 0 ? skin_face : default_face, 3);
 	sprite += Graphic[index];
 	if (uses_levels) //change the last character to the level
 	{
@@ -221,6 +222,17 @@ int FindMugShotStateIndex(FName state)
 
 FMugShot::FMugShot()
 {
+	Reset();
+}
+
+//===========================================================================
+//
+// FMugShot :: Reset
+//
+//===========================================================================
+
+void FMugShot::Reset()
+{
 	FaceHealth = -1;
 	bEvilGrin = false;
 	bNormal = true;
@@ -323,7 +335,7 @@ bool FMugShot::SetState(const char *state_name, bool wait_till_done, bool reset)
 //
 //===========================================================================
 
-int FMugShot::UpdateState(player_t *player, int stateflags)
+int FMugShot::UpdateState(player_t *player, StateFlags stateflags)
 {
 	int 		i;
 	angle_t 	badguyangle;
@@ -332,7 +344,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 
 	if (player->health > 0)
 	{
-		if (bEvilGrin && !(stateflags & DRAWMUGSHOT_DISABLEGRIN))
+		if (bEvilGrin && !(stateflags & DISABLEGRIN))
 		{
 			if (player->bonuscount)
 			{
@@ -347,7 +359,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 
 		if (player->damagecount && 
 			// Now go in if pain is disabled but we think ouch will be shown (and ouch is not disabled!)
-			(!(stateflags & DRAWMUGSHOT_DISABLEPAIN) || (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DRAWMUGSHOT_DISABLEOUCH))))
+			(!(stateflags & DISABLEPAIN) || (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))))
 		{
 			int damage_angle = 1;
 			if (player->attacker && player->attacker != player->mo)
@@ -379,7 +391,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 				}
 			}
 			bool use_ouch = false;
-			if (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DRAWMUGSHOT_DISABLEOUCH))
+			if (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))
 			{
 				use_ouch = true;
 				full_state_name = "ouch.";
@@ -406,7 +418,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 			else
 			{
 				bool use_ouch = false;
-				if (((FaceHealth != -1 && player->health - FaceHealth > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DRAWMUGSHOT_DISABLEOUCH))
+				if (((FaceHealth != -1 && player->health - FaceHealth > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))
 				{
 					use_ouch = true;
 					full_state_name = "ouch.";
@@ -425,7 +437,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 		}
 
 		// [CW] If we are spectating, then don't show the 'pissed off' face.
-		if ( (RampageTimer == ST_RAMPAGEDELAY) && !(stateflags & DRAWMUGSHOT_DISABLERAMPAGE) && !player->bSpectating )
+		if (RampageTimer == ST_RAMPAGEDELAY && !(stateflags & DISABLERAMPAGE) && !player->bSpectating )
 		{
 			SetState("rampage", !bNormal); //If we have nothing better to show, use the rampage face.
 			return 0;
@@ -436,7 +448,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 			bool good;
 			if ((player->cheats & CF_GODMODE) || (player->mo != NULL && player->mo->flags2 & MF2_INVULNERABLE))
 			{
-				good = SetState((stateflags & DRAWMUGSHOT_ANIMATEDGODMODE) ? "godanimated" : "god");
+				good = SetState((stateflags & ANIMATEDGODMODE) ? "godanimated" : "god");
 			}
 			// [BB] Quad damage!
 			else if (( player->cheats2 & CF2_TERMINATORARTIFACT ) ||
@@ -454,7 +466,7 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 	}
 	else
 	{
-		if (!(stateflags & DRAWMUGSHOT_XDEATHFACE) || !(player->cheats & CF_EXTREMELYDEAD))
+		if (!(stateflags & XDEATHFACE) || !(player->cheats & CF_EXTREMELYDEAD))
 		{
 			full_state_name = "death.";
 		}
@@ -477,19 +489,28 @@ int FMugShot::UpdateState(player_t *player, int stateflags)
 //
 //===========================================================================
 
-FTexture *FMugShot::GetFace(player_t *player, const char *default_face, int accuracy, int stateflags)
+FTexture *FMugShot::GetFace(player_t *player, const char *default_face, int accuracy, StateFlags stateflags)
 {
 	int angle = UpdateState(player, stateflags);
 	int level = 0;
+	int max = player->mo->MugShotMaxHealth;
+	if (max < 0)
+	{
+		max = player->mo->GetMaxHealth();
+	}
+	else if (max == 0)
+	{
+		max = 100;
+	}
 	// [BB] If the consoleplayer isn't allowed to know this player's healt, pretend he is at full health for the mugshot.
-	while ( ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, static_cast<ULONG>( player - players )) ? player->health : player->mo->GetMaxHealth() ) < (accuracy-1-level) * (player->mo->GetMaxHealth()/accuracy))
+	while ( ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, static_cast<ULONG>( player - players )) ? player->health : max ) < (accuracy - 1 - level) * (max / accuracy))
 	{
 		level++;
 	}
 	if (CurrentState != NULL)
 	{
-		FPlayerSkin *skin = &skins[player->morphTics ? player->MorphedPlayerClass : player->userinfo.skin];
-		return CurrentState->GetCurrentFrameTexture(default_face, skin, level, angle);
+		const char *skin_face = player->morphTics ? player->MorphedPlayerClass->Meta.GetMetaString(APMETA_Face) : skins[player->userinfo.skin].face;
+		return CurrentState->GetCurrentFrameTexture(default_face, skin_face, level, angle);
 	}
 	return NULL;
 }

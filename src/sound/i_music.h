@@ -55,7 +55,7 @@ void I_ResumeSong (void *handle);
 
 // Registers a song handle to song data.
 class MusInfo;
-MusInfo *I_RegisterSong (const char *file, char * musiccache, int offset, int length, int device);
+MusInfo *I_RegisterSong (const char *file, BYTE *musiccache, int offset, int length, int device);
 MusInfo *I_RegisterCDSong (int track, int cdid = 0);
 MusInfo *I_RegisterURLSong (const char *url);
 
@@ -98,6 +98,9 @@ public:
 	virtual FString GetStats();
 	virtual MusInfo *GetOPLDumper(const char *filename);
 	virtual MusInfo *GetWaveDumper(const char *filename, int rate);
+	virtual void FluidSettingInt(const char *setting, int value);			// FluidSynth settings
+	virtual void FluidSettingNum(const char *setting, double value);		// "
+	virtual void FluidSettingStr(const char *setting, const char *value);	// "
 
 	enum EState
 	{

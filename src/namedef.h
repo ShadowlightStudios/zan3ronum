@@ -24,6 +24,13 @@ xx(Spray)
 xx(Ghost)
 xx(Reflective)
 
+// Invisibility types
+xx(Additive)
+xx(Cumulative)
+xx(Fuzzy)
+xx(Opaque)
+xx(Stencil)
+
 // Healingradius types
 xx(Mana)
 xx(Armor)
@@ -56,6 +63,9 @@ xx(Wind)
 
 xx(PointPusher)
 xx(PointPuller)
+
+xx(UpperStackLookOnly)
+xx(LowerStackLookOnly)
 
 xx(BulletPuff)
 xx(StrifePuff)
@@ -122,6 +132,9 @@ xx(FWeapQuietus)
 xx(CWeapWraithverge)
 xx(MWeapBloodscourge)
 
+// Misc Hexen classes
+xx(LightningZap)
+
 // Ammo and weapon names for the Strife status bar
 xx(ClipOfBullets)
 xx(PoisonBolts)
@@ -140,6 +153,7 @@ xx(Mauler)
 
 xx(AcolyteBlue)
 xx(SpectralLightningV1)
+xx(SpectralLightningV2)
 xx(TeleportDest)
 xx(TeleportDest2)
 
@@ -171,6 +185,7 @@ xx(No)
 xx(Greetings)
 xx(Idle)
 xx(GenericFreezeDeath)
+xx(GenericCrush)
 
 // Compatible death names for the decorate parser.
 xx(XDeath)
@@ -235,6 +250,7 @@ xx(PoisonCloud)	// makes monsters howl.
 // Special death name for getting killed excessively. Could be used as
 // a damage type if you wanted to force an extreme death.
 xx(Extreme)
+xx(MDK)
 
 // [BB] Skulltag Damage types
 xx(Grenade)
@@ -302,6 +318,7 @@ xx(Heightceiling)
 xx(Lightlevel)
 xx(Texturefloor)
 xx(Textureceiling)
+xx(Nodecals)
 
 xx(Skill1)
 xx(Skill2)
@@ -363,7 +380,7 @@ xx(Blockplayers)
 xx(Blockeverything)
 xx(Zoneboundary)
 xx(Jumpover)
-xx(Blockfloating)
+xx(Blockfloaters)
 xx(Clipmidtex)
 xx(Wrapmidtex)
 xx(Midtex3d)
@@ -375,6 +392,7 @@ xx(Repeatspecial)
 
 xx(Playercross)
 xx(Playeruse)
+xx(Playeruseback)
 xx(Monstercross)
 xx(Impact)
 xx(Playerpush)
@@ -405,6 +423,7 @@ xx(Gravity)
 xx(Lightcolor)
 xx(Fadecolor)
 xx(Desaturation)
+xx(SoundSequence)
 xx(Silent)
 xx(Nofallingdamage)
 xx(Dropactors)
@@ -416,6 +435,12 @@ xx(offsetx_mid)
 xx(offsety_mid)
 xx(offsetx_bottom)
 xx(offsety_bottom)
+xx(scalex_top)
+xx(scaley_top)
+xx(scalex_mid)
+xx(scaley_mid)
+xx(scalex_bottom)
+xx(scaley_bottom)
 xx(light)
 xx(lightabsolute)
 xx(nofakecontrast)

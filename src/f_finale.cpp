@@ -90,7 +90,8 @@ void	F_AdvanceSlideshow ();
 // F_StartFinale
 //
 void F_StartFinale (const char *music, int musicorder, int cdtrack, unsigned int cdid, const char *flat, 
-					const char *text, INTBOOL textInLump, INTBOOL finalePic, INTBOOL lookupText, bool ending)
+					const char *text, INTBOOL textInLump, INTBOOL finalePic, INTBOOL lookupText, 
+					bool ending, int endsequence)
 {
 	bool loopmusic = ending ? !gameinfo.noloopfinalemusic : true;
 	gameaction = ga_nothing;
@@ -118,6 +119,10 @@ void F_StartFinale (const char *music, int musicorder, int cdtrack, unsigned int
 	}
 
 	FinaleFlat = (flat != NULL && *flat != 0) ? flat : gameinfo.finaleFlat;
+	if (FinaleFlat != NULL && FinaleFlat[0] == '$')
+	{
+		FinaleFlat = GStrings(FinaleFlat + 1);
+	}
 
 	if (textInLump)
 	{
@@ -148,11 +153,12 @@ void F_StartFinale (const char *music, int musicorder, int cdtrack, unsigned int
 	FinaleEndCount = 70;
 	FadeDir = -1;
 	FinaleEnding = ending;
+	FinaleSequence = endsequence;
+
 	S_StopAllChannels ();
 
 	if (ending)
 	{
-		FinaleSequence = *((WORD *)&level.nextmap[6]);
 		if (EndSequences[FinaleSequence].EndType == END_Chess)
 		{
 			TEXTSPEED = 3;	// Slow the text to its original rate to match the music.
@@ -246,7 +252,6 @@ void F_Ticker ()
 					// [RH] Don't automatically advance end-of-game messages
 					if (interrupt)
 					{
-						FinaleSequence = *((WORD *)&level.nextmap[6]);
 						if (EndSequences[FinaleSequence].EndType == END_Cast)
 						{
 							F_StartCast ();
@@ -770,7 +775,7 @@ void F_CastDrawer (void)
 	FTexture*			pic;
 	
 	// erase the entire screen to a background
-	screen->DrawTexture (TexMan["BOSSBACK"], 0, 0,
+	screen->DrawTexture (TexMan[GStrings("bgcastcall")], 0, 0,
 		DTA_DestWidth, screen->GetWidth(),
 		DTA_DestHeight, screen->GetHeight(),
 		TAG_DONE);
@@ -826,8 +831,8 @@ void F_DemonScroll ()
 	int yval;
 	FTexture *final1 = TexMan(tex1);
 	FTexture *final2 = TexMan(tex2);
-	int fwidth = final1->GetWidth();
-	int fheight = final1->GetHeight();
+	int fwidth = final1->GetScaledWidth();
+	int fheight = final1->GetScaledHeight();
 
 	if (FinaleCount < 70)
 	{
@@ -901,10 +906,7 @@ void F_DrawUnderwater(void)
 		// intentional fall-through
 	case 2:
 		pic = TexMan("E2END");
-		screen->DrawTexture (pic, 0, 0,
-			DTA_VirtualWidth, pic->GetWidth(),
-			DTA_VirtualHeight, pic->GetHeight(),
-			TAG_DONE);
+		screen->DrawTexture (pic, 0, 0, DTA_Fullscreen, true, TAG_DONE);
 		screen->FillBorder (NULL);
 		paused = false;
 		menuactive = MENU_Off;
@@ -924,10 +926,7 @@ void F_DrawUnderwater(void)
 		screen->UpdatePalette ();
 
 		pic = TexMan("TITLE");
-		screen->DrawTexture (pic, 0, 0,
-			DTA_VirtualWidth, pic->GetWidth(),
-			DTA_VirtualHeight, pic->GetHeight(),
-			TAG_DONE);
+		screen->DrawTexture (pic, 0, 0, DTA_Fullscreen, true, TAG_DONE);
 		screen->FillBorder (NULL);
 		NoWipe = 0;
 		break;
@@ -977,8 +976,8 @@ void F_BunnyScroll (void)
 	V_MarkRect (0, 0, SCREENWIDTH, SCREENHEIGHT);
 
 	tex = TexMan(tex1);
-	fwidth = tex->GetWidth();
-	fheight = tex->GetHeight();
+	fwidth = tex->GetScaledWidth();
+	fheight = tex->GetScaledHeight();
 
 	scrolled = clamp (((signed)FinaleCount-230)*fwidth/640, 0, fwidth);
 
@@ -1245,7 +1244,7 @@ void F_Drawer (void)
 			FTextureID picnum = TexMan.CheckForTexture (FinaleFlat, FTexture::TEX_Flat, FTextureManager::TEXMAN_Overridable);
 			if (picnum.isValid())
 			{
-				screen->FlatFill (0,0, SCREENWIDTH, SCREENHEIGHT, TexMan(picnum));
+				screen->FlatFill (0,0, SCREENWIDTH, SCREENHEIGHT, TexMan[picnum]);
 			}
 			else
 			{
@@ -1332,25 +1331,24 @@ void F_Drawer (void)
 	if (picname != NULL)
 	{
 		FTexture *pic = TexMan[picname];
-		screen->DrawTexture (pic, 0, 0,
-			DTA_VirtualWidth, pic->GetWidth(),
-			DTA_VirtualHeight, pic->GetHeight(),
-			TAG_DONE);
+		screen->DrawTexture (pic, 0, 0, DTA_Fullscreen, true, TAG_DONE);
 		screen->FillBorder (NULL);
 		if (FinaleStage >= 14)
 		{ // Chess pic, draw the correct character graphic
+			double w = pic->GetScaledWidthDouble();
+			double h = pic->GetScaledHeightDouble();
 			if (NETWORK_GetState( ) != NETSTATE_SINGLE)
 			{
 				screen->DrawTexture (TexMan["CHESSALL"], 20, 0,
-					DTA_VirtualWidth, pic->GetWidth(),
-					DTA_VirtualHeight, pic->GetHeight(), TAG_DONE);
+					DTA_VirtualWidthF, w,
+					DTA_VirtualHeightF, h, TAG_DONE);
 			}
 			else if (players[consoleplayer].CurrentPlayerClass > 0)
 			{
 				picname = players[consoleplayer].CurrentPlayerClass == 1 ? "CHESSC" : "CHESSM";
 				screen->DrawTexture (TexMan[picname], 60, 0,
-					DTA_VirtualWidth, pic->GetWidth(),
-					DTA_VirtualHeight, pic->GetHeight(), TAG_DONE);
+					DTA_VirtualWidthF, w,
+					DTA_VirtualHeightF, h, TAG_DONE);
 			}
 		}
 	}

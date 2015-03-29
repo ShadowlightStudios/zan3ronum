@@ -35,6 +35,7 @@
 #include "bitmap.h"
 #include "templates.h"
 #include "r_translate.h"
+#include "v_palette.h"
 
 
 //===========================================================================
@@ -70,86 +71,6 @@ void iCopyColors(BYTE *pout, const BYTE *pin, int count, int step, FCopyInfo *in
 		}
 		break;
 
-	case BLEND_INVERSEMAP:
-		// Doom's inverted invulnerability map
-		for(i=0;i<count;i++)
-		{
-			a = TSrc::A(pin);
-			if (TBlend::ProcessAlpha0() || a)
-			{
-				gray = clamp<int>(255 - TSrc::Gray(pin),0,255);
-
-				TBlend::OpC(pout[TDest::RED], gray, a, inf);
-				TBlend::OpC(pout[TDest::GREEN], gray, a, inf);
-				TBlend::OpC(pout[TDest::BLUE], gray, a, inf);
-				TBlend::OpA(pout[TDest::ALPHA], a, inf);
-			}
-			pout+=4;
-			pin+=step;
-		}
-		break;
-
-	case BLEND_GOLDMAP:
-		// Heretic's golden invulnerability map
-		for(i=0;i<count;i++)
-		{
-			a = TSrc::A(pin);
-			if (TBlend::ProcessAlpha0() || a)
-			{
-				gray = TSrc::Gray(pin);
-				r=clamp<int>(gray+(gray>>1),0,255);
-				g=clamp<int>(gray-(gray>>2),0,255);
-
-				TBlend::OpC(pout[TDest::RED], r, a, inf);
-				TBlend::OpC(pout[TDest::GREEN], g, a, inf);
-				TBlend::OpC(pout[TDest::BLUE], 0, a, inf);
-				TBlend::OpA(pout[TDest::ALPHA], a, inf);
-			}
-			pout+=4;
-			pin+=step;
-		}
-		break;
-
-	case BLEND_REDMAP:
-		// Skulltag's red Doomsphere map
-		for(i=0;i<count;i++)
-		{
-			a = TSrc::A(pin);
-			if (TBlend::ProcessAlpha0() || a)
-			{
-				gray = TSrc::Gray(pin);
-				r=clamp<int>(gray+(gray>>1),0,255);
-
-				TBlend::OpC(pout[TDest::RED], r, a, inf);
-				TBlend::OpC(pout[TDest::GREEN], 0, a, inf);
-				TBlend::OpC(pout[TDest::BLUE], 0, a, inf);
-				TBlend::OpA(pout[TDest::ALPHA], a, inf);
-			}
-			pout+=4;
-			pin+=step;
-		}
-		break;
-
-	case BLEND_GREENMAP:
-		// Skulltags's Guardsphere map
-		for(i=0;i<count;i++)
-		{
-			a = TSrc::A(pin);
-			if (TBlend::ProcessAlpha0() || a)
-			{
-				gray = TSrc::Gray(pin);
-				r=clamp<int>(gray+(gray>>1),0,255);
-
-				TBlend::OpC(pout[TDest::RED], r, a, inf);
-				TBlend::OpC(pout[TDest::GREEN], r, a, inf);
-				TBlend::OpC(pout[TDest::BLUE], gray, a, inf);
-				TBlend::OpA(pout[TDest::ALPHA], a, inf);
-			}
-			pout+=4;
-			pin+=step;
-		}
-		break;
-
 	case BLEND_ICEMAP:
 		// Create the ice translation table, based on Hexen's.
 		// Since this is done in True Color the purplish tint is fully preserved - even in Doom!
@@ -171,7 +92,28 @@ void iCopyColors(BYTE *pout, const BYTE *pin, int count, int step, FCopyInfo *in
 		break;
 
 	default:
-		if (inf->blend >= BLEND_DESATURATE1 && inf->blend<=BLEND_DESATURATE31)
+
+		if (inf->blend >= BLEND_SPECIALCOLORMAP1)
+		{
+			FSpecialColormap *cm = &SpecialColormaps[inf->blend - BLEND_SPECIALCOLORMAP1];
+			for(i=0;i<count;i++)
+			{
+				a = TSrc::A(pin);
+				if (TBlend::ProcessAlpha0() || a)
+				{
+					gray = clamp<int>(TSrc::Gray(pin),0,255);
+
+					PalEntry pe = cm->GrayscaleToColor[gray];
+					TBlend::OpC(pout[TDest::RED], pe.r , a, inf);
+					TBlend::OpC(pout[TDest::GREEN], pe.g, a, inf);
+					TBlend::OpC(pout[TDest::BLUE], pe.b, a, inf);
+					TBlend::OpA(pout[TDest::ALPHA], a, inf);
+				}
+				pout+=4;
+				pin+=step;
+			}
+		}
+		else if (inf->blend >= BLEND_DESATURATE1 && inf->blend<=BLEND_DESATURATE31)
 		{
 			// Desaturated light settings.
 			fac=inf->blend-BLEND_DESATURATE1+1;
@@ -338,7 +280,7 @@ static const CopyFunc copyfuncs[][9]={
 // Clips the copy area for CopyPixelData functions
 //
 //===========================================================================
-bool ClipCopyPixelRect(int texwidth, int texheight, int &originx, int &originy,
+bool ClipCopyPixelRect(const FClipRect *cr, int &originx, int &originy,
 						const BYTE *&patch, int &srcwidth, int &srcheight, 
 						int &pstep_x, int &pstep_y, int rotate)
 {
@@ -348,6 +290,7 @@ bool ClipCopyPixelRect(int texwidth, int texheight, int &originx, int &originy,
 	int step_x;
 	int step_y;
 
+	assert(cr != NULL);
 	// First adjust the settings for the intended rotation
 	switch (rotate)
 	{
@@ -420,34 +363,70 @@ bool ClipCopyPixelRect(int texwidth, int texheight, int &originx, int &originy,
 	pstep_y = step_y;
 
 	// clip source rectangle to destination
-	if (originx<0)
+	if (originx < cr->x)
 	{
-		srcwidth+=originx;
-		patch-=originx*step_x;
-		originx=0;
+		int skip = cr->x - originx;
+
+		srcwidth -= skip;
+		patch +=skip * step_x;
+		originx = cr->x;
 		if (srcwidth<=0) return false;
 	}
-	if (originx+srcwidth>texwidth)
+	if (originx + srcwidth > cr->x + cr->width)
 	{
-		srcwidth=texwidth-originx;
+		srcwidth = cr->x + cr->width - originx;
 		if (srcwidth<=0) return false;
 	}
 		
-	if (originy<0)
+	if (originy < cr->y)
 	{
-		srcheight+=originy;
-		patch-=originy*step_y;
-		originy=0;
-		if (srcheight<=0) return false;
+		int skip = cr->y - originy;
+
+		srcheight -= skip;
+		patch += skip*step_y;
+		originy = cr->y;
+		if (srcheight <= 0) return false;
 	}
-	if (originy+srcheight>texheight)
+	if (originy + srcheight > cr->y + cr->height)
 	{
-		srcheight=texheight-originy;
-		if (srcheight<=0) return false;
+		srcheight = cr->y + cr->height - originy;
+		if (srcheight <= 0) return false;
 	}
+
 	return true;
 }
 
+
+//===========================================================================
+//
+// 
+//
+//===========================================================================
+
+bool FClipRect::Intersect(int ix, int iy, int iw, int ih)
+{
+	if (ix > x)
+	{
+		width -= (ix-x);
+		x = ix;
+	}
+	else
+	{
+		iw -= (x-ix);
+	}
+	if (iy > y)
+	{
+		height -= (iy-y);
+		y = iy;
+	}
+	else
+	{
+		ih -= (x-ih);
+	}
+	if (iw < width) width = iw;
+	if (ih < height) height = ih;
+	return width > 0 && height > 0;
+}
 
 //===========================================================================
 //
@@ -457,7 +436,7 @@ bool ClipCopyPixelRect(int texwidth, int texheight, int &originx, int &originy,
 void FBitmap::CopyPixelDataRGB(int originx, int originy, const BYTE *patch, int srcwidth, 
 							   int srcheight, int step_x, int step_y, int rotate, int ct, FCopyInfo *inf)
 {
-	if (ClipCopyPixelRect(Width, Height, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
+	if (ClipCopyPixelRect(&ClipRect, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
 	{
 		BYTE *buffer = data + 4 * originx + Pitch * originy;
 		int op = inf==NULL? OP_COPY : inf->op;
@@ -518,11 +497,12 @@ static const CopyPalettedFunc copypalettedfuncs[]=
 void FBitmap::CopyPixelData(int originx, int originy, const BYTE * patch, int srcwidth, int srcheight, 
 										int step_x, int step_y, int rotate, PalEntry * palette, FCopyInfo *inf)
 {
-	if (ClipCopyPixelRect(Width, Height, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
+	if (ClipCopyPixelRect(&ClipRect, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
 	{
 		BYTE *buffer = data + 4*originx + Pitch*originy;
 		PalEntry penew[256];
 
+		memset(penew, 0, sizeof(penew));
 		if (inf && inf->blend)
 		{
 			iCopyColors<cPalEntry, cBGRA, bCopy>((BYTE*)penew, (const BYTE*)palette, 256, 4, inf);
@@ -534,3 +514,17 @@ void FBitmap::CopyPixelData(int originx, int originy, const BYTE * patch, int sr
 	}
 }
 
+//===========================================================================
+//
+// Clear buffer
+//
+//===========================================================================
+void FBitmap::Zero()
+{
+	BYTE *buffer = data;
+	for (int y = ClipRect.y; y < ClipRect.height; ++y)
+	{
+		memset(buffer + ClipRect.x, 0, ClipRect.width*4);
+		buffer += Pitch;
+	}
+}

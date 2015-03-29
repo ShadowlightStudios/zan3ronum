@@ -49,13 +49,10 @@
 #include "m_bbox.h"
 #include "r_main.h"
 #include "i_system.h"
+#include "po_man.h"
 
 static const int PO_LINE_START = 1;
 static const int PO_LINE_EXPLICIT = 5;
-
-// Vertices within this distance of each other vertically and horizontally
-// will be considered as the same vertex.
-const fixed_t VERTEX_EPSILON = 6;
 
 #if 0
 #define D(x) x
@@ -124,7 +121,7 @@ void FNodeBuilder::MakeSegsFromSides ()
 
 	for (i = 0; i < Level.NumLines; ++i)
 	{
-		if (Level.Lines[i].sidenum[0] != NO_SIDE)
+		if (Level.Lines[i].sidedef[0] != NULL)
 		{
 			CreateSeg (i, 0);
 		}
@@ -133,10 +130,10 @@ void FNodeBuilder::MakeSegsFromSides ()
 			Printf ("Linedef %d does not have a front side.\n", i);
 		}
 
-		if (Level.Lines[i].sidenum[1] != NO_SIDE)
+		if (Level.Lines[i].sidedef[1] != NULL)
 		{
 			j = CreateSeg (i, 1);
-			if (Level.Lines[i].sidenum[0] != NO_SIDE)
+			if (Level.Lines[i].sidedef[0] != NULL)
 			{
 				Segs[j-1].partner = j;
 				Segs[j].partner = j-1;
@@ -173,7 +170,8 @@ int FNodeBuilder::CreateSeg (int linenum, int sidenum)
 		seg.v1 = (int)(size_t)Level.Lines[linenum].v2;
 	}
 	seg.linedef = linenum;
-	seg.sidedef = Level.Lines[linenum].sidenum[sidenum];
+	side_t *sd = Level.Lines[linenum].sidedef[sidenum];
+	seg.sidedef = sd != NULL? int(sd - sides) : int(NO_SIDE);
 	seg.nextforvert = Vertices[seg.v1].segs;
 	seg.nextforvert2 = Vertices[seg.v2].segs2;
 
@@ -183,6 +181,86 @@ int FNodeBuilder::CreateSeg (int linenum, int sidenum)
 
 	return segnum;
 }
+
+// For every seg, create FPrivSegs and FPrivVerts.
+
+void FNodeBuilder::AddSegs(seg_t *segs, int numsegs)
+{
+	assert(numsegs > 0);
+
+	for (int i = 0; i < numsegs; ++i)
+	{
+		FPrivSeg seg;
+		FPrivVert vert;
+		int segnum;
+
+		seg.next = DWORD_MAX;
+		seg.loopnum = 0;
+		seg.partner = DWORD_MAX;
+		seg.hashnext = NULL;
+		seg.planefront = false;
+		seg.planenum = DWORD_MAX;
+		seg.storedseg = DWORD_MAX;
+
+		seg.frontsector = segs[i].frontsector;
+		seg.backsector = segs[i].backsector;
+		vert.x = segs[i].v1->x;
+		vert.y = segs[i].v1->y;
+		seg.v1 = VertexMap->SelectVertexExact(vert);
+		vert.x = segs[i].v2->x;
+		vert.y = segs[i].v2->y;
+		seg.v2 = VertexMap->SelectVertexExact(vert);
+		seg.linedef = int(segs[i].linedef - Level.Lines);
+		seg.sidedef = segs[i].sidedef != NULL ? int(segs[i].sidedef - Level.Sides) : int(NO_SIDE);
+		seg.nextforvert = Vertices[seg.v1].segs;
+		seg.nextforvert2 = Vertices[seg.v2].segs2;
+
+		segnum = (int)Segs.Push(seg);
+		Vertices[seg.v1].segs = segnum;
+		Vertices[seg.v2].segs2 = segnum;
+	}
+}
+
+void FNodeBuilder::AddPolySegs(FPolySeg *segs, int numsegs)
+{
+	assert(numsegs > 0);
+
+	for (int i = 0; i < numsegs; ++i)
+	{
+		FPrivSeg seg;
+		FPrivVert vert;
+		int segnum;
+
+		seg.next = DWORD_MAX;
+		seg.loopnum = 0;
+		seg.partner = DWORD_MAX;
+		seg.hashnext = NULL;
+		seg.planefront = false;
+		seg.planenum = DWORD_MAX;
+		seg.storedseg = DWORD_MAX;
+
+		side_t *side = segs[i].wall;
+		assert(side != NULL);
+
+		seg.frontsector = side->sector;
+		seg.backsector = side->linedef->frontsector == side->sector ? side->linedef->backsector : side->linedef->frontsector;
+		vert.x = segs[i].v1.x;
+		vert.y = segs[i].v1.y;
+		seg.v1 = VertexMap->SelectVertexExact(vert);
+		vert.x = segs[i].v2.x;
+		vert.y = segs[i].v2.y;
+		seg.v2 = VertexMap->SelectVertexExact(vert);
+		seg.linedef = int(side->linedef - Level.Lines);
+		seg.sidedef = int(side - Level.Sides);
+		seg.nextforvert = Vertices[seg.v1].segs;
+		seg.nextforvert2 = Vertices[seg.v2].segs2;
+
+		segnum = (int)Segs.Push(seg);
+		Vertices[seg.v1].segs = segnum;
+		Vertices[seg.v2].segs2 = segnum;
+	}
+}
+
 
 // Group colinear segs together so that only one seg per line needs to be checked
 // by SelectSplitter().
@@ -274,6 +352,27 @@ void FNodeBuilder::GroupSegPlanes ()
 	D(Printf ("%d planes from %d segs\n", planenum, Segs.Size()));
 
 	PlaneChecked.Reserve ((planenum + 7) / 8);
+}
+
+// Just create one plane per seg. Should be good enough for mini BSPs.
+void FNodeBuilder::GroupSegPlanesSimple()
+{
+	Planes.Resize(Segs.Size());
+	for (int i = 0; i < (int)Segs.Size(); ++i)
+	{
+		FPrivSeg *seg = &Segs[i];
+		FSimpleLine *pline = &Planes[i];
+		seg->next = i+1;
+		seg->hashnext = NULL;
+		seg->planenum = i;
+		seg->planefront = true;
+		pline->x = Vertices[seg->v1].x;
+		pline->y = Vertices[seg->v1].y;
+		pline->dx = Vertices[seg->v2].x - Vertices[seg->v1].x;
+		pline->dy = Vertices[seg->v2].y - Vertices[seg->v1].y;
+	}
+	Segs.Last().next = DWORD_MAX;
+	PlaneChecked.Reserve((Segs.Size() + 7) / 8);
 }
 
 // Find "loops" of segs surrounding polyobject's origin. Note that a polyobject's origin
@@ -514,6 +613,10 @@ void FNodeBuilder::FLevel::FindMapBounds ()
 	MaxY = maxy;
 }
 
+FNodeBuilder::IVertexMap::~IVertexMap()
+{
+}
+
 FNodeBuilder::FVertexMap::FVertexMap (FNodeBuilder &builder,
 	fixed_t minx, fixed_t miny, fixed_t maxx, fixed_t maxy)
 	: MyBuilder(builder)
@@ -558,8 +661,12 @@ int FNodeBuilder::FVertexMap::SelectVertexClose (FNodeBuilder::FPrivVert &vert)
 
 	for (i = 0; i < block.Size(); ++i)
 	{
+#if VERTEX_EPSILON <= 1
+		if (vertices[block[i]].x == vert.x && vertices[block[i]].y == vert.y)
+#else
 		if (abs(vertices[block[i]].x - vert.x) < VERTEX_EPSILON &&
 			abs(vertices[block[i]].y - vert.y) < VERTEX_EPSILON)
+#endif
 		{
 			return block[i];
 		}
@@ -608,4 +715,53 @@ int FNodeBuilder::FVertexMap::InsertVertex (FNodeBuilder::FPrivVert &vert)
 	}
 
 	return vertnum;
+}
+
+FNodeBuilder::FVertexMapSimple::FVertexMapSimple(FNodeBuilder &builder)
+	: MyBuilder(builder)
+{
+}
+
+int FNodeBuilder::FVertexMapSimple::SelectVertexExact(FNodeBuilder::FPrivVert &vert)
+{
+	FPrivVert *verts = &MyBuilder.Vertices[0];
+	unsigned int stop = MyBuilder.Vertices.Size();
+
+	for (unsigned int i = 0; i < stop; ++i)
+	{
+		if (verts[i].x == vert.x && verts[i].y == vert.y)
+		{
+			return i;
+		}
+	}
+	// Not present: add it!
+	return InsertVertex(vert);
+}
+
+int FNodeBuilder::FVertexMapSimple::SelectVertexClose(FNodeBuilder::FPrivVert &vert)
+{
+	FPrivVert *verts = &MyBuilder.Vertices[0];
+	unsigned int stop = MyBuilder.Vertices.Size();
+
+	for (unsigned int i = 0; i < stop; ++i)
+	{
+#if VERTEX_EPSILON <= 1
+		if (verts[i].x == vert.x && verts[i].y == y)
+#else
+		if (abs(verts[i].x - vert.x) < VERTEX_EPSILON &&
+			abs(verts[i].y - vert.y) < VERTEX_EPSILON)
+#endif
+		{
+			return i;
+		}
+	}
+	// Not present: add it!
+	return InsertVertex (vert);
+}
+
+int FNodeBuilder::FVertexMapSimple::InsertVertex (FNodeBuilder::FPrivVert &vert)
+{
+	vert.segs = DWORD_MAX;
+	vert.segs2 = DWORD_MAX;
+	return (int)MyBuilder.Vertices.Push (vert);
 }

@@ -479,8 +479,8 @@ fixed_t sector_t::FindShortestTextureAround () const
 	{
 		if (lines[i]->flags & ML_TWOSIDED)
 		{
-			CheckShortestTex (sides[lines[i]->sidenum[0]].GetTexture(side_t::bottom), minsize);
-			CheckShortestTex (sides[lines[i]->sidenum[1]].GetTexture(side_t::bottom), minsize);
+			CheckShortestTex (lines[i]->sidedef[0]->GetTexture(side_t::bottom), minsize);
+			CheckShortestTex (lines[i]->sidedef[1]->GetTexture(side_t::bottom), minsize);
 		}
 	}
 	return minsize < FIXED_MAX ? minsize : TexMan[0]->GetHeight() * FRACUNIT;
@@ -505,8 +505,8 @@ fixed_t sector_t::FindShortestUpperAround () const
 	{
 		if (lines[i]->flags & ML_TWOSIDED)
 		{
-			CheckShortestTex (sides[lines[i]->sidenum[0]].GetTexture(side_t::top), minsize);
-			CheckShortestTex (sides[lines[i]->sidenum[1]].GetTexture(side_t::top), minsize);
+			CheckShortestTex (lines[i]->sidedef[0]->GetTexture(side_t::top), minsize);
+			CheckShortestTex (lines[i]->sidedef[1]->GetTexture(side_t::top), minsize);
 		}
 	}
 	return minsize < FIXED_MAX ? minsize : TexMan[0]->GetHeight() * FRACUNIT;
@@ -788,3 +788,38 @@ void sector_t::ClosestPoint(fixed_t fx, fixed_t fy, fixed_t &ox, fixed_t &oy) co
 	ox = fixed_t(bestx);
 	oy = fixed_t(besty);
 }
+
+
+bool sector_t::PlaneMoving(int pos)
+{
+	if (pos == floor)
+		return (floordata != NULL || (planes[floor].Flags & PLANEF_BLOCKED));
+	else
+		return (ceilingdata != NULL || (planes[ceiling].Flags & PLANEF_BLOCKED));
+}
+
+// [BB] Backported from ZDoom revision 3600.
+sector_t *sector_t::GetHeightSec() const 
+{
+	if (heightsec == NULL)
+	{
+		return NULL;
+	}
+	if (heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC)
+	{
+		return NULL;
+	}
+	if (e && e->XFloor.ffloors.Size())
+	{
+		// If any of these fake floors render their planes, ignore heightsec.
+		for (unsigned i = e->XFloor.ffloors.Size(); i-- > 0; )
+		{
+			if ((e->XFloor.ffloors[i]->flags & (FF_EXISTS | FF_RENDERPLANES)) == (FF_EXISTS | FF_RENDERPLANES))
+			{
+				return NULL;
+			}
+		}
+	}
+	return heightsec;
+}
+

@@ -43,6 +43,12 @@ static FRandom pr_lightflash ("LightFlash");
 static FRandom pr_strobeflash ("StrobeFlash");
 static FRandom pr_fireflicker ("FireFlicker");
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 IMPLEMENT_CLASS (DLighting)
 
 DLighting::DLighting ()
@@ -60,9 +66,11 @@ DLighting::DLighting (sector_t *sector)
 	bNotMapSpawned = ( level.time > 0 );
 }
 
+//-----------------------------------------------------------------------------
 //
 // FIRELIGHT FLICKER
 //
+//-----------------------------------------------------------------------------
 
 IMPLEMENT_CLASS (DFireFlicker)
 
@@ -77,9 +85,12 @@ void DFireFlicker::Serialize (FArchive &arc)
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // T_FireFlicker
 //
+//-----------------------------------------------------------------------------
+
 void DFireFlicker::Tick ()
 {
 	int amount;
@@ -90,9 +101,9 @@ void DFireFlicker::Tick ()
 
 		// [RH] Shouldn't this be (m_MaxLight - amount < m_MinLight)?
 		if (m_Sector->lightlevel - amount < m_MinLight)
-			m_Sector->lightlevel = m_MinLight;
+			m_Sector->SetLightLevel(m_MinLight);
 		else
-			m_Sector->lightlevel = m_MaxLight - amount;
+			m_Sector->SetLightLevel(m_MaxLight - amount);
 
 		m_Count = 4;
 	}
@@ -104,9 +115,12 @@ void DFireFlicker::UpdateToClient( ULONG ulClient )
 	SERVERCOMMANDS_DoSectorLightFireFlicker( ULONG( m_Sector - sectors ), m_MaxLight, m_MinLight, ulClient, SVCF_ONLYTHISCLIENT );
 }
 
+//-----------------------------------------------------------------------------
 //
 // P_SpawnFireFlicker
 //
+//-----------------------------------------------------------------------------
+
 DFireFlicker::DFireFlicker (sector_t *sector)
 	: DLighting (sector)
 {
@@ -131,9 +145,12 @@ DFireFlicker::DFireFlicker (sector_t *sector, int upper, int lower)
 		SERVERCOMMANDS_DoSectorLightFireFlicker( ULONG( sector - sectors ), m_MaxLight, m_MinLight );
 }
 
+//-----------------------------------------------------------------------------
 //
 // [RH] flickering light like Hexen's
 //
+//-----------------------------------------------------------------------------
+
 IMPLEMENT_CLASS (DFlicker)
 
 DFlicker::DFlicker ()
@@ -146,6 +163,11 @@ void DFlicker::Serialize (FArchive &arc)
 	arc << m_Count << m_MaxLight << m_MinLight;
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 void DFlicker::Tick ()
 {
@@ -155,12 +177,12 @@ void DFlicker::Tick ()
 	}
 	else if (m_Sector->lightlevel == m_MaxLight)
 	{
-		m_Sector->lightlevel = m_MinLight;
+		m_Sector->SetLightLevel(m_MinLight);
 		m_Count = (pr_flicker()&7)+1;
 	}
 	else
 	{
-		m_Sector->lightlevel = m_MaxLight;
+		m_Sector->SetLightLevel(m_MaxLight);
 		m_Count = (pr_flicker()&31)+1;
 	}
 }
@@ -170,6 +192,12 @@ void DFlicker::UpdateToClient( ULONG ulClient )
 {
 	SERVERCOMMANDS_DoSectorLightFlicker( ULONG( m_Sector - sectors ), m_MaxLight, m_MinLight, ulClient, SVCF_ONLYTHISCLIENT );
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 DFlicker::DFlicker (sector_t *sector, int upper, int lower)
 	: DLighting (sector)
@@ -184,6 +212,12 @@ DFlicker::DFlicker (sector_t *sector, int upper, int lower)
 		SERVERCOMMANDS_DoSectorLightFlicker( ULONG( sector - sectors ), m_MaxLight, m_MinLight );
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 void EV_StartLightFlickering (int tag, int upper, int lower)
 {
 	int secnum;
@@ -196,9 +230,11 @@ void EV_StartLightFlickering (int tag, int upper, int lower)
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // BROKEN LIGHT FLASHING
 //
+//-----------------------------------------------------------------------------
 
 IMPLEMENT_CLASS (DLightFlash)
 
@@ -212,22 +248,25 @@ void DLightFlash::Serialize (FArchive &arc)
 	arc << m_Count << m_MaxLight << m_MaxTime << m_MinLight << m_MinTime;
 }
 
+//-----------------------------------------------------------------------------
 //
 // T_LightFlash
 // Do flashing lights.
 //
+//-----------------------------------------------------------------------------
+
 void DLightFlash::Tick ()
 {
 	if (--m_Count == 0)
 	{
 		if (m_Sector->lightlevel == m_MaxLight)
 		{
-			m_Sector->lightlevel = m_MinLight;
+			m_Sector->SetLightLevel(m_MinLight);
 			m_Count = (pr_lightflash() & m_MinTime) + 1;
 		}
 		else
 		{
-			m_Sector->lightlevel = m_MaxLight;
+			m_Sector->SetLightLevel(m_MaxLight);
 			m_Count = (pr_lightflash() & m_MaxTime) + 1;
 		}
 	}
@@ -239,9 +278,12 @@ void DLightFlash::UpdateToClient( ULONG ulClient )
 	SERVERCOMMANDS_DoSectorLightLightFlash( ULONG( m_Sector - sectors ), m_MaxLight, m_MinLight, ulClient, SVCF_ONLYTHISCLIENT ); 
 }
 
+//-----------------------------------------------------------------------------
 //
 // P_SpawnLightFlash
 //
+//-----------------------------------------------------------------------------
+
 DLightFlash::DLightFlash (sector_t *sector)
 	: DLighting (sector)
 {
@@ -273,9 +315,11 @@ DLightFlash::DLightFlash (sector_t *sector, int min, int max)
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // STROBE LIGHT FLASHING
 //
+//-----------------------------------------------------------------------------
 
 IMPLEMENT_CLASS (DStrobe)
 
@@ -289,21 +333,24 @@ void DStrobe::Serialize (FArchive &arc)
 	arc << m_Count << m_MaxLight << m_MinLight << m_DarkTime << m_BrightTime;
 }
 
+//-----------------------------------------------------------------------------
 //
 // T_StrobeFlash
 //
+//-----------------------------------------------------------------------------
+
 void DStrobe::Tick ()
 {
 	if (--m_Count == 0)
 	{
 		if (m_Sector->lightlevel == m_MinLight)
 		{
-			m_Sector->lightlevel = m_MaxLight;
+			m_Sector->SetLightLevel(m_MaxLight);
 			m_Count = m_BrightTime;
 		}
 		else
 		{
-			m_Sector->lightlevel = m_MinLight;
+			m_Sector->SetLightLevel(m_MinLight);
 			m_Count = m_DarkTime;
 		}
 	}
@@ -321,9 +368,12 @@ void DStrobe::SetCount( LONG lCount )
 	m_Count = lCount;
 }
 
+//-----------------------------------------------------------------------------
 //
 // Hexen-style constructor
 //
+//-----------------------------------------------------------------------------
+
 DStrobe::DStrobe (sector_t *sector, int upper, int lower, int utics, int ltics)
 	: DLighting (sector)
 {
@@ -338,9 +388,12 @@ DStrobe::DStrobe (sector_t *sector, int upper, int lower, int utics, int ltics)
 		SERVERCOMMANDS_DoSectorLightStrobe( ULONG( sector - sectors ), m_DarkTime, m_BrightTime, m_MaxLight, m_MinLight, m_Count );
 }
 
+//-----------------------------------------------------------------------------
 //
 // Doom-style constructor
 //
+//-----------------------------------------------------------------------------
+
 DStrobe::DStrobe (sector_t *sector, int utics, int ltics, bool inSync)
 	: DLighting (sector)
 {
@@ -362,10 +415,13 @@ DStrobe::DStrobe (sector_t *sector, int utics, int ltics, bool inSync)
 
 
 
+//-----------------------------------------------------------------------------
 //
 // Start strobing lights (usually from a trigger)
 // [RH] Made it more configurable.
 //
+//-----------------------------------------------------------------------------
+
 void EV_StartLightStrobing (int tag, int upper, int lower, int utics, int ltics)
 {
 	int secnum;
@@ -397,10 +453,13 @@ void EV_StartLightStrobing (int tag, int utics, int ltics)
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // TURN LINE'S TAG LIGHTS OFF
 // [RH] Takes a tag instead of a line
 //
+//-----------------------------------------------------------------------------
+
 void EV_TurnTagLightsOff (int tag)
 {
 	int i;
@@ -420,7 +479,7 @@ void EV_TurnTagLightsOff (int tag)
 			if (tsec->lightlevel < min)
 				min = tsec->lightlevel;
 		}
-		sector->lightlevel = min;
+		sector->SetLightLevel(min);
 
 		// [BC] Flag the sector as having its light level altered. That way, when clients
 		// connect, we can tell them about the updated light level.
@@ -433,10 +492,13 @@ void EV_TurnTagLightsOff (int tag)
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // TURN LINE'S TAG LIGHTS ON
 // [RH] Takes a tag instead of a line
 //
+//-----------------------------------------------------------------------------
+
 void EV_LightTurnOn (int tag, int bright)
 {
 	int secnum = -1;
@@ -445,6 +507,7 @@ void EV_LightTurnOn (int tag, int bright)
 	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0) 
 	{
 		sector_t *sector = sectors + secnum;
+		int tbright = bright; //jff 5/17/98 search for maximum PER sector
 
 		// bright = -1 means to search ([RH] Not 0)
 		// for highest light level
@@ -453,7 +516,6 @@ void EV_LightTurnOn (int tag, int bright)
 		{
 			int j;
 
-			bright = 0;
 			for (j = 0; j < sector->linecount; j++)
 			{
 				sector_t *temp = getNextSector (sector->lines[j], sector);
@@ -461,11 +523,18 @@ void EV_LightTurnOn (int tag, int bright)
 				if (!temp)
 					continue;
 
-				if (temp->lightlevel > bright)
-					bright = temp->lightlevel;
+				if (temp->lightlevel > tbright)
+					tbright = temp->lightlevel;
 			}
 		}
-		sector->lightlevel = clamp (bright, 0, 255);
+		sector->SetLightLevel(tbright);
+
+		//jff 5/17/98 unless compatibility optioned
+		//then maximum near ANY tagged sector
+		if (i_compatflags & COMPATF_LIGHT)
+		{
+			bright = tbright;
+		}
 
 		// [BC] Flag the sector as having its light level altered. That way, when clients
 		// connect, we can tell them about the updated light level.
@@ -477,6 +546,8 @@ void EV_LightTurnOn (int tag, int bright)
 	}
 }
 
+//-----------------------------------------------------------------------------
+//
 // killough 10/98
 //
 // EV_LightTurnOnPartway
@@ -487,7 +558,7 @@ void EV_LightTurnOn (int tag, int bright)
 // Sets the light to min on 0, max on 1, and interpolates in-between.
 // Used for doors with gradual lighting effects.
 //
-// Returns true
+//-----------------------------------------------------------------------------
 
 void EV_LightTurnOnPartway (int tag, fixed_t frac)
 {
@@ -516,16 +587,19 @@ void EV_LightTurnOnPartway (int tag, fixed_t frac)
 				}
 			}
 		}
-		sector->lightlevel = (BYTE)DMulScale16 (frac, bright, FRACUNIT-frac, min);
+		sector->SetLightLevel(DMulScale16 (frac, bright, FRACUNIT-frac, min));
 	}
 }
 
 
+//-----------------------------------------------------------------------------
 //
 // [RH] New function to adjust tagged sectors' light levels
 //		by a relative amount. Light levels are clipped to
 //		within the range 0-255 inclusive.
 //
+//-----------------------------------------------------------------------------
+
 void EV_LightChange (int tag, int value)
 {
 	int secnum = -1;
@@ -533,7 +607,7 @@ void EV_LightChange (int tag, int value)
 	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
 	{
 		int newlight = sectors[secnum].lightlevel + value;
-		sectors[secnum].lightlevel = clamp (newlight, 0, 255);
+		sectors[secnum].SetLightLevel(newlight);
 
 		// [BC] Flag the sector as having its light level altered. That way, when clients
 		// connect, we can tell them about the updated light level.
@@ -546,9 +620,12 @@ void EV_LightChange (int tag, int value)
 }
 
 	
+//-----------------------------------------------------------------------------
 //
 // Spawn glowing light
 //
+//-----------------------------------------------------------------------------
+
 IMPLEMENT_CLASS (DGlow)
 
 DGlow::DGlow ()
@@ -560,6 +637,12 @@ void DGlow::Serialize (FArchive &arc)
 	Super::Serialize (arc);
 	arc << m_Direction << m_MaxLight << m_MinLight;
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 void DGlow::Tick ()
 {
@@ -587,7 +670,7 @@ void DGlow::Tick ()
 		}
 		break;
 	}
-	m_Sector->lightlevel = newlight;
+	m_Sector->SetLightLevel(newlight);
 }
 
 // [BC]
@@ -595,6 +678,12 @@ void DGlow::UpdateToClient( ULONG ulClient )
 {
 	SERVERCOMMANDS_DoSectorLightGlow( ULONG( m_Sector - sectors ), ulClient, SVCF_ONLYTHISCLIENT );
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 DGlow::DGlow (sector_t *sector)
 	: DLighting (sector)
@@ -608,9 +697,11 @@ DGlow::DGlow (sector_t *sector)
 		SERVERCOMMANDS_DoSectorLightGlow( ULONG( sector - sectors ));
 }
 
+//-----------------------------------------------------------------------------
 //
 // [RH] More glowing light, this time appropriate for Hexen-ish uses.
 //
+//-----------------------------------------------------------------------------
 
 IMPLEMENT_CLASS (DGlow2)
 
@@ -624,13 +715,19 @@ void DGlow2::Serialize (FArchive &arc)
 	arc << m_End << m_MaxTics << m_OneShot << m_Start << m_Tics;
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 void DGlow2::Tick ()
 {
 	if (m_Tics++ >= m_MaxTics)
 	{
 		if (m_OneShot)
 		{
-			m_Sector->lightlevel = m_End;
+			m_Sector->SetLightLevel(m_End);
 
 			// [BC] Flag the sector as having its light level altered. That way, when clients
 			// connect, we can tell them about the updated light level.
@@ -652,7 +749,7 @@ void DGlow2::Tick ()
 		}
 	}
 
-	m_Sector->lightlevel = ((m_End - m_Start) * m_Tics) / m_MaxTics + m_Start;
+	m_Sector->SetLightLevel(((m_End - m_Start) * m_Tics) / m_MaxTics + m_Start);
 }
 
 // [BC]
@@ -667,6 +764,12 @@ void DGlow2::SetTics( LONG lTics )
 	m_Tics = lTics;
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 DGlow2::DGlow2 (sector_t *sector, int start, int end, int tics, bool oneshot)
 	: DLighting (sector)
 {
@@ -680,6 +783,12 @@ DGlow2::DGlow2 (sector_t *sector, int start, int end, int tics, bool oneshot)
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_DoSectorLightGlow2( ULONG( sector - sectors ), m_Start, m_End, m_Tics, m_MaxTics, m_OneShot );
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 void EV_StartLightGlowing (int tag, int upper, int lower, int tics)
 {
@@ -709,6 +818,12 @@ void EV_StartLightGlowing (int tag, int upper, int lower, int tics)
 	}
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 void EV_StartLightFading (int tag, int value, int tics)
 {
 	int secnum;
@@ -724,9 +839,9 @@ void EV_StartLightFading (int tag, int value, int tics)
 		{
 			// [CK] Only update if the values are not the same, since this is
 			// an instant function with zero tics.
-			if ( sec->lightlevel != value )
+			if ( sec->GetLightLevel() != value )
 			{
-				sec->lightlevel = value;
+				sec->SetLightLevel(value);
 				sec->bLightChange = true;
 
 				// [CK] Since we know it's instant, this is a simple light level
@@ -747,8 +862,12 @@ void EV_StartLightFading (int tag, int value, int tics)
 }
 
 
+//-----------------------------------------------------------------------------
+//
 // [RH] Phased lighting ala Hexen, but implemented without the help of the Hexen source
 // The effect is a little different, but close enough, I feel.
+//
+//-----------------------------------------------------------------------------
 
 IMPLEMENT_CLASS (DPhased)
 
@@ -762,23 +881,35 @@ void DPhased::Serialize (FArchive &arc)
 	arc << m_BaseLevel << m_Phase;
 }
 
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
+
 void DPhased::Tick ()
 {
 	const int steps = 12;
 
 	if (m_Phase < steps)
-		m_Sector->lightlevel = ((255 - m_BaseLevel) * m_Phase) / steps + m_BaseLevel;
+		m_Sector->SetLightLevel( ((255 - m_BaseLevel) * m_Phase) / steps + m_BaseLevel);
 	else if (m_Phase < 2*steps)
-		m_Sector->lightlevel = ((255 - m_BaseLevel) * (2*steps - m_Phase - 1) / steps
-								+ m_BaseLevel);
+		m_Sector->SetLightLevel( ((255 - m_BaseLevel) * (2*steps - m_Phase - 1) / steps
+								+ m_BaseLevel));
 	else
-		m_Sector->lightlevel = m_BaseLevel;
+		m_Sector->SetLightLevel(m_BaseLevel);
 
 	if (m_Phase == 0)
 		m_Phase = 63;
 	else
 		m_Phase--;
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 int DPhased::PhaseHelper (sector_t *sector, int index, int light, sector_t *prev)
 {
@@ -814,6 +945,12 @@ int DPhased::PhaseHelper (sector_t *sector, int index, int light, sector_t *prev
 		return numsteps;
 	}
 }
+
+//-----------------------------------------------------------------------------
+//
+//
+//
+//-----------------------------------------------------------------------------
 
 // [BC]
 void DPhased::UpdateToClient( ULONG ulClient )

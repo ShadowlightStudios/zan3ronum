@@ -14,8 +14,9 @@ ACTOR Pod 2035
 	+CANPASS +TELESTOMP +DONTMORPH
 	+NOBLOCKMONST +DONTGIB +OLDRADIUSDMG
 	DeathSound "world/podexplode"
+	PushFactor 0.5
 	
-	action native A_PodPain ();
+	action native A_PodPain (class<Actor> podtype = "PodGoo");
 	action native A_RemovePod ();
 	
 	States
@@ -68,8 +69,9 @@ ACTOR PodGenerator 43
 	+NOBLOCKMAP
 	+NOSECTOR
 	+DONTSPLASH
+	AttackSound "world/podgrow"
 
-	action native A_MakePod ();
+	action native A_MakePod (class<Actor> podtype = "Pod");
 
 	States
 	{
@@ -87,9 +89,9 @@ ACTOR TeleGlitterGenerator1 74
 	Game Heretic
 	SpawnID 166
 	+NOBLOCKMAP 
-	+NOSECTOR 
 	+NOGRAVITY
 	+DONTSPLASH
+	+MOVEWITHSECTOR
 	States
 	{
 	Spawn:
@@ -105,9 +107,9 @@ ACTOR TeleGlitterGenerator2 52
 	Game Heretic
 	SpawnID 167
 	+NOBLOCKMAP 
-	+NOSECTOR 
 	+NOGRAVITY
 	+DONTSPLASH
+	+MOVEWITHSECTOR
 	States
 	{
 	Spawn:
@@ -202,7 +204,7 @@ ACTOR VolcanoBlast
 	States
 	{
 	Spawn:
-		VFBL A 4 BRIGHT A_SpawnItemEx("Puffy", random2[BeastPuff]()*0.015625, random2[BeastPuff]()*0.015625, random2[BeastPuff]()*0.015625, 
+		VFBL AB 4 BRIGHT A_SpawnItemEx("Puffy", random2[BeastPuff]()*0.015625, random2[BeastPuff]()*0.015625, random2[BeastPuff]()*0.015625, 
 									0,0,0,0,SXF_ABSOLUTEPOSITION, 64)
 		Loop
 

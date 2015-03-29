@@ -106,17 +106,16 @@
 #include "g_hub.h"
 
 
-
-#include "gl/gl_functions.h"
-
 #ifndef STAT
 #define STAT_NEW(map)
 #define STAT_END(newl)
-#define STAT_SAVE(arc, hub)
+#define STAT_READ(png)
+#define STAT_WRITE(f)
 #else
 void STAT_NEW(const char *lev);
 void STAT_END(const char *newl);
-void STAT_SAVE(FArchive &arc, bool hubload);
+void STAT_READ(PNGHandle *png);
+void STAT_WRITE(FILE *f);
 #endif
 
 EXTERN_CVAR (Float, sv_gravity)
@@ -204,8 +203,7 @@ static void SetEndSequence (char *nextmap, int type)
 		newseq.EndType = type;
 		seqnum = (int)EndSequences.Push (newseq);
 	}
-	strcpy (nextmap, "enDSeQ");
-	*((WORD *)(nextmap + 6)) = (WORD)seqnum;
+	mysnprintf(nextmap, 11, "enDSeQ%04x", (WORD)seqnum);
 }
 
 //==========================================================================
@@ -489,7 +487,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	if (paused)
 	{
 		paused = 0;
-		S_ResumeSound ();
+		S_ResumeSound (false);
 	}
 
 	// [BC] Reset the end level delay.
@@ -521,15 +519,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 			int cstype = SBarInfoScript[SCRIPT_CUSTOM]->GetGameType();
 
 			//Did the user specify a "base"
-			if(cstype == GAME_Heretic)
-			{
-				StatusBar = CreateHereticStatusBar();
-			}
-			else if(cstype == GAME_Hexen)
-			{
-				StatusBar = CreateHexenStatusBar();
-			}
-			else if(cstype == GAME_Strife)
+			if(cstype == GAME_Strife)
 			{
 				StatusBar = CreateStrifeStatusBar();
 			}
@@ -544,17 +534,9 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 		}
 		if (StatusBar == NULL)
 		{
-			if (gameinfo.gametype & GAME_DoomChex)
+			if (gameinfo.gametype & (GAME_DoomChex|GAME_Heretic|GAME_Hexen))
 			{
 				StatusBar = CreateCustomStatusBar (SCRIPT_DEFAULT);
-			}
-			else if (gameinfo.gametype == GAME_Heretic)
-			{
-				StatusBar = CreateHereticStatusBar ();
-			}
-			else if (gameinfo.gametype == GAME_Hexen)
-			{
-				StatusBar = CreateHexenStatusBar ();
 			}
 			else if (gameinfo.gametype == GAME_Strife)
 			{
@@ -668,10 +650,8 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 static FString	nextlevel;
 static int		startpos;	// [RH] Support for multiple starts per level
 extern int		NoWipe;		// [RH] Don't wipe when travelling in hubs
-static bool		startkeepfacing;	// [RH] Support for keeping your facing angle
-static bool		resetinventory;	// Reset the inventory to the player's default for the next level
+static int		changeflags;
 static bool		unloading;
-static bool		g_nomonsters;
 
 //==========================================================================
 //
@@ -682,39 +662,61 @@ static bool		g_nomonsters;
 //==========================================================================
 
 
-void G_ChangeLevel(const char *levelname, int position, bool keepFacing, int nextSkill, 
-				   bool nointermission, bool resetinv, bool nomonsters)
+void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill)
 {
+	level_info_t *nextinfo = NULL;
+
 	if (unloading)
 	{
 		Printf (TEXTCOLOR_RED "Unloading scripts cannot exit the level again.\n");
 		return;
 	}
 
-	nextlevel = levelname;
-
-	if (strncmp(levelname, "enDSeQ", 6))
+	if (strncmp(levelname, "enDSeQ", 6) != 0)
 	{
-		level_info_t *nextinfo = FindLevelInfo (nextlevel)->CheckLevelRedirect ();
-		if (nextinfo)
+		nextinfo = FindLevelInfo (levelname);
+		if (nextinfo != NULL)
 		{
-			nextlevel = nextinfo->mapname;
+			level_info_t *nextredir = nextinfo->CheckLevelRedirect();
+			if (nextredir != NULL)
+			{
+				nextinfo = nextredir;
+				levelname = nextinfo->mapname;
+			}
 		}
 	}
 
-	if (nextSkill != -1) NextSkill = nextSkill;
+	nextlevel = levelname;
 
-	g_nomonsters = nomonsters;
+	if (nextSkill != -1)
+		NextSkill = nextSkill;
 
-	if (nointermission) level.flags |= LEVEL_NOINTERMISSION;
+	if (flags & CHANGELEVEL_NOINTERMISSION)
+	{
+		level.flags |= LEVEL_NOINTERMISSION;
+	}
 
 	cluster_info_t *thiscluster = FindClusterInfo (level.cluster);
-	cluster_info_t *nextcluster = FindClusterInfo (FindLevelInfo (nextlevel)->cluster);
+	cluster_info_t *nextcluster = nextinfo? FindClusterInfo (nextinfo->cluster) : NULL;
 
 	startpos = position;
-	startkeepfacing = keepFacing;
 	gameaction = ga_completed;
-	resetinventory = resetinv;
+		
+	if (nextinfo != NULL) 
+	{
+		if (thiscluster != nextcluster || (thiscluster && !(thiscluster->flags & CLUSTER_HUB)))
+		{
+			if (nextinfo->flags2 & LEVEL2_RESETINVENTORY)
+			{
+				flags |= CHANGELEVEL_RESETINVENTORY;
+			}
+			if (nextinfo->flags2 & LEVEL2_RESETHEALTH)
+			{
+				flags |= CHANGELEVEL_RESETHEALTH;
+			}
+		}
+	}
+	changeflags = flags;
 
 	// [RH] Give scripts a chance to do something
 	unloading = true;
@@ -775,7 +777,6 @@ void G_ChangeLevel(const char *levelname, int position, bool keepFacing, int nex
 			}
 		}
 	}
-	gl_DeleteAllAttachedLights();
 }
 
 //=============================================================================
@@ -862,8 +863,7 @@ void G_ExitLevel (int position, bool keepFacing)
 	// [BB] We need to pass ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) as last
 	// argument, otherwise this flag will be cleared by G_ChangeLevel, no matter if
 	// it is set or not.
-	G_ChangeLevel(G_GetExitMap(), position, keepFacing, 
-	              /*int nextSkill=*/-1, /*bool nointermission=*/false, /*bool resetinventory=*/false, ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) );
+	G_ChangeLevel(G_GetExitMap(), position, ( keepFacing ? CHANGELEVEL_KEEPFACING : 0 ) | ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) ? CHANGELEVEL_NOMONSTERS : 0 ); 
 }
 
 void G_SecretExitLevel (int position) 
@@ -876,8 +876,7 @@ void G_SecretExitLevel (int position)
 	}
 	
 	// [TL] Pass additional parameters to make "nextsecret" CCMD work online.
-	G_ChangeLevel(G_GetSecretExitMap(), position, false,
-	              /*int nextSkill=*/-1, /*bool nointermission=*/false, /*bool resetinventory=*/false, ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) );
+	G_ChangeLevel(G_GetSecretExitMap(), position, ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) ? CHANGELEVEL_NOMONSTERS : 0 );
 }
 
 //==========================================================================
@@ -889,8 +888,6 @@ void SERVERCONSOLE_UpdateScoreboard( void );
 void G_DoCompleted (void)
 {
 	int i; 
-
-	gl_DeleteAllAttachedLights();
 
 	gameaction = ga_nothing;
 
@@ -925,7 +922,7 @@ void G_DoCompleted (void)
 	{
 		if (strncmp (nextlevel, "enDSeQ", 6) == 0)
 		{
-			wminfo.next = FString(nextlevel, 8);
+			wminfo.next = nextlevel;
 			wminfo.LName1 = NULL;
 		}
 		else
@@ -992,13 +989,16 @@ void G_DoCompleted (void)
 	{
 		if (playeringame[i])
 		{ // take away appropriate inventory
-			G_PlayerFinishLevel (i, mode, resetinventory);
+			G_PlayerFinishLevel (i, mode, changeflags);
 		}
 	}
 
 	if (mode == FINISH_SameHub)
 	{ // Remember the level's state for re-entry.
 		G_SnapshotLevel ();
+			// Do not free any global strings this level might reference
+			// while it's not loaded.
+			FBehavior::StaticLockLevelVarStrings();
 	}
 	else
 	{ // Forget the states of all existing levels.
@@ -1121,8 +1121,8 @@ void G_DoLoadLevel (int position, bool autosave)
 	// [BB] Clients shouldn't mess with the team settings on their own.
 	if ( NETWORK_InClientMode ( ) == false )
 	{
-		// [BB] We clear the teams if either DF2_YES_KEEP_TEAMS is not on or if the new level is a lobby.
-		const bool bClearTeams = ( !(dmflags2 & DF2_YES_KEEP_TEAMS) || GAMEMODE_IsLobbyMap( level.mapname ) );
+		// [BB] We clear the teams if either ZADF_YES_KEEP_TEAMS is not on or if the new level is a lobby.
+		const bool bClearTeams = ( !(zadmflags & ZADF_YES_KEEP_TEAMS) || GAMEMODE_IsLobbyMap( level.mapname ) );
 
 		if ( bClearTeams )
 		{
@@ -1455,7 +1455,7 @@ void G_DoLoadLevel (int position, bool autosave)
 //			players[i].bSpectating = true;
 	}
 
-	if (g_nomonsters)
+	if (changeflags & CHANGELEVEL_NOMONSTERS)
 	{
 		level.flags2 |= LEVEL2_NOMONSTERS;
 	}
@@ -1664,11 +1664,11 @@ void G_WorldDone (void)
 	{
 		F_StartFinale (thiscluster->MessageMusic, thiscluster->musicorder,
 			thiscluster->cdtrack, thiscluster->cdid,
-			thiscluster->finaleflat, thiscluster->ExitText,
+			thiscluster->FinaleFlat, thiscluster->ExitText,
 			thiscluster->flags & CLUSTER_EXITTEXTINLUMP,
 			thiscluster->flags & CLUSTER_FINALEPIC,
 			thiscluster->flags & CLUSTER_LOOKUPEXITTEXT,
-			true);
+			true, strtol(nextlevel.GetChars()+6, NULL, 16));
 	}
 	else
 	{
@@ -1682,7 +1682,7 @@ void G_WorldDone (void)
 			{
 				F_StartFinale (nextcluster->MessageMusic, nextcluster->musicorder,
 					nextcluster->cdtrack, nextcluster->cdid,
-					nextcluster->finaleflat, nextcluster->EnterText,
+					nextcluster->FinaleFlat, nextcluster->EnterText,
 					nextcluster->flags & CLUSTER_ENTERTEXTINLUMP,
 					nextcluster->flags & CLUSTER_FINALEPIC,
 					nextcluster->flags & CLUSTER_LOOKUPENTERTEXT,
@@ -1692,7 +1692,7 @@ void G_WorldDone (void)
 			{
 				F_StartFinale (thiscluster->MessageMusic, thiscluster->musicorder,
 					thiscluster->cdtrack, nextcluster->cdid,
-					thiscluster->finaleflat, thiscluster->ExitText,
+					thiscluster->FinaleFlat, thiscluster->ExitText,
 					thiscluster->flags & CLUSTER_EXITTEXTINLUMP,
 					thiscluster->flags & CLUSTER_FINALEPIC,
 					thiscluster->flags & CLUSTER_LOOKUPEXITTEXT,
@@ -1852,7 +1852,7 @@ void G_FinishTravel ()
 			// [BC]
 			lSavedNetID = pawndup->lNetID;
 			pawndup = pawn->player->mo;
-			if (!startkeepfacing)
+			if (!(changeflags & CHANGELEVEL_KEEPFACING))
 			{
 				pawn->angle = pawndup->angle;
 				pawn->pitch = pawndup->pitch;
@@ -1860,9 +1860,9 @@ void G_FinishTravel ()
 			pawn->x = pawndup->x;
 			pawn->y = pawndup->y;
 			pawn->z = pawndup->z;
-			pawn->momx = pawndup->momx;
-			pawn->momy = pawndup->momy;
-			pawn->momz = pawndup->momz;
+			pawn->velx = pawndup->velx;
+			pawn->vely = pawndup->vely;
+			pawn->velz = pawndup->velz;
 			pawn->Sector = pawndup->Sector;
 			pawn->floorz = pawndup->floorz;
 			pawn->ceilingz = pawndup->ceilingz;
@@ -1881,7 +1881,6 @@ void G_FinishTravel ()
 			pawndup->Destroy ();
 			pawn->LinkToWorld ();
 			pawn->AddToHash ();
-			pawn->dynamiclights.Clear();	// remove all dynamic lights from the previous level
 			pawn->SetState(pawn->SpawnState);
 
 			// [BC]
@@ -1894,7 +1893,6 @@ void G_FinishTravel ()
 				inv->ChangeStatNum (STAT_INVENTORY);
 				inv->LinkToWorld ();
 				inv->Travelled ();
-				inv->dynamiclights.Clear();	// remove all dynamic lights from the previous level
 				// [BC] This is necessary, otherwise all the sector links for the inventory
 				// end up being off. This is a problem if the object tries to move or
 				// something, which is the case with bobbing objects.
@@ -2005,10 +2003,10 @@ void G_InitLevelLocals ()
 	level.musicorder = info->musicorder;
 
 	level.LevelName = level.info->LookupLevelName();
-	strncpy (level.nextmap, info->nextmap, 8);
-	level.nextmap[8] = 0;
-	strncpy (level.secretmap, info->secretmap, 8);
-	level.secretmap[8] = 0;
+	strncpy (level.nextmap, info->nextmap, 10);
+	level.nextmap[10] = 0;
+	strncpy (level.secretmap, info->secretmap, 10);
+	level.secretmap[10] = 0;
 	strncpy (level.skypic1, info->skypic1, 8);
 	level.skypic1[8] = 0;
 	if (!level.skypic2[0])
@@ -2020,6 +2018,8 @@ void G_InitLevelLocals ()
 		compatflags.Callback();
 
 	NormalLight.ChangeFade (level.fadeto);
+
+	level.DefaultEnvironment = info->DefaultEnvironment;
 }
 
 //==========================================================================
@@ -2121,7 +2121,9 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 		return;
 	}
 
-	gl_DeleteAllAttachedLights();
+	// [BB] The server doesn't have a screen.
+	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+		screen->StartSerialize(arc);
 
 	arc << level.flags
 		<< level.flags2
@@ -2134,6 +2136,11 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 		<< level.teamdamage
 		<< level.maptime
 		<< i;
+
+	if (SaveVersion >= 3313)
+	{
+		arc << level.nextmusic;
+	}
 
 	// Hub transitions must keep the current total time
 	if (!hubLoad)
@@ -2242,8 +2249,9 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 			}
 		}
 	}
-	gl_RecreateAllAttachedLights();
-	STAT_SAVE(arc, hubLoad);
+	// [BB] The server doesn't have a screen.
+	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+		screen->EndSerialize(arc);
 }
 
 //==========================================================================
@@ -2321,6 +2329,11 @@ void G_UnSnapshotLevel (bool hubLoad)
 	}
 	// No reason to keep the snapshot around once the level's been entered.
 	level.info->ClearSnapshot();
+	if (hubLoad)
+	{
+		// Unlock ACS global strings that were locked when the snapshot was made.
+		FBehavior::StaticUnlockLevelVarStrings();
+	}
 }
 
 //==========================================================================
@@ -2364,6 +2377,7 @@ void G_WriteSnapshots (FILE *file)
 {
 	unsigned int i;
 
+	STAT_WRITE(file);
 	for (i = 0; i < wadlevelinfos.Size(); i++)
 	{
 		if (wadlevelinfos[i].snapshot)
@@ -2514,6 +2528,7 @@ void G_ReadSnapshots (PNGHandle *png)
 			arc << pnum;
 		}
 	}
+	STAT_READ(png);
 	png->File->ResetFilePtr();
 }
 

@@ -5,6 +5,7 @@
 #include "r_data.h"
 #include "a_pickups.h"
 #include "templates.h"
+#include "g_level.h"
 // [BB] New #includes.
 #include "doomstat.h"
 #include "sv_commands.h"
@@ -43,24 +44,13 @@ void ABasicArmor::Tick ()
 	AbsorbCount = 0;
 	if (!Icon.isValid())
 	{
-		switch (gameinfo.gametype)
-		{
-		case GAME_Chex:
-		case GAME_Doom:
-			Icon = TexMan.CheckForTexture (SavePercent == FRACUNIT/3 ? "ARM1A0" : "ARM2A0", FTexture::TEX_Any);
-			break;
+		const char *icon = gameinfo.ArmorIcon1;
 
-		case GAME_Heretic:
-			Icon = TexMan.CheckForTexture (SavePercent == FRACUNIT/2 ? "SHLDA0" : "SHD2A0", FTexture::TEX_Any);
-			break;
+		if (SavePercent >= gameinfo.Armor2Percent && gameinfo.ArmorIcon2[0] != 0)
+			icon = gameinfo.ArmorIcon2;
 
-		case GAME_Strife:
-			Icon = TexMan.CheckForTexture (SavePercent == FRACUNIT/3 ? "I_ARM2" : "I_ARM1", FTexture::TEX_Any);
-			break;
-		
-		default:
-			break;
-		}
+		if (icon[0] != 0)
+			Icon = TexMan.CheckForTexture (icon, FTexture::TEX_Any);
 
 		// [BB] If the icon is now valid, let the clients know about it. This is necessary because the
 		// clients don't necessarily know the correct SavePercent value.
@@ -102,6 +92,18 @@ bool ABasicArmor::HandlePickup (AInventory *item)
 	{
 		// You shouldn't be picking up BasicArmor anyway.
 		return true;
+	}
+	if (item->IsKindOf(RUNTIME_CLASS(ABasicArmorBonus)) && !(item->ItemFlags & IF_IGNORESKILL))
+	{
+		ABasicArmorBonus *armor = static_cast<ABasicArmorBonus*>(item);
+
+		armor->SaveAmount = FixedMul(armor->SaveAmount, G_SkillProperty(SKILLP_ArmorFactor));
+	}
+	else if (item->IsKindOf(RUNTIME_CLASS(ABasicArmorPickup)) && !(item->ItemFlags & IF_IGNORESKILL))
+	{
+		ABasicArmorPickup *armor = static_cast<ABasicArmorPickup*>(item);
+
+		armor->SaveAmount = FixedMul(armor->SaveAmount, G_SkillProperty(SKILLP_ArmorFactor));
 	}
 	if (Inventory != NULL)
 	{
@@ -189,6 +191,24 @@ void ABasicArmor::AbsorbDamage (int damage, FName damageType, int &newdamage)
 			}
 		}
 	}
+
+	// Once the armor has absorbed its part of the damage, then apply its damage factor, if any, to the player
+	if ((damage > 0) && (ArmorType != NAME_None)) // BasicArmor is not going to have any damage factor, so skip it.
+	{
+		// This code is taken and adapted from APowerProtection::ModifyDamage().
+		// The differences include not checking for the NAME_None key (doesn't seem appropriate here), 
+		// not using a default value, and of course the way the damage factor info is obtained.
+		const fixed_t *pdf = NULL;
+		DmgFactors *df = PClass::FindClass(ArmorType)->ActorInfo->DamageFactors;
+		if (df != NULL && df->CountUsed() != 0)
+		{
+			pdf = df->CheckKey(damageType);
+			if (pdf != NULL)
+			{
+				damage = newdamage = FixedMul(damage, *pdf);
+			}
+		}
+	}
 	if (Inventory != NULL)
 	{
 		Inventory->AbsorbDamage (damage, damageType, newdamage);
@@ -217,10 +237,17 @@ void ABasicArmorPickup::Serialize (FArchive &arc)
 AInventory *ABasicArmorPickup::CreateCopy (AActor *other)
 {
 	ABasicArmorPickup *copy = static_cast<ABasicArmorPickup *> (Super::CreateCopy (other));
+
+	if (!(ItemFlags & IF_IGNORESKILL))
+	{
+		SaveAmount = FixedMul(SaveAmount, G_SkillProperty(SKILLP_ArmorFactor));
+	}
+
 	copy->SavePercent = SavePercent;
 	copy->SaveAmount = SaveAmount;
 	copy->MaxAbsorb = MaxAbsorb;
 	copy->MaxFullAbsorb = MaxFullAbsorb;
+
 	return copy;
 }
 
@@ -315,6 +342,12 @@ void ABasicArmorBonus::Serialize (FArchive &arc)
 AInventory *ABasicArmorBonus::CreateCopy (AActor *other)
 {
 	ABasicArmorBonus *copy = static_cast<ABasicArmorBonus *> (Super::CreateCopy (other));
+
+	if (!(ItemFlags & IF_IGNORESKILL))
+	{
+		SaveAmount = FixedMul(SaveAmount, G_SkillProperty(SKILLP_ArmorFactor));
+	}
+
 	copy->SavePercent = SavePercent;
 	copy->SaveAmount = SaveAmount;
 	copy->MaxSaveAmount = MaxSaveAmount;
@@ -322,6 +355,7 @@ AInventory *ABasicArmorBonus::CreateCopy (AActor *other)
 	copy->BonusMax = BonusMax;
 	copy->MaxAbsorb = MaxAbsorb;
 	copy->MaxFullAbsorb = MaxFullAbsorb;
+
 	return copy;
 }
 

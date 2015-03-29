@@ -45,7 +45,13 @@ extern HWND Window;
 #define TRUE 1
 #endif
 // [BB] FreeBSD doesn't accept malloc.h anymore.
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <stdlib.h>
+#elif __sun
+#include <alloca.h>
+#else
+#include <malloc.h>
+#endif
 
 #include "templates.h"
 #ifndef NO_SOUND
@@ -58,6 +64,7 @@ extern HWND Window;
 #include "v_video.h"
 #include "v_palette.h"
 #include "cmdlib.h"
+#include "s_sound.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -82,8 +89,6 @@ struct FEnumList
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
 #ifndef NO_SOUND
-FMOD_RESULT SPC_CreateCodec(FMOD::System *sys);
-
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
@@ -115,8 +120,8 @@ CVAR (Bool, snd_waterreverb, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (String, snd_resampler, "Linear", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (String, snd_speakermode, "Auto", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (String, snd_output_format, "PCM-16", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (String, snd_midipatchset, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool, snd_profile, false, 0)
+CVAR (String, snd_midipatchset, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 
 // Underwater low-pass filter cutoff frequency. Set to 0 to disable the filter.
 CUSTOM_CVAR (Float, snd_waterlp, 250, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -170,7 +175,10 @@ static const FEnumList OutputNames[] =
 	{ "SDL",					666 },
 
 	// Mac
+#if FMOD_VERSION < 0x43000
+	// Sound Manager support was removed sometime in the 4.29 line.
 	{ "Sound Manager",			FMOD_OUTPUTTYPE_SOUNDMANAGER },
+#endif
 	{ "Core Audio",				FMOD_OUTPUTTYPE_COREAUDIO },
 
 	{ NULL, 0 }
@@ -680,27 +688,34 @@ bool FMODSoundRenderer::Init()
 	}
 
 	const char *wrongver = NULL;
-	if (version < FMOD_VERSION)
+	if (version < 0x42000)
 	{
 		wrongver = "an old";
 	}
+#if FMOD_VERSION < 0x42700
+	else if ((version & 0xFFFF00) > 0x42600)
+#else
 	else if ((version & 0xFFFF00) > (FMOD_VERSION & 0xFFFF00))
+#endif
 	{
 		wrongver = "a new";
 	}
 	if (wrongver != NULL)
 	{
 		Printf (" "TEXTCOLOR_ORANGE"Error! You are using %s version of FMOD (%x.%02x.%02x).\n"
-				" "TEXTCOLOR_ORANGE"This program requires version %x.%02x.%02x\n",
+				" "TEXTCOLOR_ORANGE"This program was built for version %x.%02x.%02x\n",
 				wrongver,
 				version >> 16, (version >> 8) & 255, version & 255,
 				FMOD_VERSION >> 16, (FMOD_VERSION >> 8) & 255, FMOD_VERSION & 255);
 		return false;
 	}
+	ActiveFMODVersion = version;
 
 	if (!ShowedBanner)
 	{
-		Printf("FMOD Sound System, copyright © Firelight Technologies Pty, Ltd., 1994-2009.\n");
+		// '\xa9' is the copyright symbol in the Windows-1252 code page.
+		Printf("FMOD Sound System, copyright \xa9 Firelight Technologies Pty, Ltd., 1994-2009.\n");
+		Printf("Loaded FMOD version %x.%02x.%02x\n", version >> 16, (version >> 8) & 255, version & 255);
 		ShowedBanner = true;
 	}
 #ifdef _WIN32
@@ -775,7 +790,7 @@ bool FMODSoundRenderer::Init()
 	if (result == FMOD_OK)
 	{
 		// On Linux, FMOD defaults to OSS. If OSS is not present, it doesn't
-		// try ALSA, it just fails. We'll try for it, but only if OSS wasn't
+		// try ALSA; it just fails. We'll try for it, but only if OSS wasn't
 		// explicitly specified for snd_output.
 		if (driver == 0 && eval == FMOD_OUTPUTTYPE_AUTODETECT)
 		{
@@ -1095,12 +1110,6 @@ bool FMODSoundRenderer::Init()
 		}
 	}
 
-	result = SPC_CreateCodec(Sys);
-	if (result != FMOD_OK)
-	{
-		Printf(TEXTCOLOR_BLUE"  Could not register SPC codec. (Error %d)\n", result);
-	}
-
 	if (FMOD_OK != Sys->getSoftwareFormat(&OutputRate, NULL, NULL, NULL, NULL, NULL))
 	{
 		OutputRate = 48000;		// Guess, but this should never happen.
@@ -1193,6 +1202,8 @@ void FMODSoundRenderer::PrintStatus()
 	unsigned int bufferlength;
 	int numbuffers;
 
+	Printf ("Loaded FMOD version: "TEXTCOLOR_GREEN"%x.%02x.%02x\n", ActiveFMODVersion >> 16,
+		(ActiveFMODVersion >> 8) & 255, ActiveFMODVersion & 255);
 	if (FMOD_OK == Sys->getOutput(&output))
 	{
 		Printf ("Output type: "TEXTCOLOR_GREEN"%s\n", Enum_NameForNum(OutputNames, output));
@@ -1299,19 +1310,44 @@ void FMODSoundRenderer::PrintDriversList()
 FString FMODSoundRenderer::GatherStats()
 {
 	int channels;
-	float dsp, stream, update, total;
+	float dsp, stream, update, geometry, total;
 	FString out;
 
 	channels = 0;
-	total = update = stream = dsp = 0;
+	total = update = geometry = stream = dsp = 0;
 	Sys->getChannelsPlaying(&channels);
-	Sys->getCPUUsage(&dsp, &stream, &update, &total);
+#if FMOD_VERSION >= 0x42501
+	// We were built with an FMOD with the geometry parameter.
+	if (ActiveFMODVersion >= 0x42501)
+	{ // And we are running with an FMOD that includes it.
+		FMOD_System_GetCPUUsage((FMOD_SYSTEM *)Sys, &dsp, &stream, &geometry, &update, &total);
+	}
+	else
+	{ // And we are running with an FMOD that does not include it.
+	  // Cast the function to the appropriate type and call through the cast,
+	  // since the headers are for the newer version.
+		((FMOD_RESULT (F_API *)(FMOD_SYSTEM *, float *, float *, float *, float *))
+			FMOD_System_GetCPUUsage)((FMOD_SYSTEM *)Sys, &dsp, &stream, &update, &total);
+	}
+#else
+	// Same as above, except the headers we used do not include the geometry parameter.
+	if (ActiveFMODVersion >= 0x42501)
+	{
+		((FMOD_RESULT (F_API *)(FMOD_SYSTEM *, float *, float *, float *, float *, float *))
+			FMOD_System_GetCPUUsage)((FMOD_SYSTEM *)Sys, &dsp, &stream, &geometry, &update, &total);
+	}
+	else
+	{
+		FMOD_System_GetCPUUsage((FMOD_SYSTEM *)Sys, &dsp, &stream, &update, &total);
+	}
+#endif
 
 	out.Format ("%d channels,"TEXTCOLOR_YELLOW"%5.2f"TEXTCOLOR_NORMAL"%% CPU "
-		"(DSP:"TEXTCOLOR_YELLOW"%2.2f"TEXTCOLOR_NORMAL"%%  "
-		"Stream:"TEXTCOLOR_YELLOW"%2.2f"TEXTCOLOR_NORMAL"%%  "
-		"Update:"TEXTCOLOR_YELLOW"%2.2f"TEXTCOLOR_NORMAL"%%)",
-		channels, total, dsp, stream, update);
+		"(DSP:"TEXTCOLOR_YELLOW"%5.2f"TEXTCOLOR_NORMAL"%% "
+		"Stream:"TEXTCOLOR_YELLOW"%5.2f"TEXTCOLOR_NORMAL"%% "
+		"Geometry:"TEXTCOLOR_YELLOW"%5.2f"TEXTCOLOR_NORMAL"%% "
+		"Update:"TEXTCOLOR_YELLOW"%5.2f"TEXTCOLOR_NORMAL"%%)",
+		channels, total, dsp, stream, geometry, update);
 	return out;
 }
 
@@ -1350,11 +1386,12 @@ SoundStream *FMODSoundRenderer::CreateStream (SoundStreamCallback callback, int 
 	FMODStreamCapsule *capsule;
 	FMOD::Sound *sound;
 	FMOD_RESULT result;
-	FMOD_CREATESOUNDEXINFO exinfo = { sizeof(exinfo), };
+	FMOD_CREATESOUNDEXINFO exinfo;
 	FMOD_MODE mode;
 	int sample_shift;
 	int channel_shift;
-	
+
+	InitCreateSoundExInfo(&exinfo);
 	capsule = new FMODStreamCapsule (userdata, callback, this);
 
 	mode = FMOD_2D | FMOD_OPENUSER | FMOD_LOOP_NORMAL | FMOD_SOFTWARE | FMOD_CREATESTREAM | FMOD_OPENONLY;
@@ -1414,6 +1451,108 @@ SoundStream *FMODSoundRenderer::CreateStream (SoundStreamCallback callback, int 
 
 //==========================================================================
 //
+// GetTagData
+//
+// Checks for a string-type tag, and returns its data.
+//
+//==========================================================================
+
+const char *GetTagData(FMOD::Sound *sound, const char *tag_name)
+{
+	FMOD_TAG tag;
+
+	if (FMOD_OK == sound->getTag(tag_name, 0, &tag) &&
+		(tag.datatype == FMOD_TAGDATATYPE_STRING || tag.datatype == FMOD_TAGDATATYPE_STRING_UTF8))
+	{
+		return (const char *)tag.data;
+	}
+	return NULL;
+}
+
+//==========================================================================
+//
+// SetCustomLoopPts
+//
+// Sets up custom sound loops by checking for these tags:
+//    LOOP_START
+//    LOOP_END
+//    LOOP_BIDI
+//
+//==========================================================================
+
+static void SetCustomLoopPts(FMOD::Sound *sound)
+{
+#if 0
+	FMOD_TAG tag;
+	int numtags;
+	if (FMOD_OK == stream->getNumTags(&numtags, NULL))
+	{
+		for (int i = 0; i < numtags; ++i)
+		{
+			if (FMOD_OK == sound->getTag(NULL, i, &tag))
+			{
+				Printf("Tag %2d. %d %s = %s\n", i, tag.datatype, tag.name, tag.data);
+			}
+		}
+	}
+#endif
+	const char *tag_data;
+	unsigned int looppt[2];
+	bool looppt_as_samples[2], have_looppt[2] = { false };
+	static const char *const loop_tags[2] = { "LOOP_START", "LOOP_END" };
+
+	for (int i = 0; i < 2; ++i)
+	{
+		if (NULL != (tag_data = GetTagData(sound, loop_tags[i])))
+		{
+			if (S_ParseTimeTag(tag_data, &looppt_as_samples[i], &looppt[i]))
+			{
+				have_looppt[i] = true;
+			}
+			else
+			{
+				Printf("Invalid %s tag: '%s'\n", loop_tags[i], tag_data);
+			}
+		}
+	}
+	if (have_looppt[0] && !have_looppt[1])
+	{ // Have a start tag, but not an end tag: End at the end of the song.
+		have_looppt[1] = (FMOD_OK == sound->getLength(&looppt[1], FMOD_TIMEUNIT_PCM));
+		looppt_as_samples[1] = true;
+	}
+	else if (!have_looppt[0] && have_looppt[1])
+	{ // Have an end tag, but no start tag: Start at beginning of the song.
+		looppt[0] = 0;
+		looppt_as_samples[0] = true;
+		have_looppt[0] = true;
+	}
+	if (have_looppt[0] && have_looppt[1])
+	{ // Have both loop points: Try to set the loop.
+		FMOD_RESULT res = sound->setLoopPoints(
+			looppt[0], looppt_as_samples[0] ? FMOD_TIMEUNIT_PCM : FMOD_TIMEUNIT_MS,
+			looppt[1] - 1, looppt_as_samples[1] ? FMOD_TIMEUNIT_PCM : FMOD_TIMEUNIT_MS);
+		if (res != FMOD_OK)
+		{
+			Printf("Setting custom loop points failed. Error %d\n", res);
+		}
+	}
+	// Check for a bi-directional loop.
+	if (NULL != (tag_data = GetTagData(sound, "LOOP_BIDI")) &&
+		(stricmp(tag_data, "on") == 0 ||
+		 stricmp(tag_data, "true") == 0 ||
+		 stricmp(tag_data, "yes") == 0 ||
+		 stricmp(tag_data, "1") == 0))
+	{
+		FMOD_MODE mode;
+		if (FMOD_OK == (sound->getMode(&mode)))
+		{
+			sound->setMode(mode & ~(FMOD_LOOP_OFF | FMOD_LOOP_NORMAL) | FMOD_LOOP_BIDI);
+		}
+	}
+}
+
+//==========================================================================
+//
 // FMODSoundRenderer :: OpenStream
 //
 // Creates a streaming sound from a file on disk.
@@ -1423,11 +1562,12 @@ SoundStream *FMODSoundRenderer::CreateStream (SoundStreamCallback callback, int 
 SoundStream *FMODSoundRenderer::OpenStream(const char *filename_or_data, int flags, int offset, int length)
 {
 	FMOD_MODE mode;
-	FMOD_CREATESOUNDEXINFO exinfo = { sizeof(exinfo), };
+	FMOD_CREATESOUNDEXINFO exinfo;
 	FMOD::Sound *stream;
 	FMOD_RESULT result;
 	bool url;
 
+	InitCreateSoundExInfo(&exinfo);
 	mode = FMOD_SOFTWARE | FMOD_2D | FMOD_CREATESTREAM;
 	if (flags & SoundStream::Loop)
 	{
@@ -1472,6 +1612,7 @@ SoundStream *FMODSoundRenderer::OpenStream(const char *filename_or_data, int fla
 	}
 	if (result == FMOD_OK)
 	{
+		SetCustomLoopPts(stream);
 		return new FMODStreamCapsule(stream, this, url ? filename_or_data : NULL);
 	}
 	return NULL;
@@ -1513,7 +1654,15 @@ FISoundChannel *FMODSoundRenderer::StartSound(SoundHandle sfx, float vol, int pi
 		mode = (mode & ~FMOD_3D) | FMOD_2D;
 		if (flags & SNDF_LOOP)
 		{
-			mode = (mode & ~FMOD_LOOP_OFF) | FMOD_LOOP_NORMAL;
+			mode &= ~FMOD_LOOP_OFF;
+			if (!(mode & (FMOD_LOOP_NORMAL | FMOD_LOOP_BIDI)))
+			{
+				mode |= FMOD_LOOP_NORMAL;
+			}
+		}
+		else
+		{
+			mode |= FMOD_LOOP_OFF;
 		}
 		chan->setMode(mode);
 		chan->setChannelGroup((flags & SNDF_NOPAUSE) ? SfxGroup : PausableSfx);
@@ -1522,7 +1671,7 @@ FISoundChannel *FMODSoundRenderer::StartSound(SoundHandle sfx, float vol, int pi
 			chan->setFrequency(freq);
 		}
 		chan->setVolume(vol);
-		if (!HandleChannelDelay(chan, reuse_chan, !!(flags & SNDF_ABSTIME), freq))
+		if (!HandleChannelDelay(chan, reuse_chan, flags & (SNDF_ABSTIME | SNDF_LOOP), freq))
 		{
 			chan->stop();
 			return NULL;
@@ -1613,7 +1762,16 @@ FISoundChannel *FMODSoundRenderer::StartSound3D(SoundHandle sfx, SoundListener *
 		}
 		if (flags & SNDF_LOOP)
 		{
-			mode = (mode & ~FMOD_LOOP_OFF) | FMOD_LOOP_NORMAL;
+			mode &= ~FMOD_LOOP_OFF;
+			if (!(mode & (FMOD_LOOP_NORMAL | FMOD_LOOP_BIDI)))
+			{
+				mode |= FMOD_LOOP_NORMAL;
+			}
+		}
+		else
+		{
+			// FMOD_LOOP_OFF overrides FMOD_LOOP_NORMAL and FMOD_LOOP_BIDI
+			mode |= FMOD_LOOP_OFF;
 		}
 		mode = SetChanHeadSettings(listener, chan, pos, !!(flags & SNDF_AREA), mode);
 		chan->setMode(mode);
@@ -1629,8 +1787,12 @@ FISoundChannel *FMODSoundRenderer::StartSound3D(SoundHandle sfx, SoundListener *
 			chan->set3DAttributes((FMOD_VECTOR *)&pos[0], (FMOD_VECTOR *)&vel[0]);
 			chan->set3DSpread(snd_3dspread);
 		}
-		if (!HandleChannelDelay(chan, reuse_chan, !!(flags & SNDF_ABSTIME), freq))
+		if (!HandleChannelDelay(chan, reuse_chan, flags & (SNDF_ABSTIME | SNDF_LOOP), freq))
 		{
+			// FMOD seems to get confused if you stop a channel right after
+			// starting it, so hopefully this function will never fail.
+			// (Presumably you need an update between them, but I haven't
+			// tested this hypothesis.)
 			chan->stop();
 			return NULL;
 		}
@@ -1657,6 +1819,19 @@ FISoundChannel *FMODSoundRenderer::StartSound3D(SoundHandle sfx, SoundListener *
 
 //==========================================================================
 //
+// FMODSoundRenderer :: MarkStartTime
+//
+// Marks a channel's start time without actually playing it.
+//
+//==========================================================================
+
+void FMODSoundRenderer::MarkStartTime(FISoundChannel *chan)
+{
+	Sys->getDSPClock(&chan->StartTime.Hi, &chan->StartTime.Lo);
+}
+
+//==========================================================================
+//
 // FMODSoundRenderer :: HandleChannelDelay
 //
 // If the sound is restarting, seek it to its proper place. Returns false
@@ -1666,7 +1841,7 @@ FISoundChannel *FMODSoundRenderer::StartSound3D(SoundHandle sfx, SoundListener *
 //
 //==========================================================================
 
-bool FMODSoundRenderer::HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *reuse_chan, bool abstime, float freq) const
+bool FMODSoundRenderer::HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *reuse_chan, int flags, float freq) const
 {
 	if (reuse_chan != NULL)
 	{ // Sound is being restarted, so seek it to the position
@@ -1676,7 +1851,7 @@ bool FMODSoundRenderer::HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *
 
 		// If abstime is set, the sound is being restored, and
 		// the channel's start time is actually its seek position.
-		if (abstime)
+		if (flags & SNDF_ABSTIME)
 		{
 			unsigned int seekpos = reuse_chan->StartTime.Lo;
 			if (seekpos > 0)
@@ -1685,11 +1860,27 @@ bool FMODSoundRenderer::HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *
 			}
 			reuse_chan->StartTime.AsOne = QWORD(nowtime.AsOne - seekpos * OutputRate / freq);
 		}
-		else
+		else if (reuse_chan->StartTime.AsOne != 0)
 		{
 			QWORD difftime = nowtime.AsOne - reuse_chan->StartTime.AsOne;
 			if (difftime > 0)
 			{
+				// Clamp the position of looping sounds to be within the sound.
+				// If we try to start it several minutes past its normal end,
+				// FMOD doesn't like that.
+				// FIXME: Clamp this right for loops that don't cover the whole sound.
+				if (flags & SNDF_LOOP)
+				{
+					FMOD::Sound *sound;
+					if (FMOD_OK == chan->getCurrentSound(&sound))
+					{
+						unsigned int len;
+						if (FMOD_OK == sound->getLength(&len, FMOD_TIMEUNIT_MS) && len != 0)
+						{
+							difftime %= len;
+						}
+					}
+				}
 				return chan->setPosition((unsigned int)(difftime / OutputRate), FMOD_TIMEUNIT_MS) == FMOD_OK;
 			}
 		}
@@ -1825,6 +2016,27 @@ unsigned int FMODSoundRenderer::GetPosition(FISoundChannel *chan)
 	}
 	((FMOD::Channel *)chan->SysChannel)->getPosition(&pos, FMOD_TIMEUNIT_PCM);
 	return pos;
+}
+
+//==========================================================================
+//
+// FMODSoundRenderer :: GetAudibility
+//
+// Returns the audible volume of the channel, after rollof and any other
+// factors are applied.
+//
+//==========================================================================
+
+float FMODSoundRenderer::GetAudibility(FISoundChannel *chan)
+{
+	float aud;
+
+	if (chan == NULL || chan->SysChannel == NULL)
+	{
+		return 0;
+	}
+	((FMOD::Channel *)chan->SysChannel)->getAudibility(&aud);
+	return aud;
 }
 
 //==========================================================================
@@ -2116,13 +2328,18 @@ void FMODSoundRenderer::UpdateSounds()
 //
 //==========================================================================
 
-SoundHandle FMODSoundRenderer::LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits)
+SoundHandle FMODSoundRenderer::LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart)
 {
-	FMOD_CREATESOUNDEXINFO exinfo = { sizeof(exinfo), };
+	FMOD_CREATESOUNDEXINFO exinfo;
 	SoundHandle retval = { NULL };
+	int numsamples;
 
-	if (length == 0) return retval;
+	if (length <= 0)
+	{
+		return retval;
+	}
 
+	InitCreateSoundExInfo(&exinfo);
 	exinfo.length = length;
 	exinfo.numchannels = channels;
 	exinfo.defaultfrequency = frequency;
@@ -2137,14 +2354,17 @@ SoundHandle FMODSoundRenderer::LoadSoundRaw(BYTE *sfxdata, int length, int frequ
 
 	case -8:
 		exinfo.format = FMOD_SOUND_FORMAT_PCM8;
+		numsamples = length;
 		break;
 
 	case 16:
 		exinfo.format = FMOD_SOUND_FORMAT_PCM16;
+		numsamples = length >> 1;
 		break;
 
 	case 32:
 		exinfo.format = FMOD_SOUND_FORMAT_PCM32;
+		numsamples = length >> 2;
 		break;
 
 	default:
@@ -2161,6 +2381,12 @@ SoundHandle FMODSoundRenderer::LoadSoundRaw(BYTE *sfxdata, int length, int frequ
 		DPrintf("Failed to allocate sample: Error %d\n", result);
 		return retval;
 	}
+
+	if (loopstart >= 0)
+	{
+		sample->setLoopPoints(loopstart, FMOD_TIMEUNIT_PCM, numsamples - 1, FMOD_TIMEUNIT_PCM);
+	}
+
 	retval.data = sample;
 	return retval;
 }
@@ -2173,11 +2399,12 @@ SoundHandle FMODSoundRenderer::LoadSoundRaw(BYTE *sfxdata, int length, int frequ
 
 SoundHandle FMODSoundRenderer::LoadSound(BYTE *sfxdata, int length)
 {
-	FMOD_CREATESOUNDEXINFO exinfo = { sizeof(exinfo), };
+	FMOD_CREATESOUNDEXINFO exinfo;
 	SoundHandle retval = { NULL };
 
 	if (length == 0) return retval;
 
+	InitCreateSoundExInfo(&exinfo);
 	exinfo.length = length;
 
 	const FMOD_MODE samplemode = FMOD_3D | FMOD_OPENMEMORY | FMOD_SOFTWARE;
@@ -2190,6 +2417,7 @@ SoundHandle FMODSoundRenderer::LoadSound(BYTE *sfxdata, int length)
 		DPrintf("Failed to allocate sample: Error %d\n", result);
 		return retval;
 	}
+	SetCustomLoopPts(sample);
 	retval.data = sample;
 	return retval;
 }
@@ -2267,16 +2495,19 @@ FMOD_RESULT F_CALLBACK FMODSoundRenderer::ChannelCallback
 	if ( channel == NULL )
 		return FMOD_OK;
 
-	if (type != FMOD_CHANNEL_CALLBACKTYPE_END)
-	{
-		return FMOD_OK;
-	}
 	FMOD::Channel *chan = (FMOD::Channel *)channel;
 	FISoundChannel *schan;
 
 	if (chan->getUserData((void **)&schan) == FMOD_OK && schan != NULL)
 	{
-		S_ChannelEnded(schan);
+		if (type == FMOD_CHANNEL_CALLBACKTYPE_END)
+		{
+			S_ChannelEnded(schan);
+		}
+		else if (type == FMOD_CHANNEL_CALLBACKTYPE_VIRTUALVOICE)
+		{
+			S_ChannelVirtualChanged(schan, data1 != 0);
+		}
 	}
 	return FMOD_OK;
 }
@@ -2616,7 +2847,7 @@ void FMODSoundRenderer::DrawSpectrum(float *spectrumarray, int x, int y, int wid
 
 short *FMODSoundRenderer::DecodeSample(int outlen, const void *coded, int sizebytes, ECodecType type)
 {
-	FMOD_CREATESOUNDEXINFO exinfo = { sizeof(exinfo), };
+	FMOD_CREATESOUNDEXINFO exinfo;
 	FMOD::Sound *sound;
 	FMOD_SOUND_FORMAT format;
 	int channels;
@@ -2624,6 +2855,7 @@ short *FMODSoundRenderer::DecodeSample(int outlen, const void *coded, int sizeby
 	FMOD_RESULT result;
 	short *outbuf;
 
+	InitCreateSoundExInfo(&exinfo);
 	if (type == CODEC_Vorbis)
 	{
 		exinfo.suggestedsoundtype = FMOD_SOUND_TYPE_OGGVORBIS;
@@ -2659,5 +2891,30 @@ short *FMODSoundRenderer::DecodeSample(int outlen, const void *coded, int sizeby
 		return NULL;
 	}
 	return outbuf;
+}
+
+//==========================================================================
+//
+// FMODSoundRenderer :: InitCreateSoundExInfo
+//
+// Allow for compiling with 4.26 APIs while still running with older DLLs.
+//
+//==========================================================================
+
+void FMODSoundRenderer::InitCreateSoundExInfo(FMOD_CREATESOUNDEXINFO *exinfo) const
+{
+#if FMOD_VERSION >= 0x42600
+	if (ActiveFMODVersion < 0x42600)
+	{
+		// This parameter was added for 4.26.00, and trying to pass it to older
+		// DLLs will fail.
+		exinfo->cbsize = myoffsetof(FMOD_CREATESOUNDEXINFO, ignoresetfilesystem);
+	}
+	else
+#endif
+	{
+		exinfo->cbsize = sizeof(*exinfo);
+	}
+	memset((BYTE *)exinfo + sizeof(exinfo->cbsize), 0, exinfo->cbsize - sizeof(exinfo->cbsize));
 }
 #endif //NO_SOUND

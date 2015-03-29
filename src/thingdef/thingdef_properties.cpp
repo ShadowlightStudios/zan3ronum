@@ -67,7 +67,6 @@
 #include "r_translate.h"
 #include "a_morph.h"
 #include "colormatcher.h"
-#include "autosegs.h"
 #include "teaminfo.h"
 
 
@@ -131,14 +130,17 @@ void HandleDeprecatedFlags(AActor *defaults, FActorInfo *info, bool set, int ind
 		info->SetDamageFactor(NAME_Fire, set? FRACUNIT/2 : FRACUNIT);
 		break;
 	// the bounce flags will set the compatibility bounce modes to remain compatible
-	case DEPF_HERETICBOUNCE:	
-		defaults->bouncetype = set? BOUNCE_HereticCompat : 0;
+	case DEPF_HERETICBOUNCE:
+		defaults->BounceFlags &= ~(BOUNCE_TypeMask|BOUNCE_UseSeeSound);
+		if (set) defaults->BounceFlags |= BOUNCE_HereticCompat;
 		break;
 	case DEPF_HEXENBOUNCE:
-		defaults->bouncetype = set? BOUNCE_HexenCompat : 0;
+		defaults->BounceFlags &= ~(BOUNCE_TypeMask|BOUNCE_UseSeeSound);
+		if (set) defaults->BounceFlags |= BOUNCE_HexenCompat;
 		break;
 	case DEPF_DOOMBOUNCE:
-		defaults->bouncetype = set? BOUNCE_DoomCompat : 0;
+		defaults->BounceFlags &= ~(BOUNCE_TypeMask|BOUNCE_UseSeeSound);
+		if (set) defaults->BounceFlags |= BOUNCE_DoomCompat;
 		break;
 	case DEPF_PICKUPFLASH:
 		if (set)
@@ -150,9 +152,72 @@ void HandleDeprecatedFlags(AActor *defaults, FActorInfo *info, bool set, int ind
 			static_cast<AInventory*>(defaults)->PickupFlash = NULL;
 		}
 		break;
+	case DEPF_INTERHUBSTRIP: // Old system was 0 or 1, so if the flag is cleared, assume 1.
+		static_cast<AInventory*>(defaults)->InterHubAmount = set ? 0 : 1;
 	default:
 		break;	// silence GCC
 	}
+}
+
+//===========================================================================
+//
+// CheckDeprecatedFlags
+//
+// Checks properties related to deprecated flags, and returns true only
+// if the relevant properties are configured exactly as they would have
+// been by setting the flag in HandleDeprecatedFlags.
+//
+//===========================================================================
+
+bool CheckDeprecatedFlags(AActor *actor, FActorInfo *info, int index)
+{
+	// A deprecated flag is false if
+	// a) it hasn't been added here
+	// b) any property of the actor differs from what it would be after setting the flag using HandleDeprecatedFlags
+
+	// Deprecated flags are normally replaced by something more flexible, which means a multitude of related configurations
+	// will report "false".
+
+	switch (index)
+	{
+	case DEPF_FIREDAMAGE:
+		return actor->DamageType == NAME_Fire;
+	case DEPF_ICEDAMAGE:
+		return actor->DamageType == NAME_Ice;
+	case DEPF_LOWGRAVITY:
+		return actor->gravity == FRACUNIT/8;
+	case DEPF_SHORTMISSILERANGE:
+		return actor->maxtargetrange == 896*FRACUNIT;
+	case DEPF_LONGMELEERANGE:
+		return actor->meleethreshold == 196*FRACUNIT;
+	case DEPF_QUARTERGRAVITY:
+		return actor->gravity == FRACUNIT/4;
+	case DEPF_FIRERESIST:
+		if (info->DamageFactors)
+		{
+			fixed_t *df = info->DamageFactors->CheckKey(NAME_Fire);
+			return df && (*df) == FRACUNIT / 2;
+		}
+		return false;
+
+	case DEPF_HERETICBOUNCE:
+		return (actor->BounceFlags & (BOUNCE_TypeMask|BOUNCE_UseSeeSound)) == BOUNCE_HereticCompat;
+
+	case DEPF_HEXENBOUNCE:
+		return (actor->BounceFlags & (BOUNCE_TypeMask|BOUNCE_UseSeeSound)) == BOUNCE_HexenCompat;
+	
+	case DEPF_DOOMBOUNCE:
+		return (actor->BounceFlags & (BOUNCE_TypeMask|BOUNCE_UseSeeSound)) == BOUNCE_DoomCompat;
+
+	case DEPF_PICKUPFLASH:
+		return static_cast<AInventory*>(actor)->PickupFlash == PClass::FindClass("PickupFlash");
+		// A pure name lookup may or may not be more efficient, but I know no static identifier for PickupFlash.
+
+	case DEPF_INTERHUBSTRIP:
+		return !(static_cast<AInventory*>(actor)->InterHubAmount);
+	}
+
+	return false; // Any entirely unknown flag is not set
 }
 
 //==========================================================================
@@ -183,7 +248,7 @@ int MatchString (const char *in, const char **strings)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_INFO_PROPERTY(game, T, Actor)
+DEFINE_INFO_PROPERTY(game, S, Actor)
 {
 	PROP_STRING_PARM(str, 0);
 	if (!stricmp(str, "Doom"))
@@ -299,7 +364,7 @@ DEFINE_PROPERTY(skip_super, 0, Actor)
 DEFINE_PROPERTY(tag, S, Actor)
 {
 	PROP_STRING_PARM(str, 0);
-	info->Class->Meta.SetMetaString(AMETA_StrifeName, str);
+	defaults->Tag = str;
 }
 
 //==========================================================================
@@ -355,9 +420,18 @@ DEFINE_PROPERTY(painchance, ZI, Actor)
 		if (!stricmp(str, "Normal")) painType = NAME_None;
 		else painType=str;
 
-		if (info->PainChances == NULL) info->PainChances=new PainChanceList;
-		(*info->PainChances)[painType] = (BYTE)id;
+		info->SetPainChance(painType, id);
 	}
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_PROPERTY(painthreshold, I, Actor)
+{
+	PROP_INT_PARM(id, 0);
+
+	defaults->PainThreshold = id;
 }
 
 //==========================================================================
@@ -491,6 +565,24 @@ DEFINE_PROPERTY(attacksound, S, Actor)
 //==========================================================================
 //
 //==========================================================================
+DEFINE_PROPERTY(bouncesound, S, Actor)
+{
+	PROP_STRING_PARM(str, 0);
+	defaults->BounceSound = str;
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_PROPERTY(wallbouncesound, S, Actor)
+{
+	PROP_STRING_PARM(str, 0);
+	defaults->WallBounceSound = str;
+}
+
+//==========================================================================
+//
+//==========================================================================
 DEFINE_PROPERTY(painsound, S, Actor)
 {
 	PROP_STRING_PARM(str, 0);
@@ -522,6 +614,15 @@ DEFINE_PROPERTY(howlsound, S, Actor)
 {
 	PROP_STRING_PARM(str, 0);
 	info->Class->Meta.SetMetaInt (AMETA_HowlSound, S_FindSound(str));
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_PROPERTY(crushpainsound, S, Actor)
+{
+	PROP_STRING_PARM(str, 0);
+	defaults->CrushPainSound = str;
 }
 
 //==========================================================================
@@ -727,6 +828,15 @@ DEFINE_PROPERTY(missileheight, F, Actor)
 //==========================================================================
 //
 //==========================================================================
+DEFINE_PROPERTY(pushfactor, F, Actor)
+{
+	PROP_FIXED_PARM(id, 0);
+	defaults->pushfactor = id;
+}
+
+//==========================================================================
+//
+//==========================================================================
 DEFINE_PROPERTY(translation, L, Actor)
 {
 	PROP_INT_PARM(type, 0);
@@ -819,9 +929,20 @@ DEFINE_PROPERTY(bloodtype, Sss, Actor)
 //==========================================================================
 DEFINE_PROPERTY(bouncetype, S, Actor)
 {
-	const char *names[] = { "None", "Doom", "Heretic", "Hexen", "*", "DoomCompat", "HereticCompat", "HexenCompat", NULL };
+	static const char *names[] = { "None", "Doom", "Heretic", "Hexen", "DoomCompat", "HereticCompat", "HexenCompat", "Grenade", "Classic", NULL };
+	static const int flags[] = { BOUNCE_None,
+		BOUNCE_Doom, BOUNCE_Heretic, BOUNCE_Hexen,
+		BOUNCE_DoomCompat, BOUNCE_HereticCompat, BOUNCE_HexenCompat,
+		BOUNCE_Grenade, BOUNCE_Classic, };
 	PROP_STRING_PARM(id, 0);
-	defaults->bouncetype = MatchString(id, names);
+	int match = MatchString(id, names);
+	if (match < 0)
+	{
+		I_Error("Unknown bouncetype %s", id);
+		match = 0;
+	}
+	defaults->BounceFlags &= ~(BOUNCE_TypeMask | BOUNCE_UseSeeSound);
+	defaults->BounceFlags |= flags[match];
 }
 
 //==========================================================================
@@ -854,6 +975,24 @@ DEFINE_PROPERTY(bouncecount, I, Actor)
 //==========================================================================
 //
 //==========================================================================
+DEFINE_PROPERTY(weaveindexXY, I, Actor)
+{
+	PROP_INT_PARM(id, 0);
+	defaults->WeaveIndexXY = id;
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_PROPERTY(weaveindexZ, I, Actor)
+{
+	PROP_INT_PARM(id, 0);
+	defaults->WeaveIndexZ = id;
+}
+
+//==========================================================================
+//
+//==========================================================================
 DEFINE_PROPERTY(minmissilechance, I, Actor)
 {
 	PROP_INT_PARM(id, 0);
@@ -873,18 +1012,23 @@ DEFINE_PROPERTY(damagetype, S, Actor)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_PROPERTY(damagefactor, SF, Actor)
+DEFINE_PROPERTY(damagefactor, ZF, Actor)
 {
 	PROP_STRING_PARM(str, 0);
 	PROP_FIXED_PARM(id, 1);
 
-	if (info->DamageFactors == NULL) info->DamageFactors=new DmgFactors;
+	if (str == NULL)
+	{
+		defaults->DamageFactor = id;
+	}
+	else
+	{
+		FName dmgType;
+		if (!stricmp(str, "Normal")) dmgType = NAME_None;
+		else dmgType=str;
 
-	FName dmgType;
-	if (!stricmp(str, "Normal")) dmgType = NAME_None;
-	else dmgType=str;
-
-	(*info->DamageFactors)[dmgType]=id;
+		info->SetDamageFactor(dmgType, id);
+	}
 }
 
 //==========================================================================
@@ -917,10 +1061,26 @@ DEFINE_PROPERTY(maxdropoffheight, F, Actor)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_PROPERTY(poisondamage, I, Actor)
+DEFINE_PROPERTY(poisondamage, Iii, Actor)
 {
-	PROP_INT_PARM(i, 0);
-	info->Class->Meta.SetMetaInt (AMETA_PoisonDamage, i);
+	PROP_INT_PARM(poisondamage, 0);
+	PROP_INT_PARM(poisonduration, 1);
+	PROP_INT_PARM(poisonperiod, 2);
+
+	defaults->PoisonDamage = poisondamage;
+	if (PROP_PARM_COUNT == 1)
+	{
+		defaults->PoisonDuration = INT_MIN;
+	}
+	else
+	{
+		defaults->PoisonDuration = poisonduration;
+
+		if (PROP_PARM_COUNT > 2)
+			defaults->PoisonPeriod = poisonperiod;
+		else
+			defaults->PoisonPeriod = 0;
+	}
 }
 
 //==========================================================================
@@ -956,7 +1116,7 @@ DEFINE_PROPERTY(cameraheight, F, Actor)
 DEFINE_PROPERTY(vspeed, F, Actor)
 {
 	PROP_FIXED_PARM(i, 0);
-	defaults->momz = i;
+	defaults->velz = i;
 }
 
 //==========================================================================
@@ -968,7 +1128,6 @@ DEFINE_PROPERTY(gravity, F, Actor)
 
 	if (i < 0) I_Error ("Gravity must not be negative.");
 	defaults->gravity = i;
-	if (i == 0) defaults->flags |= MF_NOGRAVITY;
 }
 
 //==========================================================================
@@ -985,8 +1144,12 @@ DEFINE_PROPERTY(species, S, Actor)
 //==========================================================================
 DEFINE_PROPERTY(clearflags, 0, Actor)
 {
-	defaults->flags=defaults->flags3=defaults->flags4=defaults->flags5=0;
-	defaults->flags2&=MF2_ARGSDEFINED;	// this flag must not be cleared
+	defaults->flags =
+		defaults->flags3 =
+		defaults->flags4 =
+		defaults->flags5 =
+		defaults->flags6 = 0;
+	defaults->flags2 &= MF2_ARGSDEFINED;	// this flag must not be cleared
 
 	// [BC] Also zero out ST's flags.
 	defaults->ulSTFlags = 0;
@@ -1014,6 +1177,16 @@ DEFINE_PROPERTY(projectile, 0, Actor)
 	defaults->flags|=MF_NOBLOCKMAP|MF_NOGRAVITY|MF_DROPOFF|MF_MISSILE; 
 	defaults->flags2|=MF2_IMPACT|MF2_PCROSS|MF2_NOTELEPORT;
 	if (gameinfo.gametype&GAME_Raven) defaults->flags5|=MF5_BLOODSPLATTER;
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_PROPERTY(activation, N, Actor)
+{
+	// How the thing behaves when activated by death, USESPECIAL or BUMPSPECIAL
+	PROP_INT_PARM(val, 0);
+	defaults->activationtype = val;
 }
 
 //==========================================================================
@@ -1237,6 +1410,15 @@ DEFINE_CLASS_PROPERTY(icon, S, Inventory)
 //==========================================================================
 //
 //==========================================================================
+DEFINE_CLASS_PROPERTY(interhubamount, I, Inventory)
+{
+	PROP_INT_PARM(i, 0);
+	defaults->InterHubAmount = i;
+}
+
+//==========================================================================
+//
+//==========================================================================
 DEFINE_CLASS_PROPERTY(maxamount, I, Inventory)
 {
 	PROP_INT_PARM(i, 0);
@@ -1248,7 +1430,7 @@ DEFINE_CLASS_PROPERTY(maxamount, I, Inventory)
 //==========================================================================
 DEFINE_CLASS_PROPERTY(defmaxamount, 0, Inventory)
 {
-	defaults->MaxAmount = gameinfo.gametype == GAME_Heretic ? 16 : 25;
+	defaults->MaxAmount = gameinfo.definventorymaxamount;
 }
 
 
@@ -1262,18 +1444,9 @@ DEFINE_CLASS_PROPERTY(pickupflash, S, Inventory)
 }
 
 //==========================================================================
-// [BC]
-//==========================================================================
-DEFINE_CLASS_PROPERTY(pickupannouncerentry, S, Inventory)
-{
-	PROP_STRING_PARM(str, 0);
-	sprintf( defaults->szPickupAnnouncerEntry, "%s", str );
-}
-
-//==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY(pickupmessage, S, Inventory)
+DEFINE_CLASS_PROPERTY(pickupmessage, T, Inventory)
 {
 	PROP_STRING_PARM(str, 0);
 	info->Class->Meta.SetMetaString(AIMETA_PickupMessage, str);
@@ -1286,6 +1459,16 @@ DEFINE_CLASS_PROPERTY(pickupsound, S, Inventory)
 {
 	PROP_STRING_PARM(str, 0);
 	defaults->PickupSound = str;
+}
+
+//==========================================================================
+// Dummy for Skulltag compatibility...
+//==========================================================================
+DEFINE_CLASS_PROPERTY(pickupannouncerentry, S, Inventory)
+{
+	// [BB] Not a dummy in Zandronum.
+	PROP_STRING_PARM(str, 0);
+	sprintf( defaults->szPickupAnnouncerEntry, "%s", str );
 }
 
 //==========================================================================
@@ -1309,24 +1492,6 @@ DEFINE_CLASS_PROPERTY(usesound, S, Inventory)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY(bouncesound, S, Inventory)
-{
-	PROP_STRING_PARM(str, 0);
-	defaults->BounceSound = str;
-}
-
-//==========================================================================
-//
-//==========================================================================
-DEFINE_CLASS_PROPERTY(wallbouncesound, S, Inventory)
-{
-	PROP_STRING_PARM(str, 0);
-	defaults->WallBounceSound = str;
-}
-
-//==========================================================================
-//
-//==========================================================================
 DEFINE_CLASS_PROPERTY(givequest, I, Inventory)
 {
 	PROP_INT_PARM(i, 0);
@@ -1336,7 +1501,7 @@ DEFINE_CLASS_PROPERTY(givequest, I, Inventory)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY(lowmessage, IS, Health)
+DEFINE_CLASS_PROPERTY(lowmessage, IT, Health)
 {
 	PROP_INT_PARM(i, 0);
 	PROP_STRING_PARM(str, 1);
@@ -1365,7 +1530,7 @@ DEFINE_CLASS_PROPERTY(number, I, PuzzleItem)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY(failmessage, S, PuzzleItem)
+DEFINE_CLASS_PROPERTY(failmessage, T, PuzzleItem)
 {
 	PROP_STRING_PARM(str, 0);
 	info->Class->Meta.SetMetaString(AIMETA_PuzzFailMessage, str);
@@ -1404,7 +1569,8 @@ DEFINE_CLASS_PROPERTY(ammogive2, I, Weapon)
 DEFINE_CLASS_PROPERTY(ammotype, S, Weapon)
 {
 	PROP_STRING_PARM(str, 0);
-	defaults->AmmoType1 = FindClassTentative(str, "Ammo");
+	if (!stricmp(str, "none") || *str == 0) defaults->AmmoType1 = NULL;
+	else defaults->AmmoType1 = FindClassTentative(str, "Ammo");
 }
 
 //==========================================================================
@@ -1413,7 +1579,8 @@ DEFINE_CLASS_PROPERTY(ammotype, S, Weapon)
 DEFINE_CLASS_PROPERTY(ammotype1, S, Weapon)
 {
 	PROP_STRING_PARM(str, 0);
-	defaults->AmmoType1 = FindClassTentative(str, "Ammo");
+	if (!stricmp(str, "none") || *str == 0) defaults->AmmoType1 = NULL;
+	else defaults->AmmoType1 = FindClassTentative(str, "Ammo");
 }
 
 //==========================================================================
@@ -1422,7 +1589,8 @@ DEFINE_CLASS_PROPERTY(ammotype1, S, Weapon)
 DEFINE_CLASS_PROPERTY(ammotype2, S, Weapon)
 {
 	PROP_STRING_PARM(str, 0);
-	defaults->AmmoType2 = FindClassTentative(str, "Ammo");
+	if (!stricmp(str, "none") || *str == 0) defaults->AmmoType1 = NULL;
+	else defaults->AmmoType2 = FindClassTentative(str, "Ammo");
 }
 
 //==========================================================================
@@ -1441,9 +1609,6 @@ DEFINE_CLASS_PROPERTY(ammouse1, I, Weapon)
 {
 	PROP_INT_PARM(i, 0);
 	defaults->AmmoUse1 = i;
-
-	// [BC] Also apply this to the amount of ammo used in DM. It can be overridden.
-//	defaults->AmmoUseDM1 = sc.Number;
 }
 
 //==========================================================================
@@ -1453,9 +1618,6 @@ DEFINE_CLASS_PROPERTY(ammouse2, I, Weapon)
 {
 	PROP_INT_PARM(i, 0);
 	defaults->AmmoUse2 = i;
-
-	// [BC] Also apply this to the amount of ammo used in DM. It can be overridden.
-//	defaults->AmmoUseDM2 = sc.Number;
 }
 
 //==========================================================================
@@ -1539,11 +1701,12 @@ DEFINE_CLASS_PROPERTY(slotpriority, F, Weapon)
 }
 
 //==========================================================================
-// [BB]
+//
 //==========================================================================
 DEFINE_CLASS_PROPERTY(preferredskin, S, Weapon)
 {
 	PROP_STRING_PARM(str, 0);
+	// [BB] Not a dummy in Zandronum
 	defaults->PreferredSkin = str;
 }
 
@@ -1570,7 +1733,8 @@ DEFINE_CLASS_PROPERTY(weapon, S, WeaponPiece)
 //==========================================================================
 DEFINE_CLASS_PROPERTY_PREFIX(powerup, color, C_f, Inventory)
 {
-	PROP_INT_PARM(i, 0);
+	static const char *specialcolormapnames[] = {
+		"INVERSEMAP", "GOLDMAP", "REDMAP", "GREENMAP", "BLUEMAP", NULL };
 
 	int alpha;
 	PalEntry * pBlendColor;
@@ -1596,25 +1760,11 @@ DEFINE_CLASS_PROPERTY_PREFIX(powerup, color, C_f, Inventory)
 	{
 		PROP_STRING_PARM(name, 1);
 
-		if (!stricmp(name, "INVERSEMAP"))
+		// We must check the old special colormap names for compatibility
+		int v = MatchString(name, specialcolormapnames);
+		if (v >= 0)
 		{
-			*pBlendColor = INVERSECOLOR;
-			return;
-		}
-		else if (!stricmp(name, "GOLDMAP"))
-		{
-			*pBlendColor = GOLDCOLOR;
-			return;
-		}
-		// [BC] Yay, more hacks.
-		else if (!stricmp(name, "REDMAP" ))
-		{
-			*pBlendColor = REDCOLOR;
-			return;
-		}
-		else if (!stricmp(name, "GREENMAP" ))
-		{
-			*pBlendColor = GREENCOLOR;
+			*pBlendColor = MakeSpecialColormap(v);
 			return;
 		}
 
@@ -1628,8 +1778,52 @@ DEFINE_CLASS_PROPERTY_PREFIX(powerup, color, C_f, Inventory)
 	else alpha = 255/3;
 
 	alpha=clamp<int>(alpha, 0, 255);
-	if (alpha!=0) *pBlendColor = MAKEARGB(alpha, 0, 0, 0) | color;
+	if (alpha != 0) *pBlendColor = MAKEARGB(alpha, 0, 0, 0) | color;
 	else *pBlendColor = 0;
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(powerup, colormap, FFFfff, Inventory)
+{
+	PalEntry * pBlendColor;
+
+	if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerup)))
+	{
+		pBlendColor = &((APowerup*)defaults)->BlendColor;
+	}
+	else if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerupGiver)))
+	{
+		pBlendColor = &((APowerupGiver*)defaults)->BlendColor;
+	}
+	else
+	{
+		I_Error("\"powerup.colormap\" requires an actor of type \"Powerup\"\n");
+		return;
+	}
+
+	if (PROP_PARM_COUNT == 3)
+	{
+		PROP_FLOAT_PARM(r, 0);
+		PROP_FLOAT_PARM(g, 1);
+		PROP_FLOAT_PARM(b, 2);
+		*pBlendColor = MakeSpecialColormap(AddSpecialColormap(0, 0, 0, r, g, b));
+	}
+	else if (PROP_PARM_COUNT == 6)
+	{
+		PROP_FLOAT_PARM(r1, 0);
+		PROP_FLOAT_PARM(g1, 1);
+		PROP_FLOAT_PARM(b1, 2);
+		PROP_FLOAT_PARM(r2, 3);
+		PROP_FLOAT_PARM(g2, 4);
+		PROP_FLOAT_PARM(b2, 5);
+		*pBlendColor = MakeSpecialColormap(AddSpecialColormap(r1, g1, b1, r2, g2, b2));
+	}
+	else
+	{
+		I_Error("\"power.colormap\" must have either 3 or 6 parameters\n");
+	}
 }
 
 //==========================================================================
@@ -1649,7 +1843,7 @@ DEFINE_CLASS_PROPERTY_PREFIX(powerup, duration, I, Inventory)
 	}
 	else
 	{
-		I_Error("\"powerup.color\" requires an actor of type \"Powerup\"\n");
+		I_Error("\"powerup.duration\" requires an actor of type \"Powerup\"\n");
 		return;
 	}
 
@@ -1660,10 +1854,49 @@ DEFINE_CLASS_PROPERTY_PREFIX(powerup, duration, I, Inventory)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY_PREFIX(powerup, mode, S, PowerupGiver)
+DEFINE_CLASS_PROPERTY_PREFIX(powerup, strength, F, Inventory)
+{
+	fixed_t *pStrength;
+
+	if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerup)))
+	{
+		pStrength = &((APowerup*)defaults)->Strength;
+	}
+	else if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerupGiver)))
+	{
+		pStrength = &((APowerupGiver*)defaults)->Strength;
+	}
+	else
+	{
+		I_Error("\"powerup.strength\" requires an actor of type \"Powerup\"\n");
+		return;
+	}
+	// Puts a percent value in the 0.0..1.0 range
+	PROP_FIXED_PARM(f, 0);
+	*pStrength = f / 100;
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(powerup, mode, S, Inventory)
 {
 	PROP_STRING_PARM(str, 0);
-	defaults->mode = (FName)str;
+	FName *pMode;
+	if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerup)))
+	{
+		pMode = &((APowerup*)defaults)->Mode;
+	}
+	else if (info->Class->IsDescendantOf(RUNTIME_CLASS(APowerupGiver)))
+	{
+		pMode = &((APowerupGiver*)defaults)->Mode;
+	}
+	else
+	{
+		I_Error("\"powerup.mode\" requires an actor of type \"Powerup\"\n");
+		return;
+	}
+	*pMode = (FName)str;
 }
 
 //==========================================================================
@@ -1777,9 +2010,78 @@ DEFINE_CLASS_PROPERTY_PREFIX(player, colorrange, I_I, PlayerPawn)
 	PROP_INT_PARM(end, 1);
 
 	if (start > end)
-		swap (start, end);
+		swapvalues (start, end);
 
 	info->Class->Meta.SetMetaInt (APMETA_ColorRange, (start & 255) | ((end & 255) << 8));
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(player, colorset, ISIII, PlayerPawn)
+{
+	PROP_INT_PARM(setnum, 0);
+	PROP_STRING_PARM(setname, 1);
+	PROP_INT_PARM(rangestart, 2);
+	PROP_INT_PARM(rangeend, 3);
+	PROP_INT_PARM(representative_color, 4);
+
+	FPlayerColorSet color;
+	color.Name = setname;
+	color.Lump = -1;
+	color.FirstColor = rangestart;
+	color.LastColor = rangeend;
+	color.RepresentativeColor = representative_color;
+
+	if (setnum < 0)
+	{
+		bag.ScriptPosition.Message(MSG_WARNING, "Color set number must not be negative.\n");
+	}
+	else
+	{
+		info->SetColorSet(setnum, &color);
+	}
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(player, colorsetfile, ISSI, PlayerPawn)
+{
+	PROP_INT_PARM(setnum, 0);
+	PROP_STRING_PARM(setname, 1);
+	PROP_STRING_PARM(rangefile, 2);
+	PROP_INT_PARM(representative_color, 3);
+
+	FPlayerColorSet color;
+	color.Name = setname;
+	color.Lump = Wads.CheckNumForName(rangefile);
+	color.RepresentativeColor = representative_color;
+	if (setnum < 0)
+	{
+		bag.ScriptPosition.Message(MSG_WARNING, "Color set number must not be negative.\n");
+	}
+	else if (color.Lump >= 0)
+	{
+		info->SetColorSet(setnum, &color);
+	}
+}
+
+//==========================================================================
+//
+//==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(player, clearcolorset, I, PlayerPawn)
+{
+	PROP_INT_PARM(setnum, 0);
+
+	if (setnum < 0)
+	{
+		bag.ScriptPosition.Message(MSG_WARNING, "Color set number must not be negative.\n");
+	}
+	else
+	{
+		info->SetColorSet(setnum, NULL);
+	}
 }
 
 //==========================================================================
@@ -1880,6 +2182,15 @@ DEFINE_CLASS_PROPERTY_PREFIX(player, maxhealth, I, PlayerPawn)
 //==========================================================================
 //
 //==========================================================================
+DEFINE_CLASS_PROPERTY_PREFIX(player, mugshotmaxhealth, I, PlayerPawn)
+{
+	PROP_INT_PARM(z, 0);
+	defaults->MugShotMaxHealth = z;
+}
+
+//==========================================================================
+//
+//==========================================================================
 DEFINE_CLASS_PROPERTY_PREFIX(player, runhealth, I, PlayerPawn)
 {
 	PROP_INT_PARM(z, 0);
@@ -1932,12 +2243,19 @@ DEFINE_CLASS_PROPERTY_PREFIX(player, crouchsprite, S, PlayerPawn)
 //==========================================================================
 //
 //==========================================================================
-DEFINE_CLASS_PROPERTY_PREFIX(player, damagescreencolor, C, PlayerPawn)
+DEFINE_CLASS_PROPERTY_PREFIX(player, damagescreencolor, Cf, PlayerPawn)
 {
 	PROP_COLOR_PARM(c, 0);
-	defaults->RedDamageFade = RPART (c);
-	defaults->GreenDamageFade = GPART (c);
-	defaults->BlueDamageFade = BPART (c);
+	defaults->DamageFade = c;
+	if (PROP_PARM_COUNT < 3)		// Because colors count as 2 parms
+	{
+		defaults->DamageFade.a = 255;
+	}
+	else
+	{
+		PROP_FLOAT_PARM(a, 2);
+		defaults->DamageFade.a = BYTE(255 * clamp(a, 0.f, 1.f));
+	}
 }
 
 //==========================================================================

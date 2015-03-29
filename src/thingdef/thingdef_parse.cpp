@@ -48,11 +48,13 @@
 #include "templates.h"
 #include "v_palette.h"
 #include "doomerrors.h"
-#include "autosegs.h"
 #include "i_system.h"
 #include "thingdef_exp.h"
 #include "w_wad.h"
 #include "v_video.h"
+#include "version.h"
+#include "v_text.h"
+#include "m_argv.h"
 
 void ParseOldDecoration(FScanner &sc, EDefinitionType def);
 
@@ -150,7 +152,8 @@ FxExpression *ParseParameter(FScanner &sc, PClass *cls, char type, bool constant
 		x = ParseExpression (sc, cls);
 		if (constant && !x->isConstant())
 		{
-			sc.ScriptError("Default parameter must be constant.");
+			sc.ScriptMessage("Default parameter must be constant.");
+			FScriptPosition::ErrorCounter++;
 		}
 		break;
 
@@ -197,13 +200,15 @@ static void ParseConstant (FScanner &sc, PSymbolTable * symt, PClass *cls)
 		if (symt->AddSymbol (sym) == NULL)
 		{
 			delete sym;
-			sc.ScriptError ("'%s' is already defined in '%s'.",
+			sc.ScriptMessage ("'%s' is already defined in '%s'.",
 				symname.GetChars(), cls? cls->TypeName.GetChars() : "Global");
+			FScriptPosition::ErrorCounter++;
 		}
 	}
 	else
 	{
-		sc.ScriptError("Numeric type required for constant");
+		sc.ScriptMessage("Numeric type required for constant");
+		FScriptPosition::ErrorCounter++;
 	}
 }
 
@@ -236,8 +241,9 @@ static void ParseEnum (FScanner &sc, PSymbolTable *symt, PClass *cls)
 		if (symt->AddSymbol (sym) == NULL)
 		{
 			delete sym;
-			sc.ScriptError ("'%s' is already defined in '%s'.",
+			sc.ScriptMessage ("'%s' is already defined in '%s'.",
 				symname.GetChars(), cls? cls->TypeName.GetChars() : "Global");
+			FScriptPosition::ErrorCounter++;
 		}
 		// This allows a comma after the last value but doesn't enforce it.
 		if (sc.CheckToken('}')) break;
@@ -249,19 +255,20 @@ static void ParseEnum (FScanner &sc, PSymbolTable *symt, PClass *cls)
 
 //==========================================================================
 //
-// ActorConstDef
+// ParseNativeVariable
 //
-// Parses a constant definition.
+// Parses a native variable declaration.
 //
 //==========================================================================
 
-static void ParseVariable (FScanner &sc, PSymbolTable * symt, PClass *cls)
+static void ParseNativeVariable (FScanner &sc, PSymbolTable * symt, PClass *cls)
 {
 	FExpressionType valuetype;
 
 	if (sc.LumpNum == -1 || Wads.GetLumpFile(sc.LumpNum) > 0)
 	{
-		sc.ScriptError ("variables can only be imported by internal class and actor definitions!");
+		sc.ScriptMessage ("variables can only be imported by internal class and actor definitions!");
+		FScriptPosition::ErrorCounter++;
 	}
 
 	// Read the type and make sure it's int or float.
@@ -311,7 +318,7 @@ static void ParseVariable (FScanner &sc, PSymbolTable * symt, PClass *cls)
 	}
 	sc.MustGetToken(';');
 
-	FVariableInfo *vi = FindVariable(symname, cls);
+	const FVariableInfo *vi = FindVariable(symname, cls);
 	if (vi == NULL)
 	{
 		sc.ScriptError("Unknown native variable '%s'", symname.GetChars());
@@ -320,12 +327,80 @@ static void ParseVariable (FScanner &sc, PSymbolTable * symt, PClass *cls)
 	PSymbolVariable *sym = new PSymbolVariable(symname);
 	sym->offset = vi->address;	// todo
 	sym->ValueType = valuetype;
+	sym->bUserVar = false;
 
 	if (symt->AddSymbol (sym) == NULL)
 	{
 		delete sym;
-		sc.ScriptError ("'%s' is already defined in '%s'.",
+		sc.ScriptMessage ("'%s' is already defined in '%s'.",
 			symname.GetChars(), cls? cls->TypeName.GetChars() : "Global");
+		FScriptPosition::ErrorCounter++;
+	}
+}
+
+//==========================================================================
+//
+// ParseUserVariable
+//
+// Parses a user variable declaration.
+//
+//==========================================================================
+
+static void ParseUserVariable (FScanner &sc, PSymbolTable *symt, PClass *cls)
+{
+	FExpressionType valuetype;
+
+	// Only non-native classes may have user variables.
+	if (!cls->bRuntimeClass)
+	{
+		sc.ScriptError("Native classes may not have user variables");
+	}
+
+	// Read the type and make sure it's int.
+	sc.MustGetAnyToken();
+	if (sc.TokenType != TK_Int)
+	{
+		sc.ScriptMessage("User variables must be of type int");
+		FScriptPosition::ErrorCounter++;
+	}
+	valuetype = VAL_Int;
+
+	sc.MustGetToken(TK_Identifier);
+	// For now, restrict user variables to those that begin with "user_" to guarantee
+	// no clashes with internal member variable names.
+	if (sc.StringLen < 6 || strnicmp("user_", sc.String, 5) != 0)
+	{
+		sc.ScriptMessage("User variable names must begin with \"user_\"");
+		FScriptPosition::ErrorCounter++;
+	}
+
+	FName symname = sc.String;
+	if (sc.CheckToken('['))
+	{
+		FxExpression *expr = ParseExpression(sc, cls);
+		int maxelems = expr->EvalExpression(NULL).GetInt();
+		delete expr;
+		sc.MustGetToken(']');
+		if (maxelems <= 0)
+		{
+			sc.ScriptMessage("Array size must be positive");
+			FScriptPosition::ErrorCounter++;
+			maxelems = 1;
+		}
+		valuetype.MakeArray(maxelems);
+	}
+	sc.MustGetToken(';');
+
+	PSymbolVariable *sym = new PSymbolVariable(symname);
+	sym->offset = cls->Extend(sizeof(int) * (valuetype.Type == VAL_Array ? valuetype.size : 1));
+	sym->ValueType = valuetype;
+	sym->bUserVar = true;
+	if (symt->AddSymbol(sym) == NULL)
+	{
+		delete sym;
+		sc.ScriptMessage ("'%s' is already defined in '%s'.",
+			symname.GetChars(), cls ? cls->TypeName.GetChars() : "Global");
+		FScriptPosition::ErrorCounter++;
 	}
 }
 
@@ -381,12 +456,13 @@ void HandleActorFlag(FScanner &sc, Baggage &bag, const char *part1, const char *
 	{
 		if (part2 == NULL)
 		{
-			sc.ScriptError("\"%s\" is an unknown flag\n", part1);
+			sc.ScriptMessage("\"%s\" is an unknown flag\n", part1);
 		}
 		else
 		{
-			sc.ScriptError("\"%s.%s\" is an unknown flag\n", part1, part2);
+			sc.ScriptMessage("\"%s.%s\" is an unknown flag\n", part1, part2);
 		}
+		FScriptPosition::ErrorCounter++;
 	}
 }
 
@@ -396,18 +472,14 @@ void HandleActorFlag(FScanner &sc, Baggage &bag, const char *part1, const char *
 //
 //==========================================================================
 
-static int ParseMorphStyle (FScanner &sc)
+struct FParseValue
 {
- 	static const char * morphstyles[]={
-		"MRF_ADDSTAMINA", "MRF_FULLHEALTH", "MRF_UNDOBYTOMEOFPOWER", "MRF_UNDOBYCHAOSDEVICE",
-		"MRF_FAILNOTELEFRAG", "MRF_FAILNOLAUGH", "MRF_WHENINVULNERABLE", "MRF_LOSEACTUALWEAPON",
-		"MRF_NEWTIDBEHAVIOUR", "MRF_UNDOBYDEATH", "MRF_UNDOBYDEATHFORCED", "MRF_UNDOBYDEATHSAVES", NULL};
+	const char *Name;
+	int Flag;
+};
 
- 	static const int morphstyle_values[]={
-		MORPH_ADDSTAMINA, MORPH_FULLHEALTH, MORPH_UNDOBYTOMEOFPOWER, MORPH_UNDOBYCHAOSDEVICE,
-		MORPH_FAILNOTELEFRAG, MORPH_FAILNOLAUGH, MORPH_WHENINVULNERABLE, MORPH_LOSEACTUALWEAPON,
-		MORPH_NEWTIDBEHAVIOUR, MORPH_UNDOBYDEATH, MORPH_UNDOBYDEATHFORCED, MORPH_UNDOBYDEATHSAVES};
-
+int ParseFlagExpressionString(FScanner &sc, const FParseValue *vals)
+{
 	// May be given flags by number...
 	if (sc.CheckNumber())
 	{
@@ -423,7 +495,7 @@ static int ParseMorphStyle (FScanner &sc)
 	do
 	{
 		sc.MustGetString();
-		style |= morphstyle_values[sc.MustMatchString(morphstyles)];
+		style |= vals[sc.MustMatchString(&vals->Name, sizeof (*vals))].Flag;
 	}
 	while (sc.CheckString("|"));
 	if (gotparen)
@@ -432,6 +504,51 @@ static int ParseMorphStyle (FScanner &sc)
 	}
 
 	return style;
+}
+
+
+
+static int ParseMorphStyle (FScanner &sc)
+{
+ 	static const FParseValue morphstyles[]={
+		{ "MRF_ADDSTAMINA",			MORPH_ADDSTAMINA},
+		{ "MRF_FULLHEALTH",			MORPH_FULLHEALTH}, 
+		{ "MRF_UNDOBYTOMEOFPOWER",	MORPH_UNDOBYTOMEOFPOWER},  
+		{ "MRF_UNDOBYCHAOSDEVICE",	MORPH_UNDOBYCHAOSDEVICE},
+		{ "MRF_FAILNOTELEFRAG",		MORPH_FAILNOTELEFRAG}, 
+		{ "MRF_FAILNOLAUGH",		MORPH_FAILNOLAUGH}, 
+		{ "MRF_WHENINVULNERABLE",	MORPH_WHENINVULNERABLE}, 
+		{ "MRF_LOSEACTUALWEAPON",	MORPH_LOSEACTUALWEAPON},
+		{ "MRF_NEWTIDBEHAVIOUR",	MORPH_NEWTIDBEHAVIOUR}, 
+		{ "MRF_UNDOBYDEATH",		MORPH_UNDOBYDEATH}, 
+		{ "MRF_UNDOBYDEATHFORCED",	MORPH_UNDOBYDEATHFORCED},  
+		{ "MRF_UNDOBYDEATHSAVES",	MORPH_UNDOBYDEATHSAVES},
+		{ NULL, 0 }
+	};
+
+	return ParseFlagExpressionString(sc, morphstyles);
+}
+
+static int ParseThingActivation (FScanner &sc)
+{
+ 	static const FParseValue activationstyles[]={
+
+		{ "THINGSPEC_Default",				THINGSPEC_Default},
+		{ "THINGSPEC_ThingActs",			THINGSPEC_ThingActs},
+		{ "THINGSPEC_ThingTargets",			THINGSPEC_ThingTargets},
+		{ "THINGSPEC_TriggerTargets",		THINGSPEC_TriggerTargets},
+		{ "THINGSPEC_MonsterTrigger",		THINGSPEC_MonsterTrigger},
+		{ "THINGSPEC_MissileTrigger",		THINGSPEC_MissileTrigger},
+		{ "THINGSPEC_ClearSpecial",			THINGSPEC_ClearSpecial},
+		{ "THINGSPEC_NoDeathSpecial",		THINGSPEC_NoDeathSpecial},
+		{ "THINGSPEC_TriggerActs",			THINGSPEC_TriggerActs},
+		{ "THINGSPEC_Activate",				THINGSPEC_Activate},
+		{ "THINGSPEC_Deactivate",			THINGSPEC_Deactivate},
+		{ "THINGSPEC_Switch",				THINGSPEC_Switch},
+		{ NULL, 0 }
+	};
+
+	return ParseFlagExpressionString(sc, activationstyles);
 }
 
 //==========================================================================
@@ -478,13 +595,18 @@ static FState *CheckState(FScanner &sc, PClass *type)
 
 			if (v!=0 && state==NULL)
 			{
-				sc.ScriptError("Attempt to get invalid state from actor %s\n", type->ParentClass->TypeName.GetChars());
+				sc.ScriptMessage("Attempt to get invalid state from actor %s\n", type->ParentClass->TypeName.GetChars());
+				FScriptPosition::ErrorCounter++;
 				return NULL;
 			}
 			state+=v;
 			return state;
 		}
-		else sc.ScriptError("Invalid state assignment");
+		else 
+		{
+			sc.ScriptMessage("Invalid state assignment");
+			FScriptPosition::ErrorCounter++;
+		}
 	}
 	return NULL;
 }
@@ -539,7 +661,7 @@ static bool ParsePropertyParams(FScanner &sc, FPropertyInfo *prop, AActor *defau
 
 			case 'F':
 				sc.MustGetFloat();
-				conv.f = sc.Float;
+				conv.f = float(sc.Float);
 				break;
 
 			case 'Z':	// an optional string. Does not allow any numerical value.
@@ -552,9 +674,13 @@ static bool ParsePropertyParams(FScanner &sc, FPropertyInfo *prop, AActor *defau
 				// fall through
 
 			case 'S':
-			case 'T':
 				sc.MustGetString();
 				conv.s = strings[strings.Reserve(1)] = sc.String;
+				break;
+
+			case 'T':
+				sc.MustGetString();
+				conv.s = strings[strings.Reserve(1)] = strbin1(sc.String);
 				break;
 
 			case 'C':
@@ -581,6 +707,10 @@ static bool ParsePropertyParams(FScanner &sc, FPropertyInfo *prop, AActor *defau
 
 			case 'M':	// special case. An expression-aware parser will not need this.
 				conv.i = ParseMorphStyle(sc);
+				break;
+				
+			case 'N':	// special case. An expression-aware parser will not need this.
+				conv.i = ParseThingActivation(sc);
 				break;
 
 			case 'L':	// Either a number or a list of strings
@@ -746,7 +876,7 @@ static void ParseActionDef (FScanner &sc, PClass *cls)
 	};
 
 	bool error = false;
-	AFuncDesc *afd;
+	const AFuncDesc *afd;
 	FName funcname;
 	FString args;
 	TArray<FxExpression *> DefaultParams;
@@ -945,6 +1075,12 @@ static FActorInfo *ParseActorHeader(FScanner &sc, Baggage *bag)
 		// Get actor name
 		sc.MustGetString ();
 		replaceName = sc.String;
+
+		if (replaceName == typeName)
+		{
+			sc.ScriptMessage ("Cannot replace class %s with itself", typeName.GetChars());
+			FScriptPosition::ErrorCounter++;
+		}
 	}
 
 	// Now, after the actor names have been parsed, it is time to switch to C-mode 
@@ -970,6 +1106,8 @@ static FActorInfo *ParseActorHeader(FScanner &sc, Baggage *bag)
 	{
 		FActorInfo *info =  CreateNewActor(sc, typeName, parentName, native);
 		info->DoomEdNum = DoomEdNum > 0? DoomEdNum : -1;
+		info->Class->Meta.SetMetaString (ACMETA_Lump, Wads.GetLumpFullPath(sc.LumpNum));
+
 		SetReplacement(info, replaceName);
 
 		ResetBaggage (bag, info->Class->ParentClass);
@@ -1016,7 +1154,11 @@ static void ParseActor(FScanner &sc)
 			break;
 
 		case TK_Native:
-			ParseVariable (sc, &info->Class->Symbols, info->Class);
+			ParseNativeVariable (sc, &info->Class->Symbols, info->Class);
+			break;
+
+		case TK_Var:
+			ParseUserVariable (sc, &info->Class->Symbols, info->Class);
 			break;
 
 		case TK_Identifier:
@@ -1062,6 +1204,16 @@ void ParseDecorate (FScanner &sc)
 		case TK_Include:
 		{
 			sc.MustGetString();
+			// This check needs to remain overridable for testing purposes.
+			if (Wads.GetLumpFile(sc.LumpNum) == 0 && !Args->CheckParm("-allowdecoratecrossincludes"))
+			{
+				int includefile = Wads.GetLumpFile(Wads.CheckNumForFullName(sc.String, true));
+				if (includefile != 0)
+				{
+					I_FatalError("File %s is overriding core lump %s.",
+						Wads.GetWadFullName(includefile), sc.String);
+				}
+			}
 			FScanner newscanner;
 			newscanner.Open(sc.String);
 			// [BB] Clients may not tamper with DECORATE code, so mark the included lump for authentication.
@@ -1079,7 +1231,7 @@ void ParseDecorate (FScanner &sc)
 			break;
 
 		case TK_Native:
-			ParseVariable(sc, &GlobalSymbols, NULL);
+			ParseNativeVariable(sc, &GlobalSymbols, NULL);
 			break;
 
 		case ';':
@@ -1114,9 +1266,6 @@ void ParseDecorate (FScanner &sc)
 				break;
 			}
 		default:
-			// without the option of game filters following, anything but an opening brace
-			// here means a syntax error.
-			sc.MustGetStringName("{");
 			sc.RestorePos(pos);
 			ParseOldDecoration(sc, DEF_Decoration);
 			break;

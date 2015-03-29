@@ -62,9 +62,17 @@ void DPlat::Serialize (FArchive &arc)
 void DPlat::PlayPlatSound (const char *sound)
 {
 	if (m_Sector->seqType >= 0)
+	{
 		SN_StartSequence (m_Sector, CHAN_FLOOR, m_Sector->seqType, SEQ_PLATFORM, 0);
+	}
+	else if (m_Sector->SeqName != NAME_None)
+	{
+		SN_StartSequence (m_Sector, CHAN_FLOOR, m_Sector->SeqName, 0);
+	}
 	else
+	{
 		SN_StartSequence (m_Sector, CHAN_FLOOR, sound, 0);
+	}
 }
 
 //
@@ -108,7 +116,7 @@ void DPlat::Tick ()
 					SERVERCOMMANDS_SetSectorCeilingPlane( ULONG( m_Sector - sectors ));
 			}
 
-			SN_StopSequence (m_Sector);
+			SN_StopSequence (m_Sector, CHAN_FLOOR);
 
 			// [BC] If we're the server, tell clients to play the plat sound.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -121,9 +129,12 @@ void DPlat::Tick ()
 
 				switch (m_Type)
 				{
+					case platRaiseAndStayLockout:
+						// Instead of keeping the dead thinker like Heretic did let's 
+						// better use a flag to avoid problems elsewhere. For example,
+						// keeping the thinker would make tagwait wait indefinitely.
+						m_Sector->planes[sector_t::floor].Flags |= PLANEF_BLOCKED; 
 					case platRaiseAndStay:
-						if (gameinfo.gametype == GAME_Heretic)
-							break;
 					case platDownByValue:
 					case platDownWaitUpStay:
 					case platDownWaitUpStayStone:
@@ -171,7 +182,7 @@ void DPlat::Tick ()
 					SERVERCOMMANDS_SetSectorCeilingPlane( ULONG( m_Sector - sectors ));
 			}
 
-			SN_StopSequence (m_Sector);
+			SN_StopSequence (m_Sector, CHAN_FLOOR);
 
 			// [BC] If we're the server, tell clients to play the plat sound.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -230,6 +241,7 @@ void DPlat::Tick ()
 		{
 			case platUpByValueStay:
 			case platRaiseAndStay:
+			case platRaiseAndStayLockout:
 
 				// [BC] If we're the server, tell clients to destroy the plat.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -351,9 +363,9 @@ void DPlat::SetType( EPlatType Type )
 }
 
 // [BC]
-void DPlat::SetCrush( bool bCrush )
+void DPlat::SetCrush( LONG lCrush )
 {
-	m_Crush = bCrush;
+	m_Crush = lCrush;
 }
 
 // [BC]
@@ -421,7 +433,7 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, int height,
 		sec = &sectors[secnum];
 
 manual_plat:
-		if (sec->floordata)
+		if (sec->PlaneMoving(sector_t::floor))
 		{
 			if (!manual)
 				continue;
@@ -451,7 +463,7 @@ manual_plat:
 		{
 			if (line)
 			{
-				sec->SetTexture(sector_t::floor, sides[line->sidenum[0]].sector->GetTexture(sector_t::floor));
+				sec->SetTexture(sector_t::floor, line->sidedef[0]->sector->GetTexture(sector_t::floor));
 
 				// [BC] Update clients about this flat change.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -467,6 +479,7 @@ manual_plat:
 		switch (type)
 		{
 		case DPlat::platRaiseAndStay:
+		case DPlat::platRaiseAndStayLockout:
 			newheight = sec->FindNextHighestFloor (&spot);
 			plat->m_High = sec->floorplane.PointToDist (spot, newheight);
 			plat->m_Low = sec->floorplane.d;

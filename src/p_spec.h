@@ -208,7 +208,7 @@ void	P_SetSectorFriction (int tag, int amount, bool alterFlag);
 //
 inline side_t *getSide (int currentSector, int line, int side)
 {
-	return &sides[ (sectors[currentSector].lines[line])->sidenum[side] ];
+	return (sectors[currentSector].lines[line])->sidedef[side];
 }
 
 //
@@ -219,7 +219,7 @@ inline side_t *getSide (int currentSector, int line, int side)
 //
 inline sector_t *getSector (int currentSector, int line, int side)
 {
-	return sides[ (sectors[currentSector].lines[line])->sidenum[side] ].sector;
+	return (sectors[currentSector].lines[line])->sidedef[side]->sector;
 }
 
 
@@ -478,6 +478,7 @@ public:
 		platToggle,
 		platDownToNearestFloor,
 		platDownToLowestCeiling,
+		platRaiseAndStayLockout,
 	};
 
 	// [BC] Make this constructor public to clients can create it.
@@ -505,7 +506,7 @@ public:
 	void		SetStatus( LONG lStatus );
 
 	void	SetType( EPlatType Type );
-	void	SetCrush( bool bCrush );
+	void	SetCrush( LONG lCrush );
 	void	SetTag( LONG lTag );
 	void	SetSpeed( LONG lSpeed );
 	void	SetDelay( LONG lDelay );
@@ -774,6 +775,7 @@ protected:
 	};
 	int m_Speed;
 	int m_Delay;
+	bool m_SetBlocking1, m_SetBlocking2;
 
 	friend bool EV_SlidingDoor (line_t *line, AActor *thing, int tag, int speed, int delay);
 private:
@@ -1028,7 +1030,7 @@ protected:
 	friend bool EV_DoFloor (DFloor::EFloor floortype, line_t *line, int tag,
 		fixed_t speed, fixed_t height, int crush, int change, bool hexencrush);
 	friend bool EV_FloorCrushStop (int tag);
-	friend bool EV_DoDonut (int tag, fixed_t pillarspeed, fixed_t slimespeed);
+	friend bool EV_DoDonut (int tag, line_t *line, fixed_t pillarspeed, fixed_t slimespeed);
 private:
 	DFloor ();
 };
@@ -1039,7 +1041,7 @@ bool EV_BuildStairs (int tag, DFloor::EStair type, line_t *line,
 bool EV_DoFloor (DFloor::EFloor floortype, line_t *line, int tag,
 	fixed_t speed, fixed_t height, int crush, int change, bool hexencrush);
 bool EV_FloorCrushStop (int tag);
-bool EV_DoDonut (int tag, fixed_t pillarspeed, fixed_t slimespeed);
+bool EV_DoDonut (int tag, line_t *line, fixed_t pillarspeed, fixed_t slimespeed);
 
 inline FArchive &operator<< (FArchive &arc, DFloor::EFloor &type)
 {
@@ -1156,7 +1158,7 @@ protected:
 	// [EP] TODO: remove the 'l' prefix from this variable, it isn't LONG anymore
 	int			m_lWaggleID;
 
-	friend bool EV_StartWaggle (int tag, int height, int speed,
+	friend bool EV_StartWaggle (int tag, line_t *line, int height, int speed,
 		int offset, int timer, bool ceiling);
 
 	void DoWaggle (bool ceiling);
@@ -1167,7 +1169,7 @@ protected:
 	DWaggleBase ();
 };
 
-bool EV_StartWaggle (int tag, int height, int speed,
+bool EV_StartWaggle (int tag, line_t *line, int height, int speed,
 	int offset, int timer, bool ceiling);
 
 class DFloorWaggle : public DWaggleBase
@@ -1204,8 +1206,8 @@ bool EV_DoChange (line_t *line, EChange changetype, int tag);
 //
 // P_TELEPT
 //
-bool P_Teleport (AActor *thing, fixed_t x, fixed_t y, fixed_t z, angle_t angle, bool useFog, bool sourceFog, bool keepOrientation, bool haltMomentum = true);
-bool EV_Teleport (int tid, int tag, line_t *line, int side, AActor *thing, bool fog, bool sourceFog, bool keepOrientation, bool haltMomentum = true);
+bool P_Teleport (AActor *thing, fixed_t x, fixed_t y, fixed_t z, angle_t angle, bool useFog, bool sourceFog, bool keepOrientation, bool haltVelocity = true);
+bool EV_Teleport (int tid, int tag, line_t *line, int side, AActor *thing, bool fog, bool sourceFog, bool keepOrientation, bool haltVelocity = true);
 bool EV_SilentLineTeleport (line_t *line, int side, AActor *thing, int id, INTBOOL reverse);
 bool EV_TeleportOther (int other_tid, int dest_tid, bool fog);
 bool EV_TeleportGroup (int group_tid, AActor *victim, int source_tid, int dest_tid, bool moveSource, bool fog);
@@ -1225,7 +1227,7 @@ void P_DoDeferedScripts (void);
 //
 // [RH] p_quake.c
 //
-bool P_StartQuake (AActor *activator, int tid, int intensity, int duration, int damrad, int tremrad);
+bool P_StartQuake (AActor *activator, int tid, int intensity, int duration, int damrad, int tremrad, FSoundID quakesfx);
 
 // [BC] Prototypes dealing with network IDs for movers.
 DDoor		*P_GetDoorByID( LONG lID );

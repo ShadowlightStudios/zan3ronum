@@ -44,32 +44,45 @@
 #include "dobject.h"
 #include "doomdef.h"
 
-const BYTE SF_FULLBRIGHT = 0x40;
-
 struct Baggage;
 class FScanner;
 struct FActorInfo;
 class FArchive;
 
+// Sprites that are fixed in position because they can have special meanings.
+enum
+{
+	SPR_TNT1,		// The empty sprite
+	SPR_FIXED,		// Do not change sprite or frame
+	SPR_NOCHANGE,	// Do not change sprite (frame change is okay)
+};
+
 struct FState
 {
 	WORD		sprite;
 	SWORD		Tics;
-	long		Misc1;			// Was changed to SBYTE, reverted to long for MBF compat
-	long		Misc2;			// Was changed to BYTE, reverted to long for MBF compat
-	BYTE		Frame;
+	int			Misc1;			// Was changed to SBYTE, reverted to long for MBF compat
+	int			Misc2;			// Was changed to BYTE, reverted to long for MBF compat
+	BYTE		Frame:6;
+	BYTE		Fullbright:1;	// State is fullbright
+	BYTE		SameFrame:1;	// Ignore Frame (except when spawning actor)
 	BYTE		DefineFlags;	// Unused byte so let's use it during state creation.
+	short		Light;
 	FState		*NextState;
 	actionf_p	ActionFunc;
 	int			ParameterIndex;
 
 	inline int GetFrame() const
 	{
-		return Frame & ~(SF_FULLBRIGHT);
+		return Frame;
+	}
+	inline bool GetSameFrame() const
+	{
+		return SameFrame;
 	}
 	inline int GetFullbright() const
 	{
-		return Frame & SF_FULLBRIGHT ? 0x10 /*RF_FULLBRIGHT*/ : 0;
+		return Fullbright ? 0x10 /*RF_FULLBRIGHT*/ : 0;
 	}
 	inline int GetTics() const
 	{
@@ -89,7 +102,7 @@ struct FState
 	}
 	inline void SetFrame(BYTE frame)
 	{
-		Frame = (Frame & SF_FULLBRIGHT) | (frame-'A');
+		Frame = frame - 'A';
 	}
 	void SetAction(PSymbolActionFunction *func, bool setdefaultparams = true)
 	{
@@ -144,8 +157,21 @@ FArchive &operator<< (FArchive &arc, FState *&state);
 
 #include "gametype.h"
 
+// Standard pre-defined skin colors
+struct FPlayerColorSet
+{
+	FName Name;			// Name of this color
+
+	int Lump;			// Lump to read the translation from, otherwise use next 2 fields
+	BYTE FirstColor, LastColor;		// Describes the range of colors to use for the translation
+
+	BYTE RepresentativeColor;		// A palette entry representative of this translation,
+									// for map arrows and status bar backgrounds and such
+};
+
 typedef TMap<FName, fixed_t> DmgFactors;
-typedef TMap<FName, BYTE> PainChanceList;
+typedef TMap<FName, int> PainChanceList;
+typedef TMap<int, FPlayerColorSet> FPlayerColorSetMap;
 
 struct FActorInfo
 {
@@ -157,6 +183,7 @@ struct FActorInfo
 	void RegisterIDs ();
 	void SetDamageFactor(FName type, fixed_t factor);
 	void SetPainChance(FName type, int chance);
+	void SetColorSet(int index, const FPlayerColorSet *set);
 
 	FState *FindState (int numnames, FName *names, bool exact=false) const;
 	FState *FindStateByString(const char *name, bool exact=false);
@@ -165,8 +192,8 @@ struct FActorInfo
 		return FindState(1, &name);
 	}
 
-	FActorInfo *GetReplacement ();
-	FActorInfo *GetReplacee ();
+	FActorInfo *GetReplacement (bool lookskill=true);
+	FActorInfo *GetReplacee (bool lookskill=true);
 
 	PClass *Class;
 	FState *OwnedStates;
@@ -176,9 +203,10 @@ struct FActorInfo
 	BYTE GameFilter;
 	BYTE SpawnID;
 	SWORD DoomEdNum;
-	FStateLabels * StateList;
+	FStateLabels *StateList;
 	DmgFactors *DamageFactors;
-	PainChanceList * PainChances;
+	PainChanceList *PainChances;
+	FPlayerColorSetMap *ColorSets;
 };
 
 class FDoomEdMap
@@ -211,5 +239,6 @@ extern FDoomEdMap DoomEdMap;
 
 int GetSpriteIndex(const char * spritename);
 TArray<FName> &MakeStateNameList(const char * fname);
+void AddStateLight(FState *state, const char *lname);
 
 #endif	// __INFO_H__

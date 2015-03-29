@@ -145,10 +145,10 @@ FBaseCVar::~FBaseCVar ()
 	}
 }
 
-void FBaseCVar::ForceSet (UCVarValue value, ECVarType type)
+void FBaseCVar::ForceSet (UCVarValue value, ECVarType type, bool nouserinfosend)
 {
 	DoSet (value, type);
-	if (Flags & CVAR_USERINFO)
+	if ((Flags & CVAR_USERINFO) && !nouserinfosend && !(Flags & CVAR_IGNORE))
 		D_UserInfoChanged (this);
 	if (m_UseCallback)
 		Callback ();
@@ -189,6 +189,9 @@ void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
 		{
 			ForceSet (value, type);
 //			D_SendServerInfoChange (this, value, type);
+			// [BB] Inform the clients about changes of server mod cvars.
+			if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( Flags & CVAR_MOD ) )
+				SERVERCOMMANDS_SetCVar ( *this );
 		}
 	}
 	else
@@ -263,7 +266,7 @@ float FBaseCVar::ToFloat (UCVarValue value, ECVarType type)
 		return value.Float;
 
 	case CVAR_String:
-		return strtod (value.String, NULL);
+		return (float)strtod (value.String, NULL);
 
 	case CVAR_GUID:
 		return 0.f;
@@ -278,7 +281,7 @@ static GUID cGUID;
 static char truestr[] = "true";
 static char falsestr[] = "false";
 
-char *FBaseCVar::ToString (UCVarValue value, ECVarType type)
+const char *FBaseCVar::ToString (UCVarValue value, ECVarType type)
 {
 	switch (type)
 	{
@@ -519,8 +522,8 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 		if (i == 38 && value[i] == 0)
 		{
 			cGUID.Data1 = strtoul (value + 1, NULL, 16);
-			cGUID.Data2 = strtoul (value + 10, NULL, 16);
-			cGUID.Data3 = strtoul (value + 15, NULL, 16);
+			cGUID.Data2 = (WORD)strtoul (value + 10, NULL, 16);
+			cGUID.Data3 = (WORD)strtoul (value + 15, NULL, 16);
 			cGUID.Data4[0] = HexToByte (value + 20);
 			cGUID.Data4[1] = HexToByte (value + 22);
 			cGUID.Data4[2] = HexToByte (value + 25);
@@ -852,9 +855,7 @@ UCVarValue FStringCVar::GetFavoriteRepDefault (ECVarType *type) const
 
 void FStringCVar::SetGenericRepDefault (UCVarValue value, ECVarType type)
 {
-	if (DefaultValue)
-		delete[] DefaultValue;
-	DefaultValue = ToString (value, type);
+	ReplaceString(&DefaultValue, ToString(value, type));
 	if (Flags & CVAR_ISDEFAULT)
 	{
 		SetGenericRep (value, type);
@@ -1156,7 +1157,7 @@ void FilterCompactCVars (TArray<FBaseCVar *> &cvars, DWORD filter)
 	FBaseCVar *cvar = CVars;
 	while (cvar)
 	{
-		if (cvar->Flags & filter)
+		if ((cvar->Flags & filter) && !(cvar->Flags & CVAR_IGNORE))
 			cvars.Push (cvar);
 		cvar = cvar->m_Next;
 	}
@@ -1188,7 +1189,7 @@ void C_WriteCVars (BYTE **demo_p, DWORD filter, bool compact)
 		cvar = CVars;
 		while (cvar)
 		{
-			if ((cvar->Flags & filter) && !(cvar->Flags & CVAR_NOSAVE))
+			if ((cvar->Flags & filter) && !(cvar->Flags & (CVAR_NOSAVE|CVAR_IGNORE)))
 			{
 				UCVarValue val = cvar->GetGenericRep (CVAR_String);
 				ptr += sprintf ((char *)ptr, "\\%s\\%s",
@@ -1294,7 +1295,7 @@ void C_BackupCVars (void)
 		}
 		cvar = cvar->m_Next;
 	}
-	numbackedup = backup - CVarBackups;
+	numbackedup = int(backup - CVarBackups);
 }
 
 void C_RestoreCVars (void)
@@ -1368,6 +1369,30 @@ FBaseCVar *FindCVarSub (const char *var_name, int namelen)
 	return var;
 }
 
+//===========================================================================
+//
+// C_CreateCVar
+//
+// Create a new cvar with the specified name and type. It should not already
+// exist.
+//
+//===========================================================================
+
+FBaseCVar *C_CreateCVar(const char *var_name, ECVarType var_type, DWORD flags)
+{
+	assert(FindCVar(var_name, NULL) == NULL);
+	flags |= CVAR_AUTO;
+	switch (var_type)
+	{
+	case CVAR_Bool:		return new FBoolCVar(var_name, 0, flags);
+	case CVAR_Int:		return new FIntCVar(var_name, 0, flags);
+	case CVAR_Float:	return new FFloatCVar(var_name, 0, flags);
+	case CVAR_String:	return new FStringCVar(var_name, NULL, flags);
+	case CVAR_Color:	return new FColorCVar(var_name, 0, flags);
+	default:			return NULL;
+	}
+}
+
 void UnlatchCVars (void)
 {
 	FLatchedValue var;
@@ -1401,38 +1426,20 @@ void C_SetCVarsToDefaults (void)
 	}
 }
 
-void C_ArchiveCVars (FConfigFile *f, int type)
+void C_ArchiveCVars (FConfigFile *f, uint32 filter)
 {
-	// type 0: Game-specific cvars
-	// type 1: Global cvars
-	// type 2: Unknown cvars
-	// type 3: Unknown global cvars
-	// type 4: User info cvars
-	// type 5: Server info cvars
-	static const DWORD filters[6] =
-	{
-		CVAR_ARCHIVE,
-		CVAR_ARCHIVE|CVAR_GLOBALCONFIG,
-		CVAR_ARCHIVE|CVAR_AUTO,
-		CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_AUTO,
-		CVAR_ARCHIVE|CVAR_USERINFO,
-		CVAR_ARCHIVE|CVAR_SERVERINFO
-	};
-
 	FBaseCVar *cvar = CVars;
-	DWORD filter;
-
-	filter = filters[type];
 
 	while (cvar)
 	{
 		if ((cvar->Flags &
-			(CVAR_GLOBALCONFIG|CVAR_ARCHIVE|CVAR_AUTO|CVAR_USERINFO|CVAR_SERVERINFO|CVAR_NOSAVE))
+			(CVAR_GLOBALCONFIG|CVAR_ARCHIVE|CVAR_MOD|CVAR_AUTO|CVAR_USERINFO|CVAR_SERVERINFO|CVAR_NOSAVE))
 			== filter)
 		{
 			UCVarValue val;
 			val = cvar->GetGenericRep (CVAR_String);
-			if ( type == 4 )
+			// [BB] This is ancient code from Skulltag...
+			if ( filter == (CVAR_ARCHIVE|CVAR_USERINFO) )
 			{
 				char	szString[64];
 
@@ -1574,14 +1581,16 @@ void FBaseCVar::ListVars (const char *filter, bool plain)
 			else
 			{
 				++count;
-				Printf ("%c%c%c %s : :%s\n",
+				Printf ("%c%c%c%c%c %s = %s\n",
 					flags & CVAR_ARCHIVE ? 'A' : ' ',
 					flags & CVAR_USERINFO ? 'U' :
-				flags & CVAR_SERVERINFO ? 'S' :
-				flags & CVAR_AUTO ? 'C' : ' ',
+						flags & CVAR_SERVERINFO ? 'S' :
+						flags & CVAR_AUTO ? 'C' : ' ',
 					flags & CVAR_NOSET ? '-' :
-				flags & CVAR_LATCH ? 'L' :
-				flags & CVAR_UNSETTABLE ? '*' : ' ',
+						flags & CVAR_LATCH ? 'L' :
+						flags & CVAR_UNSETTABLE ? '*' : ' ',
+					flags & CVAR_MOD ? 'M' : ' ',
+					flags & CVAR_IGNORE ? 'X' : ' ',
 					var->GetName(),
 					var->GetGenericRep (CVAR_String).String);
 			}

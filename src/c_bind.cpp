@@ -74,6 +74,8 @@ static const FBinding DefBindings[] =
 	{ "0", "slot 0" },
 	{ "[", "invprev" },
 	{ "]", "invnext" },
+	{ "mwheelleft", "invprev" },
+	{ "mwheelright", "invnext" },
 	{ "enter", "invuse" },
 	{ "-", "sizedown" },
 	{ "=", "sizeup" },
@@ -91,10 +93,6 @@ static const FBinding DefBindings[] =
 	{ "mouse2", "+strafe" },
 	{ "mouse3", "+forward" },
 	{ "mouse4", "+speed" },
-	{ "joy1", "+attack" },
-	{ "joy2", "+strafe" },
-	{ "joy3", "+speed" },
-	{ "joy4", "+use" },
 	{ "capslock", "toggle cl_run" },
 	{ "f1", "menu_help" },
 	{ "f2", "menu_save" },
@@ -119,6 +117,27 @@ static const FBinding DefBindings[] =
 	{ "u", "taunt" },
 	{ "pgup", "vote_yes" },
 	{ "pgdn", "vote_no" },
+
+	// Generic joystick buttons
+	{ "joy1", "+attack" },
+	{ "joy2", "+strafe" },
+	{ "joy3", "+speed" },
+	{ "joy4", "+use" },
+
+	// Xbox 360 / PS2 controllers
+	{ "pad_a", "+use" },
+	{ "pad_y", "+jump" },
+	{ "rtrigger", "+attack" },
+	{ "ltrigger", "+altattack" },
+	{ "lshoulder", "weapprev" },
+	{ "rshoulder", "weapnext" },
+	{ "dpadleft", "invprev" },
+	{ "dpadright", "invnext" },
+	{ "dpaddown", "invuse" },
+	{ "dpadup", "togglemap" },
+	{ "pad_start", "pause" },
+	{ "pad_back", "menu_main" },
+	{ "lthumb", "crouch" },
 	{ NULL }
 };
 
@@ -197,7 +216,7 @@ const char *KeyNames[NUM_KEYS] =
 	"kp8",		"kp9",		"kp-",		"kp4",		"kp5",		"kp6",		"kp+",		"kp1",		//48
 	"kp2",		"kp3",		"kp0",		"kp.",		NULL,		NULL,		"oem102",	"f11",		//50
 	"f12",		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//58
-	NULL,		NULL,		NULL,		NULL,		"f13",		"f14",		"f15",		NULL,		//60
+	NULL,		NULL,		NULL,		NULL,		"f13",		"f14",		"f15",		"f16",		//60
 	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//68
 	"kana",		NULL,		NULL,		"abnt_c1",	NULL,		NULL,		NULL,		NULL,		//70
 	NULL,		"convert",	NULL,		"noconvert",NULL,		"yen",		"abnt_c2",	NULL,		//78
@@ -209,14 +228,14 @@ const char *KeyNames[NUM_KEYS] =
 	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		"voldown",	NULL,		//A8
 	"volup",	NULL,		"webhome",	"kp,",		NULL,		"kp/",		NULL,		"sysrq",	//B0
 	"ralt",		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//B8
-	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		"home",		//C0
+	NULL,		NULL,		NULL,		NULL,		NULL,		"pause",	NULL,		"home",		//C0
 	"uparrow",	"pgup",		NULL,		"leftarrow",NULL,		"rightarrow",NULL,		"end",		//C8
 	"downarrow","pgdn",		"ins",		"del",		NULL,		NULL,		NULL,		NULL,		//D0
 	NULL,		NULL,		NULL,		"lwin",		"rwin",		"apps",		"power",	"sleep",	//D8
 	NULL,		NULL,		NULL,		"wake",		NULL,		"search",	"favorites","refresh",	//E0
 	"webstop",	"webforward","webback",	"mycomputer","mail",	"mediaselect",NULL,		NULL,		//E8
 	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//F0
-	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		"pause",	//F8
+	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//F8
 
 	// non-keyboard buttons that can be bound
 	"mouse1",	"mouse2",	"mouse3",	"mouse4",		// 8 mouse buttons
@@ -261,6 +280,20 @@ const char *KeyNames[NUM_KEYS] =
 	"pov4up",	"pov4right","pov4down",	"pov4left",		// Fourth POV hat
 
 	"mwheelup",	"mwheeldown",							// the mouse wheel
+	"mwheelright", "mwheelleft",
+
+	"axis1plus","axis1minus","axis2plus","axis2minus",	// joystick axes as buttons
+	"axis3plus","axis3minus","axis4plus","axis4minus",
+	"axis5plus","axis5minus","axis6plus","axis6minus",
+	"axis7plus","axis7minus","axis8plus","axis8minus",
+
+	"lstickright","lstickleft","lstickdown","lstickup",			// Gamepad axis-based buttons
+	"rstickright","rstickleft","rstickdown","rstickup",
+
+	"dpadup","dpaddown","dpadleft","dpadright",	// Gamepad buttons
+	"pad_start","pad_back","lthumb","rthumb",
+	"lshoulder","rshoulder","ltrigger","rtrigger",
+	"pad_a", "pad_b", "pad_x", "pad_y"
 };
 
 static FString Bindings[NUM_KEYS];

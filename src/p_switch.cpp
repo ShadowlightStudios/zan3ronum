@@ -279,11 +279,11 @@ void P_ProcessSwitchDef (FScanner &sc)
 	{
 		if (def2 != NULL)
 		{
-			free (def2);
+			M_Free (def2);
 		}
 		if (def1 != NULL)
 		{
-			free (def1);
+			M_Free (def1);
 		}
 		return;
 	}
@@ -359,7 +359,7 @@ FSwitchDef *ParseSwitchDef (FScanner &sc, bool ignoreBad)
 				max = sc.Number & 65535;
 				if (min > max)
 				{
-					swap (min, max);
+					swapvalues (min, max);
 				}
 				thisframe.Time = ((max - min + 1) << 16) | min;
 			}
@@ -469,18 +469,19 @@ static int TryFindSwitch (side_t *side, int Where)
 //
 bool P_CheckSwitchRange(AActor *user, line_t *line, int sideno)
 {
-	// if this line is one sided this function must always return success.
-	if (line->sidenum[0] == NO_SIDE || line->sidenum[1] == NO_SIDE) return true;
+	// Activated from an empty side -> always succeed
+	side_t *side = line->sidedef[sideno];
+	if (side == NULL)
+		return true;
 
 	fixed_t checktop;
 	fixed_t checkbot;
-	side_t *side = &sides[line->sidenum[sideno]];
-	sector_t *front = sides[line->sidenum[sideno]].sector;
-	sector_t *back = sides[line->sidenum[1-sideno]].sector;
+	sector_t *front = side->sector;
 	FLineOpening open;
 
 	// 3DMIDTEX forces CHECKSWITCHRANGE because otherwise it might cause problems.
-	if (!(line->flags & (ML_3DMIDTEX|ML_CHECKSWITCHRANGE))) return true;
+	if (!(line->flags & (ML_3DMIDTEX|ML_CHECKSWITCHRANGE)))
+		return true;
 
 	// calculate the point where the user would touch the wall.
 	divline_t dll, dlu;
@@ -494,12 +495,36 @@ bool P_CheckSwitchRange(AActor *user, line_t *line, int sideno)
 	dlu.dy = finesine[user->angle >> ANGLETOFINESHIFT];
 	inter = P_InterceptVector(&dll, &dlu);
 
-	checkx = dll.x + FixedMul(dll.dx, inter);
-	checky = dll.y + FixedMul(dll.dy, inter);
+
+	// Polyobjects must test the containing sector, not the one they originate from.
+	if (line->sidedef[0]->Flags & WALLF_POLYOBJ)
+	{
+		// Get a check point slightly inside the polyobject so that this still works
+		// if the polyobject lies directly on a sector boundary
+		checkx = dll.x + FixedMul(dll.dx, inter + (FRACUNIT/100));
+		checky = dll.y + FixedMul(dll.dy, inter + (FRACUNIT/100));
+		front = P_PointInSector(checkx, checky);
+	}
+	else
+	{
+		checkx = dll.x + FixedMul(dll.dx, inter);
+		checky = dll.y + FixedMul(dll.dy, inter);
+	}
+
+
+	// one sided line or polyobject
+	if (line->sidedef[1] == NULL || (line->sidedef[0]->Flags & WALLF_POLYOBJ))
+	{
+	onesided:
+		fixed_t sectorc = front->ceilingplane.ZatPoint(checkx, checky);
+		fixed_t sectorf = front->floorplane.ZatPoint(checkx, checky);
+		return (user->z + user->height >= sectorf && user->z <= sectorc);
+	}
 
 	// Now get the information from the line.
 	P_LineOpening(open, NULL, line, checkx, checky, user->x, user->y);
-	if (open.range <= 0) return true;
+	if (open.range <= 0)
+		goto onesided;
 
 	if ((TryFindSwitch (side, side_t::top)) != -1)
 	{
@@ -513,8 +538,9 @@ bool P_CheckSwitchRange(AActor *user, line_t *line, int sideno)
 	{
 		// 3DMIDTEX lines will force a mid texture check if no switch is found on this line
 		// to keep compatibility with Eternity's implementation.
-		if (!P_GetMidTexturePosition(line, sideno, &checktop, &checkbot)) return false;
-		return user->z < checktop || user->z + user->height > checkbot;
+		if (!P_GetMidTexturePosition(line, sideno, &checktop, &checkbot))
+			return false;
+		return user->z < checktop && user->z + user->height > checkbot;
 	}
 	else
 	{
@@ -563,11 +589,11 @@ bool P_ChangeSwitchTexture (side_t *side, int useAgain, BYTE special, bool *ques
 	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
 		( CLIENTDEMO_IsPlaying( ) == false ))
 	{
-		if ( side->linenum < static_cast<unsigned> (numlines) )
+		if ( side->linedef != NULL )
 		{
-			lines[side->linenum].ulTexChangeFlags |= 1 << ulShift;
+			side->linedef->ulTexChangeFlags |= 1 << ulShift;
 			ulShift += 3;
-			lines[side->linenum].ulTexChangeFlags |= 1 << ulShift;
+			side->linedef->ulTexChangeFlags |= 1 << ulShift;
 		}
 	}
 
@@ -591,7 +617,7 @@ bool P_ChangeSwitchTexture (side_t *side, int useAgain, BYTE special, bool *ques
 	//		facing a big sector (and which wasn't necessarily for the
 	//		button just activated, either).
 	fixed_t pt[2];
-	line_t *line = &lines[side->linenum];
+	line_t *line = side->linedef;
 	bool playsound;
 
 	pt[0] = line->v1->x + (line->dx >> 1);
@@ -600,7 +626,7 @@ bool P_ChangeSwitchTexture (side_t *side, int useAgain, BYTE special, bool *ques
 
 	// [BC] If we're the server, tell clients to set the line texture.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SetLineTexture( side->linenum );
+		SERVERCOMMANDS_SetLineTexture( static_cast<ULONG>( side->linedef - lines ) );
 
 	if (useAgain || SwitchList[i]->NumFrames > 1)
 		playsound = P_StartButton (side, texture, i, pt[0], pt[1], !!useAgain);
@@ -655,7 +681,7 @@ void DActiveButton::Serialize (FArchive &arc)
 	Super::Serialize (arc);
 	if (arc.IsStoring ())
 	{
-		sidenum = m_Side ? m_Side - sides : -1;
+		sidenum = m_Side ? SDWORD(m_Side - sides) : -1;
 	}
 	arc << sidenum << m_Part << m_SwitchDef << m_Frame << m_Timer << bFlippable << m_X << m_Y;
 	if (arc.IsLoading ())
@@ -698,7 +724,7 @@ void DActiveButton::Tick ()
 
 		// [BC] If we're the server, tell clients to update the switch texture.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SetLineTexture( m_Side->linenum );
+			SERVERCOMMANDS_SetLineTexture( static_cast<ULONG>( m_Side->linedef - lines )  );
 
 		if (killme)
 		{

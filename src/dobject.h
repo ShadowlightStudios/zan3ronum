@@ -36,9 +36,6 @@
 
 #include <stdlib.h>
 #include "doomtype.h"
-#ifndef _MSC_VER
-#include "autosegs.h"
-#endif
 
 struct PClass;
 
@@ -93,11 +90,11 @@ enum EMetaType
 class FMetaData
 {
 private:
-	FMetaData (EMetaType type, DWORD id) : Type(type), ID(id) {}
+	FMetaData (EMetaType type, uint32 id) : Type(type), ID(id) {}
 
 	FMetaData *Next;
 	EMetaType Type;
-	DWORD ID;
+	uint32 ID;
 	union
 	{
 		int Int;
@@ -116,19 +113,19 @@ public:
 	~FMetaTable();
 	FMetaTable &operator = (const FMetaTable &other);
 
-	void SetMetaInt (DWORD id, int parm);
-	void SetMetaFixed (DWORD id, fixed_t parm);
-	void SetMetaString (DWORD id, const char *parm);	// The string is copied
+	void SetMetaInt (uint32 id, int parm);
+	void SetMetaFixed (uint32 id, fixed_t parm);
+	void SetMetaString (uint32 id, const char *parm);	// The string is copied
 
-	int GetMetaInt (DWORD id, int def=0) const;
-	fixed_t GetMetaFixed (DWORD id, fixed_t def=0) const;
-	const char *GetMetaString (DWORD id) const;
+	int GetMetaInt (uint32 id, int def=0) const;
+	fixed_t GetMetaFixed (uint32 id, fixed_t def=0) const;
+	const char *GetMetaString (uint32 id) const;
 
-	FMetaData *FindMeta (EMetaType type, DWORD id) const;
+	FMetaData *FindMeta (EMetaType type, uint32 id) const;
 
 private:
 	FMetaData *Meta;
-	FMetaData *FindMetaDef (EMetaType type, DWORD id);
+	FMetaData *FindMetaDef (EMetaType type, uint32 id);
 	void FreeMeta ();
 	void CopyMeta (const FMetaTable *other);
 };
@@ -146,7 +143,7 @@ struct ClassReg
 	const size_t *Pointers;
 	void (*ConstructNative)(void *);
 
-	void RegisterClass();
+	void RegisterClass() const;
 };
 
 enum EInPlace { EC_InPlace };
@@ -177,7 +174,7 @@ private: \
 #	pragma data_seg()
 #	define _DECLARE_TI(cls) __declspec(allocate(".creg$u")) ClassReg *cls::RegistrationInfoPtr = &cls::RegistrationInfo;
 #else
-#	define _DECLARE_TI(cls) ClassReg *cls::RegistrationInfoPtr __attribute__((section(CREG_SECTION))) = &cls::RegistrationInfo;
+#	define _DECLARE_TI(cls) ClassReg *cls::RegistrationInfoPtr __attribute__((section(SECTION_CREG))) = &cls::RegistrationInfo;
 #endif
 
 #define _IMP_PCLASS(cls,ptrs,create) \
@@ -252,7 +249,7 @@ namespace GC
 	extern DObject *Root;
 
 	// Current white value for potentially-live objects.
-	extern DWORD CurrentWhite;
+	extern uint32 CurrentWhite;
 
 	// Current collector state.
 	extern EGCState State;
@@ -267,7 +264,7 @@ namespace GC
 	extern int StepMul;
 
 	// Current white value for known-dead objects.
-	static inline DWORD OtherWhite()
+	static inline uint32 OtherWhite()
 	{
 		return CurrentWhite ^ OF_WhiteBits;
 	}
@@ -323,7 +320,17 @@ namespace GC
 	// Unroots an object.
 	void DelSoftRoot(DObject *obj);
 
-	template<class T> void Mark(T *&obj) { Mark((DObject **)&obj); }
+	template<class T> void Mark(T *&obj)
+	{
+		union
+		{
+			T *t;
+			DObject *o;
+		};
+		o = obj;
+		Mark(&o);
+		obj = t;
+	}
 	template<class T> void Mark(TObjPtr<T> &obj);
 }
 
@@ -333,7 +340,11 @@ namespace GC
 template<class T>
 class TObjPtr
 {
-	T *p;
+	union
+	{
+		T *p;
+		DObject *o;
+	};
 public:
 	TObjPtr() throw()
 	{
@@ -398,6 +409,7 @@ public:
 	}
 
 	template<class U> friend inline FArchive &operator<<(FArchive &arc, TObjPtr<U> &o);
+	template<class U> friend inline void GC::Mark(TObjPtr<U> &obj);
 	friend class DObject;
 };
 
@@ -413,7 +425,10 @@ template<class T,class U> inline T barrier_cast(TObjPtr<U> &o)
 	return static_cast<T>(static_cast<U *>(o));
 }
 
-template<class T> void GC::Mark(TObjPtr<T> &obj) { GC::Mark((DObject **)&obj); }
+template<class T> inline void GC::Mark(TObjPtr<T> &obj)
+{
+	GC::Mark(&obj.o);
+}
 
 class DObject
 {
@@ -431,7 +446,7 @@ private:
 public:
 	DObject *ObjNext;			// Keep track of all allocated objects
 	DObject *GCNext;			// Next object in this collection list
-	DWORD ObjectFlags;			// Flags for this object
+	uint32 ObjectFlags;			// Flags for this object
 
 public:
 	DObject ();
@@ -441,6 +456,7 @@ public:
 	inline bool IsKindOf (const PClass *base) const;
 	inline bool IsA (const PClass *type) const;
 
+	void SerializeUserVars(FArchive &arc);
 	virtual void Serialize (FArchive &arc);
 
 	// For catching Serialize functions in derived classes

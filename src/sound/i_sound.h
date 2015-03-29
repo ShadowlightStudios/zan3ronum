@@ -92,7 +92,7 @@ public:
 	virtual void SetSfxVolume (float volume) = 0;
 	virtual void SetMusicVolume (float volume) = 0;
 	virtual SoundHandle LoadSound(BYTE *sfxdata, int length) = 0;
-	virtual SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits) = 0;
+	virtual SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart) = 0;
 	virtual void UnloadSound (SoundHandle sfx) = 0;	// unloads a sound from memory
 	virtual unsigned int GetMSLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
 	virtual unsigned int GetSampleLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
@@ -109,8 +109,14 @@ public:
 	// Stops a sound channel.
 	virtual void StopChannel (FISoundChannel *chan) = 0;
 
+	// Marks a channel's start time without actually playing it.
+	virtual void MarkStartTime (FISoundChannel *chan) = 0;
+
 	// Returns position of sound on this channel, in samples.
 	virtual unsigned int GetPosition(FISoundChannel *chan) = 0;
+
+	// Gets a channel's audibility (real volume).
+	virtual float GetAudibility(FISoundChannel *chan) = 0;
 
 	// Synchronizes following sound startups.
 	virtual void Sync (bool sync) = 0;
@@ -142,6 +148,7 @@ void I_InitSound ();
 void I_ShutdownSound ();
 
 void S_ChannelEnded(FISoundChannel *schan);
+void S_ChannelVirtualChanged(FISoundChannel *schan, bool is_virtual);
 float S_GetRolloff(FRolloffInfo *rolloff, float distance, bool logarithmic);
 FISoundChannel *S_GetChannel(void *syschan);
 

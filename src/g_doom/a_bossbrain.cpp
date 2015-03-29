@@ -33,7 +33,7 @@ static void BrainishExplosion (fixed_t x, fixed_t y, fixed_t z)
 	if (boom != NULL)
 	{
 		boom->DeathSound = "misc/brainexplode";
-		boom->momz = pr_brainscream() << 9;
+		boom->velz = pr_brainscream() << 9;
 
 		const PClass *cls = PClass::FindClass("BossBrain");
 		if (cls != NULL)
@@ -77,6 +77,21 @@ DEFINE_ACTION_FUNCTION(AActor, A_BrainDie)
 	if ((deathmatch || teamgame || alwaysapplydmflags) && (dmflags & DF_NO_EXIT))
 		return;
 
+	// New dmflag: Kill all boss spawned monsters before ending the level.
+	if (dmflags2 & DF2_KILLBOSSMONST)
+	{
+		TThinkerIterator<AActor> it;
+		AActor *mo;
+		while ((mo = it.Next()))
+		{
+			if (mo->flags4 & MF4_BOSSSPAWNED)
+			{
+				P_DamageMobj(mo, self, self, mo->health, NAME_None, 
+					DMG_NO_ARMOR|DMG_FORCED|DMG_THRUSTLESS|DMG_NO_FACTOR);
+			}
+		}
+	}
+
 	G_ExitLevel (0, false);
 }
 
@@ -111,26 +126,30 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BrainSpit)
 		// spawn brain missile
 		spit = P_SpawnMissile (self, targ, spawntype);
 
+		// Boss cubes should move freely to their destination so it's
+		// probably best to disable all collision detection for them.
+		if (spit->flags & MF_NOCLIP) spit->flags5 |= MF5_NOINTERACTION;
+
 		if (spit != NULL)
 		{
 			spit->target = targ;
 			spit->master = self;
 			// [RH] Do this correctly for any trajectory. Doom would divide by 0
 			// if the target had the same y coordinate as the spitter.
-			if ((spit->momx | spit->momy) == 0)
+			if ((spit->velx | spit->vely) == 0)
 			{
-				spit->reactiontime = 0;
+				spit->special2 = 0;
 			}
-			else if (abs(spit->momy) > abs(spit->momx))
+			else if (abs(spit->vely) > abs(spit->velx))
 			{
-				spit->reactiontime = (targ->y - self->y) / spit->momy;
+				spit->special2 = (targ->y - self->y) / spit->vely;
 			}
 			else
 			{
-				spit->reactiontime = (targ->x - self->x) / spit->momx;
+				spit->special2 = (targ->x - self->x) / spit->velx;
 			}
 			// [GZ] Calculates when the projectile will have reached destination
-			spit->reactiontime += level.maptime;
+			spit->special2 += level.maptime;
 
 			// [BC] If we're the server, tell clients to spawn the actor.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -161,7 +180,8 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 {
 	AActor *newmobj;
 	AActor *fog = NULL;
-	AActor *targ;
+	AActor *eye = self->master; // The eye is the spawnshot's master, not the target!
+	AActor *targ = self->target; // Unlike other projectiles, the target is the intended destination.
 	int r;
 		
 	// [BC] Brain spitting is server-side.
@@ -171,13 +191,18 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 		return;
 	}
 
-	// [GZ] Should be more fiable than a countdown...
-	if (self->reactiontime > level.maptime)
-		return; // still flying
-		
-	targ = self->target;
-
-
+	// [GZ] Should be more viable than a countdown...
+	if (self->special2 != 0)
+	{
+		if (self->special2 > level.maptime)
+			return;		// still flying
+	}
+	else
+	{
+		if (self->reactiontime == 0 || --self->reactiontime != 0)
+			return;		// still flying
+	}
+	
 	if (spawntype != NULL)
 	{
 		fog = Spawn (spawntype, targ->x, targ->y, targ->z, ALLOW_REPLACE);
@@ -193,59 +218,67 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 
 	FName SpawnName;
 
-	if (self->master != NULL)
+	FDropItem *di;   // di will be our drop item list iterator
+	FDropItem *drop; // while drop stays as the reference point.
+	int n = 0;
+
+	// First see if this cube has its own actor list
+	drop = self->GetDropItems();
+
+	// If not, then default back to its master's list
+	if (drop == NULL && eye != NULL)
+		drop = eye->GetDropItems();
+
+	if (drop != NULL)
 	{
-		FDropItem *di;   // di will be our drop item list iterator
-		FDropItem *drop; // while drop stays as the reference point.
-		int n=0;
-
-		drop = di = self->master->GetDropItems();
-		if (di != NULL)
+		for (di = drop; di != NULL; di = di->Next)
 		{
-			while (di != NULL)
+			if (di->Name != NAME_None)
 			{
-				if (di->Name != NAME_None)
+				if (di->amount < 0)
 				{
-					if (di->amount < 0) di->amount = 1; // default value is -1, we need a positive value.
-					n += di->amount; // this is how we can weight the list.
-					di = di->Next;
+					di->amount = 1; // default value is -1, we need a positive value.
 				}
+				n += di->amount; // this is how we can weight the list.
 			}
-			di = drop;
-			n = pr_spawnfly(n);
-			while (n > 0)
-			{
-				if (di->Name != NAME_None)
-				{
-					n -= di->amount; // logically, none of the -1 values have survived by now.
-					if (n > -1) di = di->Next; // If we get into the negatives, we've reached the end of the list.
-				}
-			}
-
-			SpawnName = di->Name;
 		}
+		di = drop;
+		n = pr_spawnfly(n);
+		while (n >= 0)
+		{
+			if (di->Name != NAME_None)
+			{
+				n -= di->amount; // logically, none of the -1 values have survived by now.
+			}
+			if ((di->Next != NULL) && (n >= 0))
+			{
+				di = di->Next;
+			}
+			else
+			{
+				n = -1;
+			}
+		}
+		SpawnName = di->Name;
 	}
 	if (SpawnName == NAME_None)
 	{
-		const char *type;
 		// Randomly select monster to spawn.
 		r = pr_spawnfly ();
 
 		// Probability distribution (kind of :),
 		// decreasing likelihood.
-			 if (r < 50)  type = "DoomImp";
-		else if (r < 90)  type = "Demon";
-		else if (r < 120) type = "Spectre";
-		else if (r < 130) type = "PainElemental";
-		else if (r < 160) type = "Cacodemon";
-		else if (r < 162) type = "Archvile";
-		else if (r < 172) type = "Revenant";
-		else if (r < 192) type = "Arachnotron";
-		else if (r < 222) type = "Fatso";
-		else if (r < 246) type = "HellKnight";
-		else			  type = "BaronOfHell";
-
-		SpawnName = type;
+			 if (r < 50)  SpawnName = "DoomImp";
+		else if (r < 90)  SpawnName = "Demon";
+		else if (r < 120) SpawnName = "Spectre";
+		else if (r < 130) SpawnName = "PainElemental";
+		else if (r < 160) SpawnName = "Cacodemon";
+		else if (r < 162) SpawnName = "Archvile";
+		else if (r < 172) SpawnName = "Revenant";
+		else if (r < 192) SpawnName = "Arachnotron";
+		else if (r < 222) SpawnName = "Fatso";
+		else if (r < 246) SpawnName = "HellKnight";
+		else			  SpawnName = "BaronOfHell";
 	}
 	spawntype = PClass::FindClass(SpawnName);
 	if (spawntype != NULL)
@@ -254,13 +287,11 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 		if (newmobj != NULL)
 		{
 			// Make the new monster hate what the boss eye hates
-			AActor *eye = self->target;
-
 			if (eye != NULL)
 			{
 				newmobj->CopyFriendliness (eye, false);
 			}
-			if (newmobj->SeeState != NULL && P_LookForPlayers (newmobj, true))
+			if (newmobj->SeeState != NULL && P_LookForPlayers (newmobj, true, NULL))
 				newmobj->SetState (newmobj->SeeState);
 
 			if (!(newmobj->ObjectFlags & OF_EuthanizeMe))
@@ -276,6 +307,7 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 						SERVERCOMMANDS_SetThingState( newmobj, STATE_SEE );
 				}
 			}
+			newmobj->flags4 |= MF4_BOSSSPAWNED;
 		}
 	}
 

@@ -69,7 +69,6 @@ extern HWND Window;
 
 EXTERN_CVAR (Bool, con_centernotify)
 EXTERN_CVAR (Int, msg0color)
-EXTERN_CVAR (Color, dimcolor)
 EXTERN_CVAR (Color, color)
 EXTERN_CVAR (Float, dimamount)
 EXTERN_CVAR (Int, msgmidcolor)
@@ -89,6 +88,7 @@ FGameConfigFile::FGameConfigFile ()
 	FString pathname;
 	
 	bMigrating = false;
+	bModSetup = false;
 	pathname = GetConfigPath (true);
 	ChangePathName (pathname);
 	LoadConfigFile (MigrateStub, NULL);
@@ -166,6 +166,8 @@ FGameConfigFile::FGameConfigFile ()
 	// Create auto-load sections, so users know what's available.
 	// Note that this totem pole is the reverse of the order that
 	// they will appear in the file.
+	CreateSectionAtStart("Harmony.Autoload");
+	CreateSectionAtStart("UrbanBrawl.Autoload");
 	CreateSectionAtStart("Chex3.Autoload");
 	CreateSectionAtStart("Chex.Autoload");
 	CreateSectionAtStart("Strife.Autoload");
@@ -324,6 +326,15 @@ void FGameConfigFile::DoGlobalSetup ()
 					}
 				}
 			}
+			if (last < 209)
+			{
+				// menu dimming is now a gameinfo option so switch user override off
+				FBaseCVar *dim = FindCVar ("dimamount", NULL);
+				if (dim != NULL)
+				{
+					dim->ResetToDefault ();
+				}
+			}
 			if (last < 210)
 			{
 				if (SetSection ("Hexen.Bindings"))
@@ -333,6 +344,15 @@ void FGameConfigFile::DoGlobalSetup ()
 					SetValueForKey ("5", "use ArtiInvulnerability2");
 				}
 			}
+		}
+
+		// [TP] Same as above except for Zandronum-specific stuff
+		lastver = GetValueForKey( "Version-" GAMESIG );
+
+		if ( lastver != NULL )
+		{
+			// [TP] Insert migration here.
+			// double last = atof( lastver );
 		}
 	}
 }
@@ -379,8 +399,8 @@ void FGameConfigFile::DoGameSetup (const char *gamename)
 		SetRavenDefaults (game == Hexen);
 	}
 
-	// The NetServerInfo section will be read when it's determined that
-	// a netgame is being played.
+	// The NetServerInfo section will be read and override anything loaded
+	// here when it's determined that a netgame is being played.
 	strncpy (subsection, "LocalServerInfo", sublen);
 	if (SetSection (section))
 	{
@@ -438,12 +458,38 @@ void FGameConfigFile::DoGameSetup (const char *gamename)
 	}
 }
 
+// Like DoGameSetup(), but for mod-specific cvars.
+// Called after CVARINFO has been parsed.
+void FGameConfigFile::DoModSetup(const char *gamename)
+{
+	mysnprintf(section, countof(section), "%s.Player.Mod", gamename);
+	if (SetSection(section))
+	{
+		ReadCVars(CVAR_MOD|CVAR_USERINFO|CVAR_IGNORE);
+	}
+	mysnprintf(section, countof(section), "%s.LocalServerInfo.Mod", gamename);
+	if (SetSection (section))
+	{
+		ReadCVars (CVAR_MOD|CVAR_SERVERINFO|CVAR_IGNORE);
+	}
+	// Signal that these sections should be rewritten when saving the config.
+	bModSetup = true;
+}
+
 void FGameConfigFile::ReadNetVars ()
 {
 	strncpy (subsection, "NetServerInfo", sublen);
 	if (SetSection (section))
 	{
 		ReadCVars (0);
+	}
+	if (bModSetup)
+	{
+		mysnprintf(subsection, sublen, "NetServerInfo.Mod");
+		if (SetSection(section))
+		{
+			ReadCVars(CVAR_MOD|CVAR_SERVERINFO|CVAR_IGNORE);
+		}
 	}
 }
 
@@ -454,19 +500,21 @@ void FGameConfigFile::ReadRevealedBotsAndSkins ()
 		BOTS_RestoreRevealedBotsAndSkins( *this );
 }
 
+// Read cvars from a cvar section of the ini. Flags are the flags to give
+// to newly-created cvars that were not already defined.
 void FGameConfigFile::ReadCVars (DWORD flags)
 {
 	const char *key, *value;
 	FBaseCVar *cvar;
 	UCVarValue val;
 
+	flags |= CVAR_ARCHIVE|CVAR_UNSETTABLE|CVAR_AUTO;
 	while (NextInSection (key, value))
 	{
 		cvar = FindCVar (key, NULL);
 		if (cvar == NULL)
 		{
-			cvar = new FStringCVar (key, NULL,
-				CVAR_AUTO|CVAR_UNSETTABLE|CVAR_ARCHIVE|flags);
+			cvar = new FStringCVar (key, NULL, flags);
 		}
 		val.String = const_cast<char *>(value);
 
@@ -497,26 +545,43 @@ void FGameConfigFile::ArchiveGameData (const char *gamename)
 	strncpy (subsection, "Player", sublen);
 	SetSection (section, true);
 	ClearCurrentSection ();
-	C_ArchiveCVars (this, 4);
+	C_ArchiveCVars (this, CVAR_ARCHIVE|CVAR_USERINFO);
+
+	if (bModSetup)
+	{
+		strncpy (subsection + 6, ".Mod", sublen - 6);
+		SetSection (section, true);
+		ClearCurrentSection ();
+		C_ArchiveCVars (this, CVAR_MOD|CVAR_ARCHIVE|CVAR_AUTO|CVAR_USERINFO);
+	}
 
 	strncpy (subsection, "ConsoleVariables", sublen);
 	SetSection (section, true);
 	ClearCurrentSection ();
-	C_ArchiveCVars (this, 0);
+	C_ArchiveCVars (this, CVAR_ARCHIVE);
 
-	strncpy (subsection, ( NETWORK_GetState( ) != NETSTATE_SINGLE ) ? "NetServerInfo" : "LocalServerInfo", sublen);
+	// Do not overwrite the serverinfo section if playing a netgame, and
+	// this machine was not the initial host.
 	if (( NETWORK_GetState( ) == NETSTATE_SINGLE ) || consoleplayer == 0)
-	{ // Do not overwrite this section if playing a netgame, and
-	  // this machine was not the initial host.
+	{
+		strncpy (subsection, ( NETWORK_GetState( ) != NETSTATE_SINGLE ) ? "NetServerInfo" : "LocalServerInfo", sublen);
 		SetSection (section, true);
 		ClearCurrentSection ();
-		C_ArchiveCVars (this, 5);
+		C_ArchiveCVars (this, CVAR_ARCHIVE|CVAR_SERVERINFO);
+
+		if (bModSetup)
+		{
+			strncpy (subsection, ( NETWORK_GetState( ) != NETSTATE_SINGLE ) ? "NetServerInfo.Mod" : "LocalServerInfo.Mod", sublen);
+			SetSection (section, true);
+			ClearCurrentSection ();
+			C_ArchiveCVars (this, CVAR_MOD|CVAR_ARCHIVE|CVAR_AUTO|CVAR_SERVERINFO);
+		}
 	}
 
 	strncpy (subsection, "UnknownConsoleVariables", sublen);
 	SetSection (section, true);
 	ClearCurrentSection ();
-	C_ArchiveCVars (this, 2);
+	C_ArchiveCVars (this, CVAR_ARCHIVE|CVAR_AUTO);
 
 	strncpy (subsection, "ConsoleAliases", sublen);
 	SetSection (section, true);
@@ -544,25 +609,27 @@ void FGameConfigFile::ArchiveGlobalData ()
 	SetSection ("LastRun", true);
 	ClearCurrentSection ();
 	SetValueForKey ("Version", LASTRUNVERSION);
+	SetValueForKey( "Version-" GAMESIG, LASTZARUNVERSION ); // [TP]
 
 	SetSection ("GlobalSettings", true);
 	ClearCurrentSection ();
-	C_ArchiveCVars (this, 1);
+	C_ArchiveCVars (this, CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 
 	SetSection ("GlobalSettings.Unknown", true);
 	ClearCurrentSection ();
-	C_ArchiveCVars (this, 3);
+	C_ArchiveCVars (this, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_AUTO);
 }
 
 FString FGameConfigFile::GetConfigPath (bool tryProg)
 {
-	char *pathval;
+	const char *pathval;
 	FString path;
 
 	pathval = Args->CheckValue ("-config");
 	if (pathval != NULL)
+	{
 		return FString(pathval);
-
+	}
 #ifdef _WIN32
 	path = NULL;
 	HRESULT hr;
@@ -722,7 +789,6 @@ void FGameConfigFile::SetRavenDefaults (bool isHexen)
 	{
 		con_centernotify.ResetToDefault ();
 		msg0color.ResetToDefault ();
-		dimcolor.ResetToDefault ();
 		color.ResetToDefault ();
 	}
 
@@ -733,8 +799,6 @@ void FGameConfigFile::SetRavenDefaults (bool isHexen)
 	snd_pitched.SetGenericRepDefault (val, CVAR_Bool);
 	val.Int = 9;
 	msg0color.SetGenericRepDefault (val, CVAR_Int);
-	val.Int = 0x0000ff;
-	dimcolor.SetGenericRepDefault (val, CVAR_Int);
 	val.Int = CR_WHITE;
 	msgmidcolor.SetGenericRepDefault (val, CVAR_Int);
 	val.Int = CR_YELLOW;

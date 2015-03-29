@@ -306,7 +306,8 @@ bool P_AddSectorLinks(sector_t *control, int tag, INTBOOL ceiling, int movetype)
 	int param = movetype;
 
 	// can't be done if the control sector is moving.
-	if ((ceiling && control->ceilingdata) || (!ceiling && control->floordata)) return false;
+	if ((ceiling && control->PlaneMoving(sector_t::ceiling)) || 
+		(!ceiling && control->PlaneMoving(sector_t::floor))) return false;
 
 	// Make sure we have only valid combinations
 	movetype &= LINK_FLAGMASK;
@@ -359,12 +360,22 @@ void P_AddSectorLinksByID(sector_t *control, int id, INTBOOL ceiling)
 		{
 			int movetype = ld->args[3];
 
+			// [GZ] Eternity does allow the attached sector to be the control sector, 
+			// this permits elevator effects (ceiling attached to floors), so instead
+			// of checking whether the two sectors are the same, we prevent a plane
+			// from being attached to itself. This should be enough to do the trick.
+			if (ld->frontsector == control)
+			{
+				if (ceiling)	movetype &= ~LINK_CEILING;
+				else			movetype &= ~LINK_FLOOR;
+			}
+
 			// Make sure we have only valid combinations
 			movetype &= LINK_FLAGMASK;
 			if ((movetype & LINK_FLOORMIRROR) == LINK_FLOORMIRRORFLAG) movetype &= ~LINK_FLOORMIRRORFLAG;
 			if ((movetype & LINK_CEILINGMIRROR) == LINK_CEILINGMIRRORFLAG) movetype &= ~LINK_CEILINGMIRRORFLAG;
 
-			if (movetype != 0 && ld->frontsector != NULL && ld->frontsector != control)
+			if (movetype != 0 && ld->frontsector != NULL)//&& ld->frontsector != control) Needs to be allowed!
 			{
 				AddSingleSector(scrollplane, ld->frontsector, movetype);
 			}

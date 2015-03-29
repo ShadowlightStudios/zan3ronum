@@ -23,6 +23,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <algorithm>
 
 #include "templates.h"
 #include "doomdef.h"
@@ -51,6 +52,7 @@
 #include "r_segs.h"
 #include "r_3dfloors.h"
 #include "v_palette.h"
+#include "r_translate.h"
 // [BB] New #includes.
 #include "w_wad.h"
 #include "cl_demo.h"
@@ -60,7 +62,6 @@
 #include "gamemode.h"
 
 
-extern FTexture *CrosshairImage;
 extern fixed_t globaluclip, globaldclip;
 
 
@@ -149,6 +150,10 @@ fixed_t			pspriteyscale;
 fixed_t 		pspritexiscale;
 fixed_t			sky1scale;			// [RH] Sky 1 scale factor
 fixed_t			sky2scale;			// [RH] Sky 2 scale factor
+
+vissprite_t		*VisPSprites[NUMPSPRITES];
+int				VisPSpritesX1[NUMPSPRITES];
+FDynamicColormap *VisPSpritesBaseColormap[NUMPSPRITES];
 
 static int		spriteshade;
 
@@ -421,9 +426,9 @@ void R_InitSpriteDefs ()
 	for (i = 0; i < max; ++i)
 	{
 		FTexture *tex = TexMan.ByIndex(i);
-		if (tex->UseType == FTexture::TEX_Sprite && strlen (tex->Name) >= 6)
+		if (tex->UseType == FTexture::TEX_Sprite && strlen(tex->Name) >= 6)
 		{
-			DWORD bucket = *(DWORD *)tex->Name % max;
+			DWORD bucket = tex->dwName % max;
 			hashes[i].Next = hashes[bucket].Head;
 			hashes[bucket].Head = i;
 		}
@@ -439,14 +444,14 @@ void R_InitSpriteDefs ()
 		}
 				
 		maxframe = -1;
-		intname = *(DWORD *)sprites[i].name;
+		intname = sprites[i].dwName;
 
 		// scan the lumps, filling in the frames for whatever is found
 		int hash = hashes[intname % max].Head;
 		while (hash != -1)
 		{
 			FTexture *tex = TexMan[hash];
-			if (*(DWORD *)tex->Name == intname)
+			if (tex->dwName == intname)
 			{
 				R_InstallSpriteLump (FTextureID(hash), tex->Name[4] - 'A', tex->Name[5], false);
 
@@ -827,7 +832,7 @@ void R_InitSkins (void)
 				{
 					char name[9];
 					Wads.GetLumpName (name, base+1);
-					intname = *(DWORD *)name;
+					memcpy(&intname, name, 4);
 				}
 
 				int basens = Wads.GetLumpNamespace(base);
@@ -867,8 +872,10 @@ void R_InitSkins (void)
 							continue;
 
 						char lname[9];
+						DWORD lnameint;
 						Wads.GetLumpName( lname, k );
-						if ( *(DWORD *)lname == intname )
+						memcpy(&lnameint, lname, 4);
+						if (lnameint == intname)
 						{
 							FTextureID picnum = TexMan.CreateTexture(k, FTexture::TEX_SkinSprite);
 							if (!picnum.isValid())
@@ -1369,7 +1376,7 @@ void R_DrawMaskedColumn (const BYTE *column, const FTexture::Span *span)
 
 		if (sprflipvert)
 		{
-			swap (dc_yl, dc_yh);
+			swapvalues (dc_yl, dc_yh);
 		}
 
 		if (dc_yh >= mfloorclip[dc_x])
@@ -1722,14 +1729,9 @@ void R_ProjectSprite (AActor *thing, int fakeside, F3DFloor *fakefloor, F3DFloor
 	// from the viewer, by either water or fake ceilings
 	// killough 4/11/98: improve sprite clipping for underwater/fake ceilings
 
-	heightsec = thing->Sector->heightsec;
+	heightsec = thing->Sector->GetHeightSec();
 
-	if (heightsec != NULL && heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC)
-	{
-		heightsec = NULL;
-	}
-
-	if (heightsec)	// only clip things which are in special sectors
+	if (heightsec != NULL)	// only clip things which are in special sectors
 	{
 		if (fakeside == FAKED_AboveCeiling)
 		{
@@ -1745,7 +1747,7 @@ void R_ProjectSprite (AActor *thing, int fakeside, F3DFloor *fakefloor, F3DFloor
 		{
 			if (gzt < heightsec->floorplane.ZatPoint (fx, fy))
 				return;
-			if (gzb >= heightsec->ceilingplane.ZatPoint (fx, fy))
+			if (!(heightsec->MoreFlags & SECF_FAKEFLOORONLY) && gzb >= heightsec->ceilingplane.ZatPoint (fx, fy))
 				return;
 		}
 	}
@@ -1808,79 +1810,53 @@ void R_ProjectSprite (AActor *thing, int fakeside, F3DFloor *fakefloor, F3DFloor
 
 	FDynamicColormap *mybasecolormap = basecolormap;
 
+	// Sprites that are added to the scene must fade to black.
+	if (vis->RenderStyle == LegacyRenderStyles[STYLE_Add] && mybasecolormap->Fade != 0)
+	{
+		mybasecolormap = GetSpecialLights(mybasecolormap->Color, 0, mybasecolormap->Desaturate);
+	}
+
 	if (vis->RenderStyle.Flags & STYLEF_FadeToBlack)
 	{
 		if (invertcolormap)
-		{
-			// Fade to white
+		{ // Fade to white
 			mybasecolormap = GetSpecialLights(mybasecolormap->Color, MAKERGB(255,255,255), mybasecolormap->Desaturate);
 			invertcolormap = false;
 		}
 		else
-		{
-			// Fade to black
+		{ // Fade to black
 			mybasecolormap = GetSpecialLights(mybasecolormap->Color, MAKERGB(0,0,0), mybasecolormap->Desaturate);
 		}
 	}
 
 	// get light level
-	if (fixedcolormap)
-	{
-		// fixed map
+	if (fixedcolormap != NULL)
+	{ // fixed map
 		vis->colormap = fixedcolormap;
 	}
-	else if ( thing->lFixedColormap )
-	{
-		switch ( thing->lFixedColormap )
-		{
-		case REDCOLORMAP:
-
-			vis->colormap = RedColormap;
-			break;
-		case GREENCOLORMAP:
-
-			vis->colormap = GreenColormap;
-			break;
-		case GOLDCOLORMAP:
-
-			vis->colormap = GoldColormap;
-			break;
-		case NUMCOLORMAPS:
-
-			vis->colormap = InverseColormap;
-			break;
-		default:
-
-			vis->colormap = NormalLight.Maps;
-			break;
-		}
-	}
-	else if (fixedlightlev)
-	{
-		if (invertcolormap)
-		{
-			mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
-		}
-		vis->colormap = mybasecolormap->Maps + fixedlightlev;
-	}
-	else if (!foggy && ((thing->renderflags & RF_FULLBRIGHT) || (thing->flags5 & MF5_BRIGHT)))
-	{
-		// full bright
-		if (invertcolormap)
-		{
-			mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
-		}
-		vis->colormap = mybasecolormap->Maps;
-	}
+	// [BB] This makes sure that actors, which have lFixedColormap set, are renderes accordingly.
+	// For example a player using a doom sphere is rendered red for the other players.
+	else if ( ( thing->lFixedColormap != NOFIXEDCOLORMAP ) && ( thing->lFixedColormap >= 0 ) && ( unsigned ( thing->lFixedColormap ) < SpecialColormaps.Size() ) )
+		vis->colormap = SpecialColormaps[ thing->lFixedColormap ].Colormap;
 	else
 	{
-		// diminished light
 		if (invertcolormap)
 		{
 			mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
 		}
-		vis->colormap = mybasecolormap->Maps + (GETPALOOKUP (
-			(fixed_t)DivScale12 (r_SpriteVisibility, tz), spriteshade) << COLORMAPSHIFT);
+		if (fixedlightlev >= 0)
+		{
+			vis->colormap = mybasecolormap->Maps + fixedlightlev;
+		}
+		else if (!foggy && ((thing->renderflags & RF_FULLBRIGHT) || (thing->flags5 & MF5_BRIGHT)))
+		{ // full bright
+			vis->colormap = mybasecolormap->Maps;
+		}
+		else
+		{ // diminished light
+			vis->colormap = mybasecolormap->Maps + (GETPALOOKUP (
+				(fixed_t)DivScale12 (r_SpriteVisibility, tz), spriteshade) << COLORMAPSHIFT);
+		}
 	}
 }
 
@@ -1951,21 +1927,24 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 	WORD				flip;
 	FTexture*			tex;
 	vissprite_t*		vis;
-	vissprite_t 		avis;
+	static vissprite_t	avis[NUMPSPRITES];
+	bool noaccel;
+
+	assert(pspnum >= 0 && pspnum < NUMPSPRITES);
 
 	// decide which patch to use
-	if ( (unsigned)psp->state->sprite >= (unsigned)sprites.Size ())
+	if ( (unsigned)psp->sprite >= (unsigned)sprites.Size ())
 	{
-		DPrintf ("R_DrawPSprite: invalid sprite number %i\n", psp->state->sprite);
+		DPrintf ("R_DrawPSprite: invalid sprite number %i\n", psp->sprite);
 		return;
 	}
-	sprdef = &sprites[psp->state->sprite];
-	if (psp->state->GetFrame() >= sprdef->numframes)
+	sprdef = &sprites[psp->sprite];
+	if (psp->frame >= sprdef->numframes)
 	{
-		DPrintf ("R_DrawPSprite: invalid sprite frame %i : %i\n", psp->state->sprite, psp->state->GetFrame());
+		DPrintf ("R_DrawPSprite: invalid sprite frame %i : %i\n", psp->sprite, psp->frame);
 		return;
 	}
-	sprframe = &SpriteFrames[sprdef->spriteframes + psp->state->GetFrame()];
+	sprframe = &SpriteFrames[sprdef->spriteframes + psp->frame];
 
 	picnum = sprframe->Texture[0];
 	flip = sprframe->Flip & 1;
@@ -1979,7 +1958,7 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 
 	tx -= tex->GetScaledLeftOffset() << FRACBITS;
 	x1 = (centerxfrac + FixedMul (tx, pspritexscale)) >>FRACBITS;
-
+	VisPSpritesX1[pspnum] = x1;
 
 	// off the right side
 	if (x1 > viewwidth)
@@ -1993,7 +1972,7 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 		return;
 	
 	// store information in a vissprite
-	vis = &avis;
+	vis = &avis[pspnum];
 	vis->renderflags = owner->renderflags;
 	vis->floorclip = 0;
 
@@ -2048,6 +2027,7 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 	if (vis->x1 > x1)
 		vis->startfrac += vis->xiscale*(vis->x1-x1);
 
+	noaccel = false;
 	if (pspnum <= ps_flash)
 	{
 		vis->alpha = owner->alpha;
@@ -2068,67 +2048,94 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 		if (vis->RenderStyle.Flags & STYLEF_FadeToBlack)
 		{
 			if (invertcolormap)
-			{
-				// Fade to white
+			{ // Fade to white
 				mybasecolormap = GetSpecialLights(mybasecolormap->Color, MAKERGB(255,255,255), mybasecolormap->Desaturate);
 				invertcolormap = false;
 			}
 			else
-			{
-				// Fade to black
+			{ // Fade to black
 				mybasecolormap = GetSpecialLights(mybasecolormap->Color, MAKERGB(0,0,0), mybasecolormap->Desaturate);
 			}
 		}
 
-		if (fixedlightlev)
-		{
-			if (invertcolormap)
-			{
-				mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
-			}
-			vis->colormap = mybasecolormap->Maps + fixedlightlev;
-		}
-		else if (fixedcolormap)
-		{
-			// fixed color
-			vis->colormap = fixedcolormap;
-		}
-		else if (!foggy && psp->state->GetFullbright())
-		{
-			// full bright
-			if (invertcolormap)
-			{
-				mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
-			}
-			vis->colormap = mybasecolormap->Maps;	// [RH] use basecolormap
+		if (realfixedcolormap != NULL)
+		{ // fixed color
+			vis->colormap = realfixedcolormap->Colormap;
 		}
 		else
 		{
-			// local light
 			if (invertcolormap)
 			{
 				mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
 			}
-			vis->colormap = mybasecolormap->Maps + (GETPALOOKUP (0, spriteshade) << COLORMAPSHIFT);
+			if (fixedlightlev >= 0)
+			{
+				vis->colormap = mybasecolormap->Maps + fixedlightlev;
+			}
+			else if (!foggy && psp->state->GetFullbright())
+			{ // full bright
+				vis->colormap = mybasecolormap->Maps;	// [RH] use basecolormap
+			}
+			else
+			{ // local light
+				vis->colormap = mybasecolormap->Maps + (GETPALOOKUP (0, spriteshade) << COLORMAPSHIFT);
+			}
 		}
 		if (camera->Inventory != NULL)
 		{
+			lighttable_t *oldcolormap = vis->colormap;
 			camera->Inventory->AlterWeaponSprite (vis);
+			if (vis->colormap != oldcolormap)
+			{
+				// The colormap has changed. Is it one we can easily identify?
+				// If not, then don't bother trying to identify it for
+				// hardware accelerated drawing.
+				if (vis->colormap < SpecialColormaps[0].Colormap || 
+					vis->colormap >= SpecialColormaps[SpecialColormaps.Size()].Colormap)
+				{
+					noaccel = true;
+				}
+				// Has the basecolormap changed? If so, we can't hardware accelerate it,
+				// since we don't know what it is anymore.
+				else if (vis->colormap < mybasecolormap->Maps ||
+					vis->colormap >= mybasecolormap->Maps + NUMCOLORMAPS*256)
+				{
+					noaccel = true;
+				}
+			}
 		}
+		VisPSpritesBaseColormap[pspnum] = mybasecolormap;
 	}
 	else
 	{
+		VisPSpritesBaseColormap[pspnum] = basecolormap;
+		vis->colormap = basecolormap->Maps;
 		vis->RenderStyle = STYLE_Normal;
 	}
-		
+
+	// Check for hardware-assisted 2D. If it's available, and this sprite is not
+	// fuzzy, don't draw it until after the switch to 2D mode.
+	if (!noaccel && RenderTarget == screen && (DFrameBuffer *)screen->Accel2D)
+	{
+		FRenderStyle style = vis->RenderStyle;
+		style.CheckFuzz();
+		if (style.BlendOp != STYLEOP_Fuzz)
+		{
+			VisPSprites[pspnum] = vis;
+			return;
+		}
+	}
 	R_DrawVisSprite (vis);
 }
 
 
 
+//==========================================================================
 //
 // R_DrawPlayerSprites
 //
+//==========================================================================
+
 void R_DrawPlayerSprites (void)
 {
 	int 		i;
@@ -2138,7 +2145,7 @@ void R_DrawPlayerSprites (void)
 	static sector_t tempsec;
 	int			floorlight, ceilinglight;
 	F3DFloor *rover;
-	
+
 	if (!r_drawplayersprites ||
 		!camera->player ||
 		(players[consoleplayer].cheats & CF_CHASECAM))
@@ -2146,7 +2153,7 @@ void R_DrawPlayerSprites (void)
 
 	sec = NULL;
 	rover = NULL;
-	if(!fixedlightlev && viewsector->e && viewsector->e->XFloor.lightlist.Size()) {
+	if(fixedlightlev < 0 && viewsector->e && viewsector->e->XFloor.lightlist.Size()) {
 		for(i = viewsector->e->XFloor.lightlist.Size() - 1; i >= 0; i--)
 			if(viewz <= viewsector->e->XFloor.lightlist[i].plane.Zat0()) {
 				rover = viewsector->e->XFloor.lightlist[i].caster;
@@ -2222,6 +2229,78 @@ void R_DrawPlayerSprites (void)
 	}
 }
 
+//==========================================================================
+//
+// R_DrawRemainingPlayerSprites
+//
+// Called from D_Display to draw sprites that were not drawn by
+// R_DrawPlayerSprites().
+//
+//==========================================================================
+
+void R_DrawRemainingPlayerSprites()
+{
+	for (int i = 0; i < NUMPSPRITES; ++i)
+	{
+		vissprite_t *vis;
+		
+		vis = VisPSprites[i];
+		VisPSprites[i] = NULL;
+
+		if (vis != NULL)
+		{
+			FDynamicColormap *colormap = VisPSpritesBaseColormap[i];
+			bool flip = vis->xiscale < 0;
+			FSpecialColormap *special = NULL;
+			PalEntry overlay = 0;
+			FColormapStyle colormapstyle;
+			bool usecolormapstyle = false;
+
+			if (vis->colormap >= SpecialColormaps[0].Colormap && 
+				vis->colormap < SpecialColormaps[SpecialColormaps.Size()].Colormap)
+			{
+				// Yuck! There needs to be a better way to store colormaps in the vissprite... :(
+				ptrdiff_t specialmap = (vis->colormap - SpecialColormaps[0].Colormap) / sizeof(FSpecialColormap);
+				special = &SpecialColormaps[specialmap];
+			}
+			else if (colormap->Color == PalEntry(255,255,255) &&
+				colormap->Desaturate == 0)
+			{
+				overlay = colormap->Fade;
+				overlay.a = BYTE(((vis->colormap - colormap->Maps) >> 8) * 255 / NUMCOLORMAPS);
+			}
+			else
+			{
+				usecolormapstyle = true;
+				colormapstyle.Color = colormap->Color;
+				colormapstyle.Fade = colormap->Fade;
+				colormapstyle.Desaturate = colormap->Desaturate;
+				colormapstyle.FadeLevel = ((vis->colormap - colormap->Maps) >> 8) / float(NUMCOLORMAPS);
+			}
+			screen->DrawTexture(vis->pic,
+				viewwindowx + VisPSpritesX1[i],
+				viewwindowy + viewheight/2 - (vis->texturemid / 65536.0) * (vis->yscale / 65536.0) - 0.5,
+				DTA_DestWidthF, FIXED2FLOAT(vis->pic->GetWidth() * vis->xscale),
+				DTA_DestHeightF, FIXED2FLOAT(vis->pic->GetHeight() * vis->yscale),
+				DTA_Translation, TranslationToTable(vis->Translation),
+				DTA_FlipX, flip,
+				DTA_TopOffset, 0,
+				DTA_LeftOffset, 0,
+				DTA_ClipLeft, viewwindowx,
+				DTA_ClipTop, viewwindowy,
+				DTA_ClipRight, viewwindowx + viewwidth,
+				DTA_ClipBottom, viewwindowy + viewheight,
+				DTA_Alpha, vis->alpha,
+				DTA_RenderStyle, vis->RenderStyle,
+				DTA_FillColor, vis->FillColor,
+				DTA_SpecialColormap, special,
+				DTA_ColorOverlay, overlay.d,
+				DTA_ColormapStyle, usecolormapstyle ? &colormapstyle : NULL,
+				TAG_DONE);
+		}
+	}
+}
+
 
 
 
@@ -2235,13 +2314,9 @@ void R_DrawPlayerSprites (void)
 //		gain compared to the old function.
 //
 // Sort vissprites by depth, far to near
-static int STACK_ARGS sv_compare (const void *arg1, const void *arg2)
+static bool sv_compare(vissprite_t *a, vissprite_t *b)
 {
-	int diff = (*(vissprite_t **)arg2)->idepth - (*(vissprite_t **)arg1)->idepth;
-	// If two sprites are the same distance, then the higher one gets precedence
-	if (diff == 0)
-		return (*(vissprite_t **)arg2)->gzt - (*(vissprite_t **)arg1)->gzt;
-	return diff;
+	return a->idepth > b->idepth;
 }
 
 #if 0
@@ -2375,7 +2450,16 @@ void R_SplitVisSprites ()
 }
 #endif
 
-void R_SortVisSprites (int (STACK_ARGS *compare)(const void *, const void *), size_t first)
+#ifdef __GNUC__
+static void swap(vissprite_t *&a, vissprite_t *&b)
+{
+	vissprite_t *t = a;
+	a = b;
+	b = t;
+}
+#endif
+
+void R_SortVisSprites (bool (*compare)(vissprite_t *, vissprite_t *), size_t first)
 {
 	int i;
 	vissprite_t **spr;
@@ -2393,12 +2477,25 @@ void R_SortVisSprites (int (STACK_ARGS *compare)(const void *, const void *), si
 		spritesortersize = MaxVisSprites;
 	}
 
-	for (i = 0, spr = firstvissprite; i < vsprcount; i++, spr++)
+	if (!(i_compatflags & COMPATF_SPRITESORT))
 	{
-		spritesorter[i] = *spr;
+		for (i = 0, spr = firstvissprite; i < vsprcount; i++, spr++)
+		{
+			spritesorter[i] = *spr;
+		}
+	}
+	else
+	{
+		// If the compatibility option is on sprites of equal distance need to
+		// be sorted in inverse order. This is most easily achieved by
+		// filling the sort array backwards before the sort.
+		for (i = 0, spr = firstvissprite + vsprcount-1; i < vsprcount; i++, spr--)
+		{
+			spritesorter[i] = *spr;
+		}
 	}
 
-	qsort (spritesorter, vsprcount, sizeof (vissprite_t *), compare);
+	std::stable_sort(&spritesorter[0], &spritesorter[vsprcount], compare);
 }
 
 
@@ -2442,7 +2539,7 @@ void R_DrawSprite (vissprite_t * /*dummyArg*/, vissprite_t *spr)
 	if ((fake3D & FAKE3D_CLIPTOP)    && spr->gz >= sclipTop) return;
 
 	// kg3D - correct colors now
-	if (!fixedcolormap && !fixedlightlev && spr->sector->e && spr->sector->e->XFloor.lightlist.Size()) 
+	if (!fixedcolormap && fixedlightlev < 0 && spr->sector->e && spr->sector->e->XFloor.lightlist.Size()) 
 	{
 		if (!(fake3D & FAKE3D_CLIPTOP))
 		{
@@ -2507,7 +2604,7 @@ void R_DrawSprite (vissprite_t * /*dummyArg*/, vissprite_t *spr)
 			{
 				mybasecolormap = GetSpecialLights(mybasecolormap->Color, mybasecolormap->Fade.InverseColor(), mybasecolormap->Desaturate);
 			}
-			if (fixedlightlev)
+			if (fixedlightlev >= 0)
 			{
 				spr->colormap = mybasecolormap->Maps + fixedlightlev;
 			}
@@ -2560,7 +2657,7 @@ void R_DrawSprite (vissprite_t * /*dummyArg*/, vissprite_t *spr)
 				}
 			}
 		}
-		if (spr->FakeFlatStat != FAKED_BelowFloor)
+		if (spr->FakeFlatStat != FAKED_BelowFloor && !(spr->heightsec->MoreFlags & SECF_FAKEFLOORONLY))
 		{
 			fixed_t h = spr->heightsec->ceilingplane.ZatPoint (spr->gx, spr->gy);
 			h = (centeryfrac - FixedMul (h-viewz, scale)) >> FRACBITS;
@@ -2876,7 +2973,7 @@ CUSTOM_CVAR( Int, r_maxparticles, 4000, CVAR_ARCHIVE )
 
 void R_InitParticles ()
 {
-	char *i;
+	const char *i;
 
 	if ((i = Args->CheckValue ("-numparticles")))
 		NumParticles = atoi (i);
@@ -2934,7 +3031,7 @@ void R_FindParticleSubsectors ()
 	for (WORD i = ActiveParticles; i != NO_PARTICLE; i = Particles[i].tnext)
 	{
 		subsector_t *ssec = R_PointInSubsector (Particles[i].x, Particles[i].y);
-		int ssnum = ssec-subsectors;
+		int ssnum = int(ssec-subsectors);
 		Particles[i].subsector = ssec;
 		Particles[i].snext = ParticlesInSubsec[ssnum];
 		ParticlesInSubsec[ssnum] = i;
@@ -3006,12 +3103,7 @@ void R_ProjectParticle (particle_t *particle, const sector_t *sector, int shade,
 		return;
 
 	// Clip particles above the ceiling or below the floor.
-	heightsec = sector->heightsec;
-
-	if (heightsec != NULL && heightsec->MoreFlags & SECF_IGNOREHEIGHTSEC)
-	{
-		heightsec = NULL;
-	}
+	heightsec = sector->GetHeightSec();
 
 	const secplane_t *topplane;
 	const secplane_t *botplane;
@@ -3083,7 +3175,7 @@ void R_ProjectParticle (particle_t *particle, const sector_t *sector, int shade,
 	vis->floorclip = 0;
 	vis->heightsec = heightsec;
 
-	if (fixedlightlev)
+	if (fixedlightlev >= 0)
 	{
 		vis->colormap = map + fixedlightlev;
 	}

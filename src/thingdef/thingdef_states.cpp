@@ -39,7 +39,6 @@
 */
 
 #include "actor.h"
-#include "autosegs.h"
 #include "info.h"
 #include "sc_man.h"
 #include "tarray.h"
@@ -56,6 +55,7 @@
 #include "i_system.h"
 #include "colormatcher.h"
 #include "thingdef_exp.h"
+#include "version.h"
 
 //==========================================================================
 //***
@@ -244,7 +244,7 @@ do_stop:
 			{
 				if (sc.Compare("BRIGHT")) 
 				{
-					state.Frame |= SF_FULLBRIGHT;
+					state.Fullbright = true;
 					continue;
 				}
 				if (sc.Compare("OFFSET"))
@@ -256,6 +256,20 @@ do_stop:
 					sc.MustGetStringName (",");
 					sc.MustGetNumber();
 					state.Misc2 = sc.Number;
+					sc.MustGetStringName(")");
+					continue;
+				}
+				if (sc.Compare("LIGHT"))
+				{
+					sc.MustGetStringName("(");
+					do
+					{
+						sc.MustGetString();
+						#ifdef DYNLIGHT
+							AddStateLight(&state, sc.String);
+						#endif
+					}
+					while (sc.CheckString(","));
 					sc.MustGetStringName(")");
 					continue;
 				}
