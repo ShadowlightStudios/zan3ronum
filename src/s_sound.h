@@ -41,7 +41,6 @@ struct sfxinfo_t
 	int 		lumpnum;				// lump number of sfx
 
 	unsigned int next, index;			// [RH] For hashing
-//	unsigned int frequency;				// [RH] Preferred playback rate
 	float		Volume;
 
 	BYTE		PitchMask;
@@ -58,6 +57,7 @@ struct sfxinfo_t
 	WORD		bUsed:1;
 	WORD		bSingular:1;
 	WORD		bTentative:1;
+	WORD		bPlayerSilent:1;		// This player sound is intentionally silent.
 
 	int			LoopStart;				// -1 means no specific loop defined
 
@@ -65,6 +65,9 @@ struct sfxinfo_t
 	enum { NO_LINK = 0xffffffff };
 
 	FRolloffInfo	Rolloff;
+	float		Attenuation;			// Multiplies the attenuation passed to S_Sound.
+
+	void		MarkUsed();				// Marks this sound as used.
 };
 
 // Rolloff types
@@ -131,6 +134,10 @@ public:
 	operator const char *() const
 	{
 		return ID ? S_sfx[ID].name.GetChars() : NULL;
+	}
+	void MarkUsed() const
+	{
+		S_sfx[ID].MarkUsed();
 	}
 private:
 	int ID;
@@ -218,8 +225,8 @@ void S_PrecacheLevel ();
 void S_CacheSound (sfxinfo_t *sfx);
 
 // Start sound for thing at <ent>
-void S_Sound (int channel, FSoundID sfxid, float volume, float attenuation);
-void S_Sound (AActor *ent, int channel, FSoundID sfxid, float volume, float attenuation);
+void S_Sound (int channel, FSoundID sfxid, float volume, float attenuation, bool bSoundOnClient = false); // [EP] Added bSoundOnClient.
+void S_Sound (AActor *ent, int channel, FSoundID sfxid, float volume, float attenuation, bool bSoundOnClient = false); // [EP] Added bSoundOnClient.
 void S_SoundMinMaxDist (AActor *ent, int channel, FSoundID sfxid, float volume, float mindist, float maxdist);
 void S_Sound (const FPolyObj *poly, int channel, FSoundID sfxid, float volume, float attenuation);
 void S_Sound (const sector_t *sec, int channel, FSoundID sfxid, float volume, float attenuation);
@@ -303,6 +310,9 @@ bool S_GetSoundPlayingInfo (const FPolyObj *poly, int sound_id);
 
 bool S_IsActorPlayingSomething (AActor *actor, int channel, int sound_id);
 
+// Change a playing sound's volume
+bool S_ChangeSoundVolume(AActor *actor, int channel, float volume);
+
 // Moves all sounds from one mobj to another
 void S_RelinkSound (AActor *from, AActor *to);
 
@@ -319,6 +329,8 @@ bool S_ChangeMusic (const char *music_name, int order=0, bool looping=true, bool
 bool S_ChangeCDMusic (int track, unsigned int id=0, bool looping=true);
 
 void S_RestartMusic ();
+
+void S_MIDIDeviceChanged();
 
 int S_GetMusic (char **name);
 
@@ -338,7 +350,7 @@ void S_UpdateSounds (AActor *listener);
 void S_RestoreEvictedChannels();
 
 // [RH] S_sfx "maintenance" routines
-void S_ParseSndInfo ();
+void S_ParseSndInfo (bool redefine);
 void S_ParseReverbDef ();
 void S_UnloadReverbDef ();
 
@@ -356,6 +368,7 @@ int S_AddSoundLump (const char *logicalname, int lump);	// Add sound by lump ind
 int S_AddPlayerSound (const char *playerclass, const int gender, int refid, const char *lumpname);
 int S_AddPlayerSound (const char *playerclass, const int gender, int refid, int lumpnum, bool fromskin=false);
 int S_AddPlayerSoundExisting (const char *playerclass, const int gender, int refid, int aliasto, bool fromskin=false);
+void S_MarkPlayerSounds (const char *playerclass);
 void S_ShrinkPlayerSoundLists ();
 void S_UnloadSound (sfxinfo_t *sfx);
 sfxinfo_t *S_LoadSound(sfxinfo_t *sfx);
@@ -388,10 +401,14 @@ enum EMidiDevice
 	MDEV_OPL = 1,
 	MDEV_FMOD = 2,
 	MDEV_TIMIDITY = 3,
+	MDEV_FLUIDSYNTH = 4,
+	MDEV_GUS = 5,
 };
 
+typedef TMap<FName, FName> MusicAliasMap;
 typedef TMap<FName, int> MidiDeviceMap;
 
+extern MusicAliasMap MusicAliases;
 extern MidiDeviceMap MidiDevices;
 
 #endif

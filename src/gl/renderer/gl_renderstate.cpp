@@ -39,6 +39,8 @@
 */
 
 #include "gl/system/gl_system.h"
+#include "gl/system/gl_interface.h"
+#include "gl/data/gl_data.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/renderer/gl_renderer.h"
@@ -47,6 +49,8 @@
 
 // [EP] New #includes.
 #include "gl/gl_functions.h"
+
+void gl_SetTextureMode(int type);
 
 FRenderState gl_RenderState;
 int FStateAttr::ChangeCounter;
@@ -103,14 +107,12 @@ int FRenderState::SetupShader(bool cameratexture, int &shaderindex, int &cm, flo
 
 	if (gl.shadermodel == 4)
 	{
-		usecmshader = cm > CM_DEFAULT && cm < CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size() && 
-			mTextureMode != TM_MASK;
+		usecmshader = cm > CM_DEFAULT && cm < CM_MAXCOLORMAP && mTextureMode != TM_MASK;
 	}
 	else if (gl.shadermodel == 3)
 	{
 		usecmshader = (cameratexture || gl_colormap_shader) && 
-			cm > CM_DEFAULT && cm < CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size() && 
-			mTextureMode != TM_MASK;
+			cm > CM_DEFAULT && cm < CM_MAXCOLORMAP && mTextureMode != TM_MASK;
 
 		if (!gl_brightmap_shader && shaderindex == 3) 
 		{
@@ -208,15 +210,15 @@ bool FRenderState::ApplyShader()
 
 		if (fogset != activeShader->currentfogenabled)
 		{
-			gl.Uniform1i(activeShader->fogenabled_index, (activeShader->currentfogenabled = fogset)); 
+			glUniform1i(activeShader->fogenabled_index, (activeShader->currentfogenabled = fogset)); 
 		}
 		if (mTextureMode != activeShader->currenttexturemode)
 		{
-			gl.Uniform1i(activeShader->texturemode_index, (activeShader->currenttexturemode = mTextureMode)); 
+			glUniform1i(activeShader->texturemode_index, (activeShader->currenttexturemode = mTextureMode)); 
 		}
 		if (activeShader->currentcamerapos.Update(&mCameraPos))
 		{
-			gl.Uniform3fv(activeShader->camerapos_index, 1, mCameraPos.vec); 
+			glUniform3fv(activeShader->camerapos_index, 1, mCameraPos.vec); 
 		}
 		/*if (mLightParms[0] != activeShader->currentlightfactor || 
 			mLightParms[1] != activeShader->currentlightdist ||
@@ -228,24 +230,28 @@ bool FRenderState::ApplyShader()
 			//activeShader->currentfogdensity = mFogDensity;
 			// premultiply the density with as much as possible here to reduce shader
 			// execution time.
-			gl.VertexAttrib4f(VATTR_FOGPARAMS, mLightParms[0], mLightParms[1], mFogDensity * (-LOG2E / 64000.f), 0);
+			glVertexAttrib4f(VATTR_FOGPARAMS, mLightParms[0], mLightParms[1], mFogDensity * (-LOG2E / 64000.f), 0);
 		}
 		if (mFogColor != activeShader->currentfogcolor)
 		{
 			activeShader->currentfogcolor = mFogColor;
 
-			gl.Uniform4f (activeShader->fogcolor_index, mFogColor.r/255.f, mFogColor.g/255.f, 
+			glUniform4f (activeShader->fogcolor_index, mFogColor.r/255.f, mFogColor.g/255.f, 
 							mFogColor.b/255.f, 0);
 		}
 		if (mGlowEnabled)
 		{
-			gl.Uniform4fv(activeShader->glowtopcolor_index, 1, mGlowTop.vec);
-			gl.Uniform4fv(activeShader->glowbottomcolor_index, 1, mGlowBottom.vec);
+			glUniform4fv(activeShader->glowtopcolor_index, 1, mGlowTop.vec);
+			glUniform4fv(activeShader->glowbottomcolor_index, 1, mGlowBottom.vec);
 		}
 		if (mLightEnabled)
 		{
-			gl.Uniform3iv(activeShader->lightrange_index, 1, mNumLights);
-			gl.Uniform4fv(activeShader->lights_index, mNumLights[2], mLightData);
+			glUniform3iv(activeShader->lightrange_index, 1, mNumLights);
+			glUniform4fv(activeShader->lights_index, mNumLights[2], mLightData);
+		}
+		if (glset.lightmode == 8)
+		{
+			glUniform3fv(activeShader->dlightcolor_index, 1, mDynLight);
 		}
 
 		return true;
@@ -285,7 +291,7 @@ void FRenderState::Apply(bool forcenoshader)
 		if (mBlendEquation != glBlendEquation)
 		{
 			glBlendEquation = mBlendEquation;
-			gl.BlendEquation(mBlendEquation);
+			::glBlendEquation(mBlendEquation);
 		}
 	}
 
@@ -294,20 +300,20 @@ void FRenderState::Apply(bool forcenoshader)
 		GLRenderer->mShaderManager->SetActiveShader(NULL);
 		if (mTextureMode != ffTextureMode)
 		{
-			gl.SetTextureMode((ffTextureMode = mTextureMode));
+			gl_SetTextureMode((ffTextureMode = mTextureMode));
 		}
 		if (mTextureEnabled != ffTextureEnabled)
 		{
-			if ((ffTextureEnabled = mTextureEnabled)) gl.Enable(GL_TEXTURE_2D);
-			else gl.Disable(GL_TEXTURE_2D);
+			if ((ffTextureEnabled = mTextureEnabled)) glEnable(GL_TEXTURE_2D);
+			else glDisable(GL_TEXTURE_2D);
 		}
 		if (mFogEnabled != ffFogEnabled)
 		{
 			if ((ffFogEnabled = mFogEnabled)) 
 			{
-				gl.Enable(GL_FOG);
+				glEnable(GL_FOG);
 			}
-			else gl.Disable(GL_FOG);
+			else glDisable(GL_FOG);
 		}
 		if (mFogEnabled)
 		{
@@ -315,11 +321,11 @@ void FRenderState::Apply(bool forcenoshader)
 			{
 				ffFogColor = mFogColor;
 				GLfloat FogColor[4]={mFogColor.r/255.0f,mFogColor.g/255.0f,mFogColor.b/255.0f,0.0f};
-				gl.Fogfv(GL_FOG_COLOR, FogColor);
+				glFogfv(GL_FOG_COLOR, FogColor);
 			}
 			if (ffFogDensity != mFogDensity)
 			{
-				gl.Fogf(GL_FOG_DENSITY, mFogDensity/64000.f);
+				glFogf(GL_FOG_DENSITY, mFogDensity/64000.f);
 				ffFogDensity=mFogDensity;
 			}
 		}
@@ -328,8 +334,8 @@ void FRenderState::Apply(bool forcenoshader)
 			switch (ffSpecialEffect)
 			{
 			case EFF_SPHEREMAP:
-				gl.Disable(GL_TEXTURE_GEN_T);
-				gl.Disable(GL_TEXTURE_GEN_S);
+				glDisable(GL_TEXTURE_GEN_T);
+				glDisable(GL_TEXTURE_GEN_S);
 
 			default:
 				break;
@@ -338,10 +344,10 @@ void FRenderState::Apply(bool forcenoshader)
 			{
 			case EFF_SPHEREMAP:
 				// Use sphere mapping for this
-				gl.Enable(GL_TEXTURE_GEN_T);
-				gl.Enable(GL_TEXTURE_GEN_S);
-				gl.TexGeni(GL_S,GL_TEXTURE_GEN_MODE,GL_SPHERE_MAP);
-				gl.TexGeni(GL_T,GL_TEXTURE_GEN_MODE,GL_SPHERE_MAP);
+				glEnable(GL_TEXTURE_GEN_T);
+				glEnable(GL_TEXTURE_GEN_S);
+				glTexGeni(GL_S,GL_TEXTURE_GEN_MODE,GL_SPHERE_MAP);
+				glTexGeni(GL_T,GL_TEXTURE_GEN_MODE,GL_SPHERE_MAP);
 				break;
 
 			default:

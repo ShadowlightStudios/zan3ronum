@@ -26,6 +26,14 @@
 #include "tarray.h"
 #include <stddef.h>
 
+enum
+{
+	FAKED_Center,
+	FAKED_BelowFloor,
+	FAKED_AboveCeiling
+};
+
+
 struct drawseg_t
 {
 	seg_t*		curline;
@@ -47,8 +55,8 @@ struct drawseg_t
 	ptrdiff_t	sprbottomclip;		// type short
 	ptrdiff_t	maskedtexturecol;	// type short
 	ptrdiff_t	swall;				// type fixed_t
-	int fake;	// ident fake drawseg, don't draw or clip sprites
-// kg3D - backups
+	int fake;	// ident fake drawseg, don't draw and clip sprites
+// backups
 	ptrdiff_t	bkup;	// sprtopclip backup, for mid and fake textures
 	float WallUoverZorg, WallUoverZstep, WallInvZorg, WallInvZstep, WallDepthScale, WallDepthOrg;
 };
@@ -80,7 +88,6 @@ EXTERN_CVAR (Bool, r_drawflat)		// [RH] Don't texture segs?
 // BSP?
 void R_ClearClipSegs (short left, short right);
 void R_ClearDrawSegs ();
-void R_BuildPolyBSP(subsector_t *sub);
 void R_RenderBSPNode (void *node);
 
 // killough 4/13/98: fake floors/ceilings for deep water / fake ceilings:

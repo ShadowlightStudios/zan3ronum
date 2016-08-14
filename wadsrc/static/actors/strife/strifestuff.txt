@@ -365,8 +365,8 @@ ACTOR PillarAlienPower 227
 	States
 	{
 	Spawn:
-		APOW A -1 A_LoopActiveSound
-		Stop
+		APOW A 4 A_LoopActiveSound
+		Loop
 	}
 }
 
@@ -510,7 +510,7 @@ ACTOR WaterDropOnFloor 103
 	Game Strife
 	+NOBLOCKMAP
 	ConversationID 224, -1, -1
-	ActiveSound "world/waterdrips"
+	ActiveSound "world/waterdrip"
 	States
 	{
 	Spawn:
@@ -1662,7 +1662,6 @@ ACTOR TargetPractice 208
 ACTOR ForceFieldGuard 25 native
 {
 	Game Strife
-	ConversationID 0
 	Health 10
 	Radius 2
 	Height 1
@@ -1787,8 +1786,8 @@ ACTOR CeilingTurret 27
 		Loop
 	Missile:
 	Pain:
-		TURT B 4 A_ShootGun
-		TURT D 3 A_SentinelRefire
+		TURT B 4 Slow A_ShootGun
+		TURT D 3 Slow A_SentinelRefire
 		TURT A 4 A_SentinelRefire
 		Loop
 	Death:

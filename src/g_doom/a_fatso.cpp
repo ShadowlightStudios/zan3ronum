@@ -39,11 +39,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FatAttack1)
 	A_FaceTarget (self);
 	// Change direction  to ...
 	self->angle += FATSPREAD;
-	missile = P_SpawnMissile (self, self->target, spawntype);
-
-	// [BC] If we're the server, tell clients to spawn the missile.
-	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( missile ))
-		SERVERCOMMANDS_SpawnMissile( missile );
+	P_SpawnMissile (self, self->target, spawntype, NULL, true); // [BB] Inform clients
 
 	missile = P_SpawnMissile (self, self->target, spawntype);
 	if (missile != NULL)
@@ -75,11 +71,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FatAttack2)
 	A_FaceTarget (self);
 	// Now here choose opposite deviation.
 	self->angle -= FATSPREAD;
-	missile = P_SpawnMissile (self, self->target, spawntype);
-
-	// [BC] If we're the server, tell clients to spawn the missile.
-	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( missile ))
-		SERVERCOMMANDS_SpawnMissile( missile );
+	P_SpawnMissile (self, self->target, spawntype, NULL, true); // [BB] Inform clients
 
 	missile = P_SpawnMissile (self, self->target, spawntype);
 	if (missile != NULL)
@@ -165,7 +157,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Mushroom)
 	if (n == 0) n = self->Damage; // GetMissileDamage (0, 1);
 	if (spawntype == NULL) spawntype = PClass::FindClass("FatShot");
 
-	P_RadiusAttack (self, self->target, 128, 128, self->DamageType, !(flags & MSF_DontHurt));
+	P_RadiusAttack (self, self->target, 128, 128, self->DamageType, (flags & MSF_DontHurt) ? 0 : RADF_HURTSOURCE);
 	P_CheckSplash(self, 128<<FRACBITS);
 
 	// Now launch mushroom cloud

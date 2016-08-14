@@ -32,6 +32,8 @@
 **
 */
 
+// #define NO_SWRENDER 	// set this if you want to exclude the software renderer. Without software renderer the base implementations of DrawTextureV and FillSimplePoly need to be disabled because they depend on it.
+
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -39,31 +41,42 @@
 #include "v_video.h"
 #include "m_swap.h"
 #include "r_defs.h"
+#include "r_utility.h"
+#ifndef NO_SWRENDER
 #include "r_draw.h"
 #include "r_main.h"
 #include "r_things.h"
-#include "r_translate.h"
+#endif
+#include "r_data/r_translate.h"
 #include "doomstat.h"
 #include "v_palette.h"
+#include "gi.h"
+#include "g_level.h"
+#include "st_stuff.h"
+#include "sbar.h"
 
 #include "i_system.h"
 #include "i_video.h"
 #include "templates.h"
 #include "d_net.h"
 #include "colormatcher.h"
+#include "r_data/colormaps.h"
 // [BB] New #includes.
 #include "chat.h"
 #include "v_font.h"
 
 // [RH] Stretch values to make a 320x200 image best fit the screen
 // without using fractional steppings
-float CleanXfac, CleanYfac;
+int CleanXfac, CleanYfac;
 
 // [RH] Effective screen sizes that the above scale values give you
 int CleanWidth, CleanHeight;
 
 // Above minus 1 (or 1, if they are already 1)
 int CleanXfac_1, CleanYfac_1, CleanWidth_1, CleanHeight_1;
+
+// FillSimplePoly uses this
+extern "C" short spanend[MAXHEIGHT];
 
 CVAR (Bool, hud_scale, false, CVAR_ARCHIVE);
 
@@ -74,6 +87,7 @@ CVAR (Bool, con_scaletext_usescreenratio, false, CVAR_ARCHIVE)
 // are several repetitions with the same color.
 static int LastPal = -1;
 static uint32 LastRGB;
+
 
 static int PalFromRGB(uint32 rgb)
 {
@@ -107,6 +121,7 @@ void STACK_ARGS DCanvas::DrawTexture (FTexture *img, double x, double y, int tag
 
 void STACK_ARGS DCanvas::DrawTextureV(FTexture *img, double x, double y, uint32 tag, va_list tags)
 {
+#ifndef NO_SWRENDER
 	FTexture::Span unmaskedSpan[2];
 	const FTexture::Span **spanptr, *spans;
 	static short bottomclipper[MAXWIDTH], topclipper[MAXWIDTH];
@@ -192,7 +207,7 @@ void STACK_ARGS DCanvas::DrawTextureV(FTexture *img, double x, double y, uint32 
 		double iyscale = 1 / yscale;
 
 		spryscale = FLOAT2FIXED(yscale);
-
+		assert(spryscale > 2);
 #if 0
 		// Fix precision errors that are noticeable at some resolutions
 		if ((y0 + parms.destheight) > (y0 + yscale * img->GetHeight()))
@@ -315,6 +330,7 @@ void STACK_ARGS DCanvas::DrawTextureV(FTexture *img, double x, double y, uint32 
 	{
 		NetUpdate();
 	}
+#endif
 }
 
 bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag, va_list tags, DrawParms *parms, bool hw) const
@@ -323,9 +339,6 @@ bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag
 	int intval;
 	bool translationset = false;
 	bool virtBottom;
-
-	// [BC] Potentially flag the texture as being text so we can handle it differently.
-	bool	bIsText = false;
 
 	if (img == NULL || img->UseType == FTexture::TEX_Null)
 	{
@@ -424,11 +437,7 @@ bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag
 				parms->x = (parms->x - 160.0) * CleanXfac + (Width * 0.5);
 				parms->y = (parms->y - 100.0) * CleanYfac + (Height * 0.5);
 				parms->destwidth = parms->texwidth * CleanXfac;
-				// [BC] Text looks horrible when it's y-stretched.
-				if ( bIsText )
-					parms->destheight = parms->texheight * (int)CleanYfac;
-				else
-					parms->destheight = parms->texheight * CleanYfac;
+				parms->destheight = parms->texheight * CleanYfac;
 			}
 			break;
 
@@ -436,16 +445,8 @@ bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag
 			boolval = va_arg(tags, INTBOOL);
 			if (boolval)
 			{
-				if ( bIsText )
-					parms->destwidth = parms->texwidth * (int)CleanXfac;
-				else
-					parms->destwidth = parms->texwidth * CleanXfac;
-
-				// [BC] Text looks horrible when it's y-stretched.
-				if ( bIsText )
-					parms->destheight = parms->texheight * (int)CleanYfac;
-				else
-					parms->destheight = parms->texheight * CleanYfac;
+				parms->destwidth = parms->texwidth * CleanXfac;
+				parms->destheight = parms->texheight * CleanYfac;
 			}
 			break;
 
@@ -689,11 +690,6 @@ bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag
 			parms->colormapstyle = va_arg(tags, FColormapStyle *);
 			break;
 
-		// [BC] Is what we're drawing text? If so, handle it differently.
-		case DTA_IsText:
-			bIsText = !!va_arg( tags, INTBOOL );
-			break;
-
 		// [BB]
 		case DTA_UseVirtualScreen:
 			if ( !!va_arg( tags, INTBOOL ) )
@@ -859,10 +855,10 @@ void DCanvas::FillBorder (FTexture *img)
 	}
 	else
 	{
-		Clear (0, 0, Width, bordtop, 0, 0);										// Top
-		Clear (0, bordtop, bordleft, Height - bordbottom, 0, 0);				// Left
-		Clear (Width - bordright, bordtop, Width, Height - bordbottom, 0, 0);	// Right
-		Clear (0, Height - bordbottom, Width, Height, 0, 0);					// Bottom
+		Clear (0, 0, Width, bordtop, GPalette.BlackIndex, 0);									// Top
+		Clear (0, bordtop, bordleft, Height - bordbottom, GPalette.BlackIndex, 0);				// Left
+		Clear (Width - bordright, bordtop, Width, Height - bordbottom, GPalette.BlackIndex, 0);	// Right
+		Clear (0, Height - bordbottom, Width, Height, GPalette.BlackIndex, 0);					// Bottom
 	}
 }
 
@@ -1108,6 +1104,15 @@ void DCanvas::Clear (int left, int top, int right, int bottom, int palcolor, uin
 	assert(left < right);
 	assert(top < bottom);
 
+	if (left >= Width || right <= 0 || top >= Height || bottom <= 0)
+	{
+		return;
+	}
+	left = MAX(0,left);
+	right = MIN(Width,right);
+	top = MAX(0,top);
+	bottom = MIN(Height,bottom);
+
 	if (palcolor < 0)
 	{
 		if (APART(color) != 255)
@@ -1127,6 +1132,177 @@ void DCanvas::Clear (int left, int top, int right, int bottom, int palcolor, uin
 		dest += Pitch;
 	}
 }
+
+//==========================================================================
+//
+// DCanvas :: FillSimplePoly
+//
+// Fills a simple polygon with a texture. Here, "simple" means that a
+// horizontal scanline at any vertical position within the polygon will
+// not cross it more than twice.
+//
+// The originx, originy, scale, and rotation parameters specify
+// transformation of the filling texture, not of the points.
+//
+// The points must be specified in clockwise order.
+//
+//==========================================================================
+
+void DCanvas::FillSimplePoly(FTexture *tex, FVector2 *points, int npoints,
+	double originx, double originy, double scalex, double scaley, angle_t rotation,
+	FDynamicColormap *colormap, int lightlevel)
+{
+#ifndef NO_SWRENDER
+	// Use an equation similar to player sprites to determine shade
+	fixed_t shade = LIGHT2SHADE(lightlevel) - 12*FRACUNIT;
+	float topy, boty, leftx, rightx;
+	int toppt, botpt, pt1, pt2;
+	int i;
+	int y1, y2, y;
+	fixed_t x;
+	double rot = rotation * M_PI / double(1u << 31);
+	bool dorotate = rot != 0;
+	double cosrot, sinrot;
+
+	if (--npoints < 2 || Buffer == NULL)
+	{ // not a polygon or we're not locked
+		return;
+	}
+
+	// Find the extents of the polygon, in particular the highest and lowest points.
+	for (botpt = toppt = 0, boty = topy = points[0].Y, leftx = rightx = points[0].X, i = 1; i <= npoints; ++i)
+	{
+		if (points[i].Y < topy)
+		{
+			topy = points[i].Y;
+			toppt = i;
+		}
+		if (points[i].Y > boty)
+		{
+			boty = points[i].Y;
+			botpt = i;
+		}
+		if (points[i].X < leftx)
+		{
+			leftx = points[i].X;
+		}
+		if (points[i].X > rightx)
+		{
+			rightx = points[i].X;
+		}
+	}
+	if (topy >= Height ||		// off the bottom of the screen
+		boty <= 0 ||			// off the top of the screen
+		leftx >= Width ||		// off the right of the screen
+		rightx <= 0)			// off the left of the screen
+	{
+		return;
+	}
+
+	scalex /= FIXED2FLOAT(tex->xScale);
+	scaley /= FIXED2FLOAT(tex->yScale);
+
+	cosrot = cos(rot);
+	sinrot = sin(rot);
+
+	// Setup constant texture mapping parameters.
+	R_SetupSpanBits(tex);
+	R_SetSpanColormap(colormap != NULL ? &colormap->Maps[clamp(shade >> FRACBITS, 0, NUMCOLORMAPS-1) * 256] : identitymap);
+	R_SetSpanSource(tex->GetPixels());
+	scalex = double(1u << (32 - ds_xbits)) / scalex;
+	scaley = double(1u << (32 - ds_ybits)) / scaley;
+	ds_xstep = xs_RoundToInt(cosrot * scalex);
+	ds_ystep = xs_RoundToInt(sinrot * scaley);
+
+	// Travel down the right edge and create an outline of that edge.
+	pt1 = toppt;
+	pt2 = toppt + 1;	if (pt2 > npoints) pt2 = 0;
+	y1 = xs_RoundToInt(points[pt1].Y + 0.5f);
+	do
+	{
+		x = FLOAT2FIXED(points[pt1].X + 0.5f);
+		y2 = xs_RoundToInt(points[pt2].Y + 0.5f);
+		if (y1 >= y2 || (y1 < 0 && y2 < 0) || (y1 >= Height && y2 >= Height))
+		{
+		}
+		else
+		{
+			fixed_t xinc = FLOAT2FIXED((points[pt2].X - points[pt1].X) / (points[pt2].Y - points[pt1].Y));
+			int y3 = MIN(y2, Height);
+			if (y1 < 0)
+			{
+				x += xinc * -y1;
+				y1 = 0;
+			}
+			for (y = y1; y < y3; ++y)
+			{
+				spanend[y] = clamp<short>(x >> FRACBITS, -1, Width);
+				x += xinc;
+			}
+		}
+		y1 = y2;
+		pt1 = pt2;
+		pt2++;			if (pt2 > npoints) pt2 = 0;
+	} while (pt1 != botpt);
+
+	// Travel down the left edge and fill it in.
+	pt1 = toppt;
+	pt2 = toppt - 1;	if (pt2 < 0) pt2 = npoints;
+	y1 = xs_RoundToInt(points[pt1].Y + 0.5f);
+	do
+	{
+		x = FLOAT2FIXED(points[pt1].X + 0.5f);
+		y2 = xs_RoundToInt(points[pt2].Y + 0.5f);
+		if (y1 >= y2 || (y1 < 0 && y2 < 0) || (y1 >= Height && y2 >= Height))
+		{
+		}
+		else
+		{
+			fixed_t xinc = FLOAT2FIXED((points[pt2].X - points[pt1].X) / (points[pt2].Y - points[pt1].Y));
+			int y3 = MIN(y2, Height);
+			if (y1 < 0)
+			{
+				x += xinc * -y1;
+				y1 = 0;
+			}
+			for (y = y1; y < y3; ++y)
+			{
+				int x1 = x >> FRACBITS;
+				int x2 = spanend[y];
+				if (x2 > x1 && x2 > 0 && x1 < Width)
+				{
+					x1 = MAX(x1, 0);
+					x2 = MIN(x2, Width);
+#if 0
+					memset(this->Buffer + y * this->Pitch + x1, (int)tex, x2 - x1);
+#else
+					ds_y = y;
+					ds_x1 = x1;
+					ds_x2 = x2 - 1;
+
+					TVector2<double> tex(x1 - originx, y - originy);
+					if (dorotate)
+					{
+						double t = tex.X;
+						tex.X = t * cosrot - tex.Y * sinrot;
+						tex.Y = tex.Y * cosrot + t * sinrot;
+					}
+					ds_xfrac = xs_RoundToInt(tex.X * scalex);
+					ds_yfrac = xs_RoundToInt(tex.Y * scaley);
+
+					R_DrawSpan();
+#endif
+				}
+				x += xinc;
+			}
+		}
+		y1 = y2;
+		pt1 = pt2;
+		pt2--;			if (pt2 < 0) pt2 = npoints;
+	} while (pt1 != botpt);
+#endif
+}
+
 
 /********************************/
 /*								*/
@@ -1218,3 +1394,198 @@ bool DCanvas::ClipBox (int &x, int &y, int &w, int &h, const BYTE *&src, const i
 	}
 	return false;
 }
+
+//==========================================================================
+//
+// V_SetBorderNeedRefresh
+//
+// Flag the border as in need of updating. (Probably because something that
+// was on top of it has changed.
+//
+//==========================================================================
+
+void V_SetBorderNeedRefresh()
+{
+	if (screen != NULL)
+	{
+		BorderNeedRefresh = screen->GetPageCount();
+	}
+}
+
+//==========================================================================
+//
+// V_DrawFrame
+//
+// Draw a frame around the specified area using the view border
+// frame graphics. The border is drawn outside the area, not in it.
+//
+//==========================================================================
+
+void V_DrawFrame (int left, int top, int width, int height)
+{
+	FTexture *p;
+	const gameborder_t *border = gameinfo.border;
+	// Sanity check for incomplete gameinfo
+	if (border == NULL)
+		return;
+	int offset = border->offset;
+	int right = left + width;
+	int bottom = top + height;
+
+	// Draw top and bottom sides.
+	p = TexMan[border->t];
+	screen->FlatFill(left, top - p->GetHeight(), right, top, p, true);
+	p = TexMan[border->b];
+	screen->FlatFill(left, bottom, right, bottom + p->GetHeight(), p, true);
+
+	// Draw left and right sides.
+	p = TexMan[border->l];
+	screen->FlatFill(left - p->GetWidth(), top, left, bottom, p, true);
+	p = TexMan[border->r];
+	screen->FlatFill(right, top, right + p->GetWidth(), bottom, p, true);
+
+	// Draw beveled corners.
+	screen->DrawTexture (TexMan[border->tl], left-offset, top-offset, TAG_DONE);
+	screen->DrawTexture (TexMan[border->tr], left+width, top-offset, TAG_DONE);
+	screen->DrawTexture (TexMan[border->bl], left-offset, top+height, TAG_DONE);
+	screen->DrawTexture (TexMan[border->br], left+width, top+height, TAG_DONE);
+}
+
+//==========================================================================
+//
+// V_DrawBorder
+//
+//==========================================================================
+
+void V_DrawBorder (int x1, int y1, int x2, int y2)
+{
+	FTextureID picnum;
+
+	if (level.info != NULL && level.info->bordertexture[0] != 0)
+	{
+		picnum = TexMan.CheckForTexture (level.info->bordertexture, FTexture::TEX_Flat);
+	}
+	else
+	{
+		picnum = TexMan.CheckForTexture (gameinfo.borderFlat, FTexture::TEX_Flat);
+	}
+
+	if (picnum.isValid())
+	{
+		screen->FlatFill (x1, y1, x2, y2, TexMan(picnum));
+	}
+	else
+	{
+		screen->Clear (x1, y1, x2, y2, 0, 0);
+	}
+}
+
+//==========================================================================
+//
+// R_DrawViewBorder
+//
+// Draws the border around the view for different size windows
+//
+//==========================================================================
+
+int BorderNeedRefresh;
+
+
+static void V_DrawViewBorder (void)
+{
+	// [RH] Redraw the status bar if SCREENWIDTH > status bar width.
+	// Will draw borders around itself, too.
+	if (SCREENWIDTH > 320)
+	{
+		ST_SetNeedRefresh();
+	}
+
+	if (viewwidth == SCREENWIDTH)
+	{
+		return;
+	}
+
+	V_DrawBorder (0, 0, SCREENWIDTH, viewwindowy);
+	V_DrawBorder (0, viewwindowy, viewwindowx, viewheight + viewwindowy);
+	V_DrawBorder (viewwindowx + viewwidth, viewwindowy, SCREENWIDTH, viewheight + viewwindowy);
+	V_DrawBorder (0, viewwindowy + viewheight, SCREENWIDTH, ST_Y);
+
+	V_DrawFrame (viewwindowx, viewwindowy, viewwidth, viewheight);
+	V_MarkRect (0, 0, SCREENWIDTH, ST_Y);
+}
+
+//==========================================================================
+//
+// R_DrawTopBorder
+//
+// Draws the top border around the view for different size windows
+//
+//==========================================================================
+
+static void V_DrawTopBorder ()
+{
+	FTexture *p;
+	int offset;
+
+	if (viewwidth == SCREENWIDTH)
+		return;
+
+	offset = gameinfo.border->offset;
+
+	if (viewwindowy < 34)
+	{
+		V_DrawBorder (0, 0, viewwindowx, 34);
+		V_DrawBorder (viewwindowx, 0, viewwindowx + viewwidth, viewwindowy);
+		V_DrawBorder (viewwindowx + viewwidth, 0, SCREENWIDTH, 34);
+		p = TexMan(gameinfo.border->t);
+		screen->FlatFill(viewwindowx, viewwindowy - p->GetHeight(),
+						 viewwindowx + viewwidth, viewwindowy, p, true);
+
+		p = TexMan(gameinfo.border->l);
+		screen->FlatFill(viewwindowx - p->GetWidth(), viewwindowy,
+						 viewwindowx, 35, p, true);
+		p = TexMan(gameinfo.border->r);
+		screen->FlatFill(viewwindowx + viewwidth, viewwindowy,
+						 viewwindowx + viewwidth + p->GetWidth(), 35, p, true);
+
+		p = TexMan(gameinfo.border->tl);
+		screen->DrawTexture (p, viewwindowx - offset, viewwindowy - offset, TAG_DONE);
+
+		p = TexMan(gameinfo.border->tr);
+		screen->DrawTexture (p, viewwindowx + viewwidth, viewwindowy - offset, TAG_DONE);
+	}
+	else
+	{
+		V_DrawBorder (0, 0, SCREENWIDTH, 34);
+	}
+}
+
+//==========================================================================
+//
+// R_RefreshViewBorder
+//
+// Draws the border around the player view, if needed.
+//
+//==========================================================================
+
+void V_RefreshViewBorder ()
+{
+	if (setblocks < 10)
+	{
+		if (BorderNeedRefresh)
+		{
+			BorderNeedRefresh--;
+			if (BorderTopRefresh)
+			{
+				BorderTopRefresh--;
+			}
+			V_DrawViewBorder();
+		}
+		else if (BorderTopRefresh)
+		{
+			BorderTopRefresh--;
+			V_DrawTopBorder();
+		}
+	}
+}
+

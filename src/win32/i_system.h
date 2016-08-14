@@ -27,6 +27,7 @@
 
 struct ticcmd_t;
 struct WadStuff;
+struct FIWadManager; // [BB] For NoIWADsScreen
 
 // Index values into the LanguageIDs array
 enum
@@ -118,6 +119,10 @@ void STACK_ARGS I_FatalError (const char *error, ...) GCCPRINTF(1,2);
 void atterm (void (*func)(void));
 void popterm ();
 
+// Set the mouse cursor. The texture must be 32x32.
+class FTexture;
+bool I_SetCursor(FTexture *cursor);
+
 // Repaint the pre-game console
 void I_PaintConsole (void);
 
@@ -129,11 +134,10 @@ int I_GetWelcomeScreenKeyCode( void );
 void I_GetWelcomeScreenKeyString( char *pszString );
 
 // Set the title string of the startup window
-struct IWADInfo;
-void I_SetIWADInfo (const IWADInfo *title);
+void I_SetIWADInfo ();
 
 // [RC] Show a helpful dialog when no IWADs were found.
-void I_ShowNoIWADsScreen( void );
+void I_ShowNoIWADsScreen( FIWadManager *IWadMan );
 
 // Pick from multiple IWADs to use
 int I_PickIWad (WadStuff *wads, int numwads, bool queryiwad, int defaultiwad);
@@ -144,9 +148,6 @@ bool I_WriteIniFailed ();
 // [RH] Returns millisecond-accurate time
 unsigned int I_MSTime (void);
 unsigned int I_FPSTime();
-
-// [RH] Title banner to display during startup
-extern const IWADInfo *DoomStartupInfo;
 
 // [RH] Used by the display code to set the normal window procedure
 void I_SetWndProc();
@@ -168,6 +169,9 @@ typedef _W64 long WLONG_PTR;
 #else
 typedef long WLONG_PTR;
 #endif
+
+// Wrapper for GetLongPathName
+FString I_GetLongPathName(FString shortpath);
 
 // Directory searching routines
 

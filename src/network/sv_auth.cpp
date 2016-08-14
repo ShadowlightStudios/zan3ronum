@@ -53,6 +53,7 @@
 #include "sv_auth.h"
 #include "sv_commands.h"
 #include "srp.h"
+#include "network_enums.h"
 
 #define	DEFAULT_AUTH_SERVER_PORT 15301
 
@@ -115,7 +116,7 @@ static	NETADDRESS_s		g_AuthServerAddress;
 static	NETBUFFER_s			g_AuthServerBuffer;
 
 // [BB] Hostname of the authentication server.
-CVAR( String, authhostname, "localhost", CVAR_ARCHIVE|CVAR_GLOBALCONFIG )
+CVAR( String, authhostname, "auth.zandronum.com:16666", CVAR_ARCHIVE|CVAR_GLOBALCONFIG )
 
 //*****************************************************************************
 //	PROTOTYPES
@@ -144,19 +145,15 @@ void NETWORK_AUTH_Destruct( void )
 //
 NETADDRESS_s NETWORK_AUTH_GetServerAddress( void )
 {
-	NETADDRESS_s authServerAddress;
-	// [BB] Initialize the port with 0. NETWORK_StringToAddress will change
-	// it in case authhostname contains a port.
-	authServerAddress.usPort = 0;
+	bool ok;
+	NETADDRESS_s authServerAddress ( authhostname, &ok );
 
-	UCVarValue Val = authhostname.GetGenericRep( CVAR_String );
-
-	if ( NETWORK_StringToAddress( Val.String, &authServerAddress ) == false )
-		Printf ( "Warning: Can't find authhostname %s!\n", Val.String );
+	if ( ok == false )
+		Printf ( "Warning: Can't find authhostname %s!\n", *authhostname );
 
 	// [BB] If authhostname doesn't include the port, use the default port.
 	if ( authServerAddress.usPort == 0 )
-		NETWORK_SetAddressPort( authServerAddress, DEFAULT_AUTH_SERVER_PORT );
+		authServerAddress.SetPort( DEFAULT_AUTH_SERVER_PORT );
 
 	return ( authServerAddress );
 }
@@ -262,9 +259,9 @@ void SERVER_AUTH_ParsePacket( BYTESTREAM_s *pByteStream )
 {
 	while ( 1 )	 
 	{  
-		const int commandNum = NETWORK_ReadLong( pByteStream );
+		const unsigned int commandNum = NETWORK_ReadLong( pByteStream );
 
-		if ( commandNum == -1 )
+		if ( commandNum == -1u )
 			break;
 
 		switch ( commandNum )
@@ -348,6 +345,9 @@ void SERVER_AUTH_ParsePacket( BYTESTREAM_s *pByteStream )
 					// check that the communication with the auth server was legit.
 					SERVER_GetClient(clientID)->bytesHAMK = bytesHAMK;
 					SERVERCOMMANDS_SRPUserVerifySession ( clientID );
+					// [TP] Inform the players of this, if the player does not want to hide his account name.
+					if ( SERVER_GetClient( clientID )->WantHideAccount == false )
+						SERVERCOMMANDS_SetPlayerUserInfo( clientID, USERINFO_ACCOUNTNAME );
 				}
 				else
 					Printf ( "AUTH_SERVER_SRP_STEP_FOUR: Can't find client with session ID '%d'.\n", sessionID );
@@ -384,7 +384,7 @@ void SERVER_AUTH_ParsePacket( BYTESTREAM_s *pByteStream )
 				{
 					// [BB] Since the authentication failed, clear all authentication related data of this client.
 					SERVER_InitClientSRPData ( clientID );
-					SERVER_PrintfPlayer( PRINT_HIGH, clientID, "User authentication failed! %s", errorMessage.GetChars() );
+					SERVER_PrintfPlayer( clientID, "User authentication failed! %s", errorMessage.GetChars() );
 				}
 				else
 					Printf ( "AUTH_SERVER_NEGOTIATE: Can't find client with client session id %u.\n", clientSessionID );
@@ -421,7 +421,7 @@ void SERVER_AUTH_ParsePacket( BYTESTREAM_s *pByteStream )
 				{
 					// [BB] Since the authentication failed, clear all authentication related data of this client.
 					SERVER_InitClientSRPData ( clientID );
-					SERVER_PrintfPlayer( PRINT_HIGH, clientID, "Session error: %s", errorMessage.GetChars() );
+					SERVER_PrintfPlayer( clientID, "Session error: %s", errorMessage.GetChars() );
 				}
 			}
 			break;
@@ -542,7 +542,7 @@ bool SERVER_ProcessSRPClientCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				{
 					SERVER_InitClientSRPData ( SERVER_GetCurrentClient() );
 					Printf ( "User authentication failed!\n" );
-					SERVER_PrintfPlayer( PRINT_HIGH, SERVER_GetCurrentClient(), "User authentication failed!\n" );
+					SERVER_PrintfPlayer( SERVER_GetCurrentClient(), "User authentication failed!\n" );
 				}
 				else
 				{

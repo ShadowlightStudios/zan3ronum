@@ -33,7 +33,7 @@ bool AArtiHealingRadius::Use (bool pickup)
 	// Thus, it shall return true here as well. Furthermore, the client shouldn't
 	// actually execute anything here, since the effects include manipulating health/armor
 	// and stuff like that. Therefore, just return true.
-	if ( NETWORK_InClientMode( ) == true )
+	if ( NETWORK_InClientMode() )
 		return true;
 
 	bool effective = false;
@@ -99,12 +99,8 @@ bool AArtiHealingRadius::Use (bool pickup)
 			}
 			if (gotsome)
 			{
-				S_Sound (players[i].mo, CHAN_AUTO, "MysticIncant", 1, ATTN_NORM);
+				S_Sound (players[i].mo, CHAN_AUTO, "MysticIncant", 1, ATTN_NORM, true);	// [TP] Inform the clients.
 				effective=true;
-
-				// [Dusk] As the server, tell clients to play the sound
-				if ( NETWORK_GetState () == NETSTATE_SERVER )
-					SERVERCOMMANDS_SoundActor( players[i].mo, CHAN_AUTO, "MysticIncant", 1, ATTN_NORM );
 			}
 		}
 	}

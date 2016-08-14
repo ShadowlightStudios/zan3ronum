@@ -18,43 +18,6 @@ static FRandom pr_fswordflame ("FSwordFlame");
 
 //==========================================================================
 
-class AFighterWeaponPiece : public AWeaponPiece
-{
-	DECLARE_CLASS (AFighterWeaponPiece, AWeaponPiece)
-protected:
-	bool TryPickup (AActor *&toucher);
-};
-
-IMPLEMENT_CLASS (AFighterWeaponPiece)
-
-bool AFighterWeaponPiece::TryPickup (AActor *&toucher)
-{
-	if (!toucher->IsKindOf (PClass::FindClass(NAME_ClericPlayer)) &&
-		!toucher->IsKindOf (PClass::FindClass(NAME_MagePlayer)))
-	{
-		return Super::TryPickup(toucher);
-	}
-	else
-	{ // Wrong class, but try to pick up for ammo
-		if (ShouldStay())
-		{
-			// Can't pick up weapons for other classes in coop netplay
-			return false;
-		}
-
-		AWeapon * Defaults=(AWeapon*)GetDefaultByType(WeaponClass);
-
-		bool gaveSome = !!(toucher->GiveAmmo (Defaults->AmmoType1, Defaults->AmmoGive1) +
-						   toucher->GiveAmmo (Defaults->AmmoType2, Defaults->AmmoGive2));
-
-		if (gaveSome)
-		{
-			GoAwayAndDie ();
-		}
-		return gaveSome;
-	}
-}
-
 //============================================================================
 //
 // A_DropQuietusPieces
@@ -95,12 +58,12 @@ class AFSwordMissile : public AActor
 {
 	DECLARE_CLASS (AFSwordMissile, AActor)
 public:
-	int DoSpecialDamage(AActor *victim, AActor *source, int damage);
+	int DoSpecialDamage(AActor *victim, int damage, FName damagetype);
 };
 
 IMPLEMENT_CLASS (AFSwordMissile)
 
-int AFSwordMissile::DoSpecialDamage(AActor *victim, AActor *source, int damage)
+int AFSwordMissile::DoSpecialDamage(AActor *victim, int damage, FName damagetype)
 {
 	if (victim->player)
 	{
@@ -131,8 +94,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FSwordAttack)
 	}
 
 	// [BC] Weapons are handled by the server.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		S_Sound (self, CHAN_WEAPON, "FighterSwordFire", 1, ATTN_NORM);
 		return;
@@ -145,7 +107,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FSwordAttack)
 	P_SpawnPlayerMissile (self, 0, 0,  10*FRACUNIT, RUNTIME_CLASS(AFSwordMissile), self->angle-ANGLE_45/4);
 
 	// [BC] Apply spread.
-	if ( player->cheats & CF_SPREAD )
+	if ( player->cheats2 & CF2_SPREAD )
 	{
 		P_SpawnPlayerMissile (self, 0, 0, -10*FRACUNIT, RUNTIME_CLASS(AFSwordMissile), self->angle+ANGLE_45/4 + ( ANGLE_45 / 3 ));
 		P_SpawnPlayerMissile (self, 0, 0,  -5*FRACUNIT, RUNTIME_CLASS(AFSwordMissile), self->angle+ANGLE_45/8 + ( ANGLE_45 / 3 ));
@@ -195,7 +157,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FSwordFlames)
 DEFINE_ACTION_FUNCTION(AActor, A_FighterAttack)
 {
 	// [Dusk] Zedek's attack is handled by the server
-	if ( NETWORK_InClientMode( )) return;
+	if ( NETWORK_InClientMode() ) return;
 
 	if (!self->target) return;
 
@@ -210,17 +172,10 @@ DEFINE_ACTION_FUNCTION(AActor, A_FighterAttack)
 	P_SpawnMissileAngle (self, RUNTIME_CLASS(AFSwordMissile), angle-ANG45/4, 0);
 	*/
 
-	AActor *aMissile;
 	for (int i = -2; i <= 2; i++) {
-		aMissile = P_SpawnMissileAngle (self, RUNTIME_CLASS(AFSwordMissile), angle + (i*ANG45)/8, 0);
-		if( NETWORK_GetState( ) == NETSTATE_SERVER && aMissile )
-			SERVERCOMMANDS_SpawnMissile( aMissile );
+		P_SpawnMissileAngle (self, RUNTIME_CLASS(AFSwordMissile), angle + (i*ANG45)/8, 0, true); // [BB] Inform clients
 	}
 
-	S_Sound (self, CHAN_WEAPON, "FighterSwordFire", 1, ATTN_NORM);
-
-	// [Dusk] inform of the sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "FighterSwordFire", 1, ATTN_NORM );
+	S_Sound (self, CHAN_WEAPON, "FighterSwordFire", 1, ATTN_NORM, true);	// [TP] Inform the clients.
 }
 

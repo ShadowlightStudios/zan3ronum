@@ -64,7 +64,7 @@ static void UnpackVector(unsigned short packed, float & nx, float & ny, float & 
 
 
 
-bool FMD3Model::Load(const char * path, const char * buffer, int length)
+bool FMD3Model::Load(const char * path, int, const char * buffer, int length)
 {
 	#pragma pack(4)
 	struct md3_header_t
@@ -215,40 +215,32 @@ int FMD3Model::FindFrame(const char * name)
 	return -1;
 }
 
-void FMD3Model::RenderTriangles(MD3Surface * surf, MD3Vertex * vert, Matrix3x4 *modeltoworld)
+void FMD3Model::RenderTriangles(MD3Surface * surf, MD3Vertex * vert)
 {
 	gl_RenderState.Apply();
-	gl.Begin(GL_TRIANGLES);
+	glBegin(GL_TRIANGLES);
 	for(int i=0; i<surf->numTriangles;i++)
 	{
 		for(int j=0;j<3;j++)
 		{
 			int x = surf->tris[i].VertIndex[j];
 
-			gl.TexCoord2fv(&surf->texcoords[x].s);
-			if (modeltoworld == NULL)
-			{
-				gl.Vertex3f(vert[x].x, vert[x].z, vert[x].y);
-			}
-			else
-			{
-				Vector v = *modeltoworld * Vector(vert[x].x, vert[x].z, vert[x].y);
-				gl.Vertex3fv(&v[0]);
-			}
+			glTexCoord2fv(&surf->texcoords[x].s);
+			glVertex3f(vert[x].x, vert[x].z, vert[x].y);
 		}
 	}
-	gl.End();
+	glEnd();
 }
 
-void FMD3Model::RenderFrame(FTexture * skin, int frameno, int cm, Matrix3x4 *modeltoworld, int translation)
+void FMD3Model::RenderFrame(FTexture * skin, int frameno, int cm, int translation)
 {
 	if (frameno>=numFrames) return;
 
 	MD3Frame * frame = &frames[frameno];
 
 	// I can't confirm correctness of this because no model I have tested uses this information
-	// gl.MatrixMode(GL_MODELVIEW);
-	// gl.Translatef(frame->origin[0], frame->origin[1], frame->origin[2]);
+	// glMatrixMode(GL_MODELVIEW);
+	// glTranslatef(frame->origin[0], frame->origin[1], frame->origin[2]);
 
 	for(int i=0;i<numSurfaces;i++)
 	{
@@ -259,19 +251,26 @@ void FMD3Model::RenderFrame(FTexture * skin, int frameno, int cm, Matrix3x4 *mod
 		FTexture *surfaceSkin = skin;
 		if (!surfaceSkin)
 		{
-			if (surf->numSkins==0) return;
-			surfaceSkin = surf->skins[0];
+			if (curSpriteMDLFrame->surfaceskins[curMDLIndex][i])
+			{
+				surfaceSkin = curSpriteMDLFrame->surfaceskins[curMDLIndex][i];
+			}
+			else if (surf->numSkins > 0 && surf->skins[0])
+			{
+				surfaceSkin = surf->skins[0];
+			}
+
 			if (!surfaceSkin) return;
 		}
 
 		FMaterial * tex = FMaterial::ValidateTexture(surfaceSkin);
 
 		tex->Bind(cm, 0, translation);
-		RenderTriangles(surf, surf->vertices + frameno * surf->numVertices, modeltoworld);
+		RenderTriangles(surf, surf->vertices + frameno * surf->numVertices);
 	}
 }
 
-void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int frameno2, double inter, int cm, Matrix3x4 *modeltoworld, int translation)
+void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int frameno2, double inter, int cm, int translation)
 {
 	if (frameno>=numFrames || frameno2>=numFrames) return;
 
@@ -284,8 +283,15 @@ void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 		FTexture *surfaceSkin = skin;
 		if (!surfaceSkin)
 		{
-			if (surf->numSkins==0) return;
-			surfaceSkin = surf->skins[0];
+			if (curSpriteMDLFrame->surfaceskins[curMDLIndex][i])
+			{
+				surfaceSkin = curSpriteMDLFrame->surfaceskins[curMDLIndex][i];
+			}
+			else if(surf->numSkins > 0 && surf->skins[0])
+			{
+				surfaceSkin = surf->skins[0];
+			}
+
 			if (!surfaceSkin) return;
 		}
 
@@ -306,7 +312,7 @@ void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 			// [BB] Apparently RenderTriangles doesn't use nx, ny, nz, so don't interpolate them.
 		}
 
-		RenderTriangles(surf, verticesInterpolated, modeltoworld);
+		RenderTriangles(surf, verticesInterpolated);
 
 		delete[] verticesInterpolated;
 	}

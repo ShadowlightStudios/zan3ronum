@@ -4,25 +4,12 @@
 #include "v_palette.h"
 
 class AActor;
-struct MapData;
-struct node_t;
-struct subsector_t;
 
-// These are the original nodes that are preserved because
-// P_PointInSubsector should use the original data if possible.
-extern node_t * 		gamenodes;
-extern int 				numgamenodes;
-
-extern subsector_t * 	gamesubsectors;
-extern int 				numgamesubsectors;
-
-
-
-
-// External entry points for the GL renderer
 void gl_PreprocessLevel();
 void gl_CleanLevelData();
 
+// [BB] Export this.
+bool IsLightmodeValid();
 // [BB] This construction purposely overrides the CVAR gl_fogmode with a local variable of the same name.
 // This allows to implement ZADF_FORCE_GL_DEFAULTS by only putting this define at the beginning of a function
 // that uses gl_fogmode without any further changes in that function.
@@ -35,8 +22,8 @@ void gl_CleanLevelData();
 // except that the MAPINFO lightmode option must be honored if present.
 #define OVERRIDE_LIGHTMODE_IF_NECESSARY \
 	const int gl_lightmode_CVAR_value = gl_lightmode; \
-	const int gl_lightmode_CVAR_defaultvalue = ( glset.map_lightmode < 0 || glset.map_lightmode > 4 || \
-		( glset.map_lightmode == 2 && gl.shadermodel == 2 )) ? gl_lightmode.GetGenericRepDefault( CVAR_Int ).Int : glset.map_lightmode; \
+	const int gl_lightmode_CVAR_defaultvalue = ( ( IsLightmodeValid() == false ) || \
+		( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && gl.shadermodel < 4 )) ? gl_lightmode.GetGenericRepDefault( CVAR_Int ).Int : glset.map_lightmode; \
 	const int gl_lightmode = ( zadmflags & ZADF_FORCE_GL_DEFAULTS ) ? gl_lightmode_CVAR_defaultvalue : gl_lightmode_CVAR_value;
 
 // [EP] Override gl_light_ambient in the same way as gl_lightmode
@@ -51,15 +38,5 @@ void gl_CleanLevelData();
 
 void gl_LinkLights();
 void gl_SetActorLights(AActor *);
-void gl_DeleteAllAttachedLights();
-void gl_RecreateAllAttachedLights();
-void gl_ParseDefs();
-void gl_SetFogParams(int _fogdensity, PalEntry _outsidefogcolor, int _outsidefogdensity, int _skyfog);
-bool gl_CheckNodes(MapData * map, bool rebuilt, int buildtime);
-bool gl_LoadGLNodes(MapData * map);
-
-
-
-extern int currentrenderer;
 
 #endif

@@ -41,6 +41,7 @@
 #include "doomdata.h"
 #include "gl/system/gl_system.h"
 #include "a_sharedglobal.h"
+#include "r_utility.h"
 
 #include "gl/system/gl_cvars.h"
 #include "gl/data/gl_data.h"
@@ -64,7 +65,7 @@ struct DecalVertex
 //
 //
 //==========================================================================
-void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sector_t *backSector)
+void GLWall::DrawDecal(DBaseDecal *decal)
 {
 	line_t * line=seg->linedef;
 	side_t * side=seg->sidedef;
@@ -78,20 +79,20 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 	FTextureID decalTile;
 	
 
-	if (actor->RenderFlags & RF_INVISIBLE) return;
+	if (decal->RenderFlags & RF_INVISIBLE) return;
 	if (type==RENDERWALL_FFBLOCK && gltexture->isMasked()) return;	// No decals on 3D floors with transparent textures.
 
-	//if (actor->sprite != 0xffff)
+	//if (decal->sprite != 0xffff)
 	{
-		decalTile = actor->PicNum;
-		flipx = !!(actor->RenderFlags & RF_XFLIP);
-		flipy = !!(actor->RenderFlags & RF_YFLIP);
+		decalTile = decal->PicNum;
+		flipx = !!(decal->RenderFlags & RF_XFLIP);
+		flipy = !!(decal->RenderFlags & RF_YFLIP);
 	}
 	/*
 	else
 	{
-	decalTile = SpriteFrames[sprites[actor->sprite].spriteframes + actor->frame].lump[0];
-	flipx = SpriteFrames[sprites[actor->sprite].spriteframes + actor->frame].flip & 1;
+	decalTile = SpriteFrames[sprites[decal->sprite].spriteframes + decal->frame].lump[0];
+	flipx = SpriteFrames[sprites[decal->sprite].spriteframes + decal->frame].flip & 1;
 	}
 	*/
 
@@ -113,50 +114,61 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 	}
 	else tex = FMaterial::ValidateTexture(texture);
 
-	switch (actor->RenderFlags & RF_RELMASK)
+
+	// the sectors are only used for their texture origin coordinates
+	// so we don't need the fake sectors for deep water etc.
+	// As this is a completely split wall fragment no further splits are
+	// necessary for the decal.
+	sector_t *frontsector;
+
+	// for 3d-floor segments use the model sector as reference
+	if ((decal->RenderFlags&RF_CLIPMASK)==RF_CLIPMID) frontsector=decal->Sector;
+	else frontsector=seg->frontsector;
+
+	switch (decal->RenderFlags & RF_RELMASK)
 	{
 	default:
 		// No valid decal can have this type. If one is encountered anyway
 		// it is in some way invalid so skip it.
 		return;
-		//zpos = actor->z;
+		//zpos = decal->z;
 		//break;
 
 	case RF_RELUPPER:
 		if (type!=RENDERWALL_TOP) return;
 		if (line->flags & ML_DONTPEGTOP)
 		{
-			zpos = actor->Z + frontSector->GetPlaneTexZ(sector_t::ceiling);
+			zpos = decal->Z + frontsector->GetPlaneTexZ(sector_t::ceiling);
 		}
 		else
 		{
-			zpos = actor->Z + backSector->GetPlaneTexZ(sector_t::ceiling);
+			zpos = decal->Z + seg->backsector->GetPlaneTexZ(sector_t::ceiling);
 		}
 		break;
 	case RF_RELLOWER:
 		if (type!=RENDERWALL_BOTTOM) return;
 		if (line->flags & ML_DONTPEGBOTTOM)
 		{
-			zpos = actor->Z + frontSector->GetPlaneTexZ(sector_t::ceiling);
+			zpos = decal->Z + frontsector->GetPlaneTexZ(sector_t::ceiling);
 		}
 		else
 		{
-			zpos = actor->Z + backSector->GetPlaneTexZ(sector_t::floor);
+			zpos = decal->Z + seg->backsector->GetPlaneTexZ(sector_t::floor);
 		}
 		break;
 	case RF_RELMID:
 		if (type==RENDERWALL_TOP || type==RENDERWALL_BOTTOM) return;
 		if (line->flags & ML_DONTPEGBOTTOM)
 		{
-			zpos = actor->Z + frontSector->GetPlaneTexZ(sector_t::floor);
+			zpos = decal->Z + frontsector->GetPlaneTexZ(sector_t::floor);
 		}
 		else
 		{
-			zpos = actor->Z + frontSector->GetPlaneTexZ(sector_t::ceiling);
+			zpos = decal->Z + frontsector->GetPlaneTexZ(sector_t::ceiling);
 		}
 	}
 	
-	if (actor->RenderFlags & RF_FULLBRIGHT)
+	if (decal->RenderFlags & RF_FULLBRIGHT)
 	{
 		light = 255;
 		rel = 0;
@@ -164,12 +176,12 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 	else
 	{
 		light = lightlevel;
-		rel = rellight + extralight * gl_weaponlight;
+		rel = rellight + getExtraLight();
 	}
 	
-	int r = RPART(actor->AlphaColor);
-	int g = GPART(actor->AlphaColor);
-	int b = BPART(actor->AlphaColor);
+	int r = RPART(decal->AlphaColor);
+	int g = GPART(decal->AlphaColor);
+	int b = BPART(decal->AlphaColor);
 	FColormap p = Colormap;
 	
 	if (glset.nocoloredspritelighting)
@@ -180,22 +192,36 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 	
 	float red, green, blue;
 	
-	if (actor->RenderStyle.Flags & STYLEF_RedIsAlpha)
+	if (decal->RenderStyle.Flags & STYLEF_RedIsAlpha)
 	{
 		loadAlpha = true;
 		p.colormap=CM_SHADE;
 
-		gl_GetLightColor(light, rel, &p, &red, &green, &blue);
+		if (glset.lightmode != 8)
+		{
+			gl_GetLightColor(light, rel, &p, &red, &green, &blue);
+		}
+		else
+		{
+			gl_GetLightColor(lightlevel, rellight, &p, &red, &green, &blue);
+		}
 		
 		if (gl_lights && GLRenderer->mLightCount && !gl_fixedcolormap && gl_light_sprites)
 		{
 			float result[3];
 			fixed_t x, y;
-			actor->GetXY(seg->sidedef, x, y);
-			gl_GetSpriteLight(NULL, x, y, zpos, seg->Subsector, Colormap.colormap-CM_DESAT0, result);
-			red = clamp<float>(result[0]+red, 0, 1.0f);
-			green = clamp<float>(result[1]+green, 0, 1.0f);
-			blue = clamp<float>(result[2]+blue, 0, 1.0f);
+			decal->GetXY(seg->sidedef, x, y);
+			gl_GetSpriteLight(NULL, x, y, zpos, sub, Colormap.colormap-CM_DESAT0, result, line, side == line->sidedef[0]? 0:1);
+			if (glset.lightmode != 8)
+			{
+				red = clamp<float>(result[0]+red, 0, 1.0f);
+				green = clamp<float>(result[1]+green, 0, 1.0f);
+				blue = clamp<float>(result[2]+blue, 0, 1.0f);
+			}
+			else
+			{
+				gl_RenderState.SetDynLight(result[0], result[1], result[2]);
+			}
 		}
 
 		BYTE R = xs_RoundToInt(r * red);
@@ -218,20 +244,20 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 	}
 	
 	
-	a = FIXED2FLOAT(actor->Alpha);
+	a = FIXED2FLOAT(decal->Alpha);
 	
 	// now clip the decal to the actual polygon
-	float decalwidth = tex->TextureWidth(GLUSE_PATCH)  * FIXED2FLOAT(actor->ScaleX);
-	float decalheight= tex->TextureHeight(GLUSE_PATCH) * FIXED2FLOAT(actor->ScaleY);
-	float decallefto = tex->GetLeftOffset(GLUSE_PATCH) * FIXED2FLOAT(actor->ScaleX);
-	float decaltopo  = tex->GetTopOffset(GLUSE_PATCH)  * FIXED2FLOAT(actor->ScaleY);
+	float decalwidth = tex->TextureWidth(GLUSE_PATCH)  * FIXED2FLOAT(decal->ScaleX);
+	float decalheight= tex->TextureHeight(GLUSE_PATCH) * FIXED2FLOAT(decal->ScaleY);
+	float decallefto = tex->GetLeftOffset(GLUSE_PATCH) * FIXED2FLOAT(decal->ScaleX);
+	float decaltopo  = tex->GetTopOffset(GLUSE_PATCH)  * FIXED2FLOAT(decal->ScaleY);
 
 	
 	float leftedge = glseg.fracleft * side->TexelLength;
 	float linelength = glseg.fracright * side->TexelLength - leftedge;
 
 	// texel index of the decal's left edge
-	float decalpixpos = (float)side->TexelLength * actor->LeftDistance / (1<<30) - (flipx? decalwidth-decallefto : decallefto) - leftedge;
+	float decalpixpos = (float)side->TexelLength * decal->LeftDistance / (1<<30) - (flipx? decalwidth-decallefto : decallefto) - leftedge;
 
 	float left,right;
 	float lefttex,righttex;
@@ -273,15 +299,15 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 		
 	zpos+= FRACUNIT*(flipy? decalheight-decaltopo : decaltopo);
 
-	const PatchTextureInfo * pti=tex->BindPatch(p.colormap, actor->Translation);
+	tex->BindPatch(p.colormap, decal->Translation);
 
 	dv[1].z=dv[2].z = FIXED2FLOAT(zpos);
 	dv[0].z=dv[3].z = dv[1].z - decalheight;
-	dv[1].v=dv[2].v=pti->GetVT();
+	dv[1].v=dv[2].v = tex->GetVT();
 
-	dv[1].u=dv[0].u=pti->GetU(lefttex / FIXED2FLOAT(actor->ScaleX));
-	dv[3].u=dv[2].u=pti->GetU(righttex / FIXED2FLOAT(actor->ScaleX));
-	dv[0].v=dv[3].v=pti->GetVB();
+	dv[1].u=dv[0].u = tex->GetU(lefttex / FIXED2FLOAT(decal->ScaleX));
+	dv[3].u=dv[2].u = tex->GetU(righttex / FIXED2FLOAT(decal->ScaleX));
+	dv[0].v=dv[3].v = tex->GetVB();
 
 
 	// now clip to the top plane
@@ -325,48 +351,64 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 
 	if (flipx)
 	{
-		float ur=pti->GetUR();
+		float ur = tex->GetUR();
 		for(i=0;i<4;i++) dv[i].u=ur-dv[i].u;
 	}
 	if (flipy)
 	{
-		float vb=pti->GetVB();
+		float vb = tex->GetVB();
 		for(i=0;i<4;i++) dv[i].v=vb-dv[i].v;
 	}
 	// fog is set once per wall in the calling function and not per decal!
 
 	if (loadAlpha)
 	{
-		gl.Color4f(red, green, blue, a);
+		glColor4f(red, green, blue, a);
+
+		if (glset.lightmode == 8)
+		{
+			if (gl_fixedcolormap)
+				glVertexAttrib1f(VATTR_LIGHTLEVEL, 1.0);
+			else
+				glVertexAttrib1f(VATTR_LIGHTLEVEL, gl_CalcLightLevel(light, rel, false) / 255.0);
+		}
 	}
 	else
 	{
-		gl_SetColor(light, rel, &p, a);
+		if (glset.lightmode == 8)
+		{
+			gl_SetColor(light, rel, &p, a, extralight); // Korshun.
+		}
+		else
+		{
+			gl_SetColor(light, rel, &p, a);
+		}
 	}
 
 	PalEntry fc = gl_RenderState.GetFogColor();
-	if (actor->RenderStyle.BlendOp == STYLEOP_Add && actor->RenderStyle.DestAlpha == STYLEALPHA_One)
+	if (decal->RenderStyle.BlendOp == STYLEOP_Add && decal->RenderStyle.DestAlpha == STYLEALPHA_One)
 	{
 		gl_RenderState.SetFog(0,-1);
 	}
 
 
-	gl_SetRenderStyle(actor->RenderStyle, false, false);
+	gl_SetRenderStyle(decal->RenderStyle, false, false);
 
 	// If srcalpha is one it looks better with a higher alpha threshold
-	if (actor->RenderStyle.SrcAlpha == STYLEALPHA_One) gl_RenderState.AlphaFunc(GL_GEQUAL, gl_mask_threshold);
+	if (decal->RenderStyle.SrcAlpha == STYLEALPHA_One) gl_RenderState.AlphaFunc(GL_GEQUAL, gl_mask_threshold);
 	else gl_RenderState.AlphaFunc(GL_GREATER, 0.f);
 
 	gl_RenderState.Apply();
-	gl.Begin(GL_TRIANGLE_FAN);
+	glBegin(GL_TRIANGLE_FAN);
 	for(i=0;i<4;i++)
 	{
-		gl.TexCoord2f(dv[i].u,dv[i].v);
-		gl.Vertex3f(dv[i].x,dv[i].z,dv[i].y);
+		glTexCoord2f(dv[i].u,dv[i].v);
+		glVertex3f(dv[i].x,dv[i].z,dv[i].y);
 	}
-	gl.End();
+	glEnd();
 	rendered_decals++;
 	gl_RenderState.SetFog(fc,-1);
+	gl_RenderState.SetDynLight(0,0,0);
 }
 
 //==========================================================================
@@ -374,21 +416,12 @@ void GLWall::DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sec
 //
 //
 //==========================================================================
-void GLWall::DoDrawDecals(DBaseDecal * decal, seg_t * seg)
+void GLWall::DoDrawDecals()
 {
+	DBaseDecal *decal = seg->sidedef->AttachedDecals;
 	while (decal)
 	{
-		// the sectors are only used for their texture origin coordinates
-		// so we don't need the fake sectors for deep water etc.
-		// As this is a completely split wall fragment no further splits are
-		// necessary for the decal.
-		sector_t * frontsector;
-
-		// for 3d-floor segments use the model sector as reference
-		if ((decal->RenderFlags&RF_CLIPMASK)==RF_CLIPMID) frontsector=decal->Sector;
-		else frontsector=seg->frontsector;
-
-		DrawDecal(decal,seg,frontsector,seg->backsector);
+		DrawDecal(decal);
 		decal = decal->WallNext;
 	}
 }

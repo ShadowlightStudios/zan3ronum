@@ -42,6 +42,7 @@
 #include "statnums.h"
 #include "i_system.h"
 #include "doomerrors.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "doomstat.h"
@@ -196,19 +197,10 @@ void DThinker::SerializeAll(FArchive &arc, bool hubLoad)
 				statcount--;
 			}
 		}
-		catch (class CDoomError &err)
+		catch (class CDoomError &)
 		{
 			bSerialOverride = false;
-
-			// DestroyAllThinkers cannot be called here. It will try to delete the corrupted
-			// object table left behind by the serializer and crash.
-			// Trying to continue is not an option here because the garbage collector will 
-			// crash the next time it runs.
-			// Even making this a fatal error will crash but at least the message can be seen
-			// before the crash - which is not the case with all other options.
-
-			//DestroyAllThinkers();
-			I_FatalError("%s", err.GetMessage());
+			DestroyAllThinkers();
 			throw;
 		}
 		bSerialOverride = false;
@@ -370,12 +362,10 @@ void DThinker::DestroyThinkersInList (FThinkerList &list)
 {
 	if (list.Sentinel != NULL)
 	{
-		DThinker *node = list.Sentinel->NextThinker;
-		while (node != list.Sentinel)
+		for (DThinker *node = list.Sentinel->NextThinker; node != list.Sentinel; node = list.Sentinel->NextThinker)
 		{
-			DThinker *next = node->NextThinker;
+			assert(node != NULL);
 			node->Destroy();
-			node = next;
 		}
 		list.Sentinel->Destroy();
 		list.Sentinel = NULL;
@@ -393,9 +383,8 @@ void DThinker::DestroyMostThinkersInList (FThinkerList &list, int stat)
 	  // it from the list. G_FinishTravel() will find it later from
 	  // a players[].mo link and destroy it then, after copying various
 	  // information to a new player.
-		for (DThinker *probe = list.Sentinel->NextThinker, *next; probe != list.Sentinel; probe = next)
+		for (DThinker *probe = list.Sentinel->NextThinker; probe != list.Sentinel; probe = list.Sentinel->NextThinker)
 		{
-			next = probe->NextThinker;
 			if (!probe->IsKindOf(RUNTIME_CLASS(APlayerPawn)) ||		// <- should not happen
 				static_cast<AActor *>(probe)->player == NULL ||
 				static_cast<AActor *>(probe)->player->mo != probe)
@@ -459,7 +448,7 @@ int DThinker::TickThinkers (FThinkerList *list, FThinkerList *dest)
 		NextToThink = node->NextThinker;
 		if (node->ObjectFlags & OF_JustSpawned)
 		{
-			node->ObjectFlags &= ~OF_JustSpawned;
+			// Leave OF_JustSpawn set until after Tick() so the ticker can check it.
 			if (dest != NULL)
 			{ // Move thinker from this list to the destination list
 				node->Remove();
@@ -468,7 +457,7 @@ int DThinker::TickThinkers (FThinkerList *list, FThinkerList *dest)
 			node->PostBeginPlay();
 		}
 		else if (dest != NULL)
-		{ // Move thinker from this list to the destination list
+		{
 			I_Error("There is a thinker in the fresh list that has already ticked.\n");
 		}
 
@@ -476,12 +465,13 @@ int DThinker::TickThinkers (FThinkerList *list, FThinkerList *dest)
 		{ // Only tick thinkers not scheduled for destruction
 			// [BC] Don't tick the consoleplayer's actor in client
 			// mode, because that's done in the main prediction function
-			if (((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))) ||
+			if (( NETWORK_InClientMode() == false ) ||
 				( node->IsKindOf( RUNTIME_CLASS( AActor )) == false ) ||
 				( static_cast<AActor *>( node ) != players[consoleplayer].mo ))
 			{
-				node->Tick ();
+				node->Tick();
 			}
+			node->ObjectFlags &= ~OF_JustSpawned;
 			GC::CheckGC();
 		}
 		node = NextToThink;

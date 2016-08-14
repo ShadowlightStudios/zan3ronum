@@ -309,6 +309,8 @@ GLOBAL R_DrawSpanP_ASM
 ; edi: dest
 ; ebp: scratch
 ; esi: count
+; [esp]: xstep
+; [esp+4]: ystep
 
 	align	16
 
@@ -324,6 +326,7 @@ R_DrawSpanP_ASM:
 	push	edi
 	push	ebp
 	push	esi
+	sub		esp, 8
 
 	mov	edi,ecx
 	add	edi,[dc_destorg]
@@ -335,17 +338,17 @@ dsy1:	shl	edx,6
 dsy3:	shr	ebp,26
 	 xor	ebx,ebx
 	lea	esi,[eax+1]
-	 mov	[ds_xstep],edx
+	 mov	[esp],edx
 	mov	edx,[ds_ystep]
 	 mov	ecx,[ds_xfrac]
 dsy4:	shr	ecx,26
-dsm8:	 and	edx,0xffffffc0
+dsm8:	 and	edx,strict dword 0xffffffc0
 	or	ebp,edx
-	 mov	[ds_ystep],ebp
+	 mov	[esp+4],ebp
 	mov	ebp,[ds_yfrac]
 	 mov	edx,[ds_xfrac]
 dsy2:	shl	edx,6
-dsm9:	 and	ebp,0xffffffc0
+dsm9:	 and	ebp,strict dword 0xffffffc0
 	or	ecx,ebp
 	 shr	esi,1
 	jnc	dseven1
@@ -355,8 +358,8 @@ dsm9:	 and	ebp,0xffffffc0
 		mov	ebp,ecx
 dsx1:		rol	ebp,6
 dsm1:		and	ebp,0xfff
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 spreada		 mov	bl,[ebp+SPACEFILLER4]
 spmapa		mov	bl,[ebx+SPACEFILLER4]
 		mov	[edi],bl
@@ -367,13 +370,13 @@ dseven1		shr	esi,1
 
 ; do two more pixels
 		mov	ebp,ecx
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 dsm2:		 and	ebp,0xfc00003f
 dsx2:		rol	ebp,6
 		mov	eax,ecx
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 spreadb		 mov	bl,[ebp+SPACEFILLER4]	;read texel1
 dsx3:		rol	eax,6
 dsm6:		and	eax,0xfff
@@ -392,13 +395,13 @@ dsrest		test	esi,esi
 		align 16
 
 dsloop		mov	ebp,ecx
-spstep1d	 add	edx,[ds_xstep]
-spstep2d	adc	ecx,[ds_ystep]
+spstep1d	 add	edx,[esp]
+spstep2d	adc	ecx,[esp+4]
 dsm3:		 and	ebp,0xfc00003f
 dsx4:		rol	ebp,6
 		mov	eax,ecx
-spstep1e	 add	edx,[ds_xstep]
-spstep2e	adc	ecx,[ds_ystep]
+spstep1e	 add	edx,[esp]
+spstep2e	adc	ecx,[esp+4]
 spreadd		 mov	bl,[ebp+SPACEFILLER4]	;read texel1
 dsx5:		rol	eax,6
 dsm5:		and	eax,0xfff
@@ -406,8 +409,8 @@ spmapd		 mov	bl,[ebx+SPACEFILLER4]	;map texel1
 		mov	[edi],bl		;store texel1
 		 mov	ebp,ecx
 spreade		mov	bl,[eax+SPACEFILLER4]	;read texel2
-spstep1f	 add	edx,[ds_xstep]
-spstep2f	adc	ecx,[ds_ystep]
+spstep1f	 add	edx,[esp]
+spstep2f	adc	ecx,[esp+4]
 dsm4:		 and	ebp,0xfc00003f
 dsx6:		rol	ebp,6
 spmape		mov	bl,[ebx+SPACEFILLER4]	;map texel2
@@ -420,14 +423,15 @@ dsx7:		rol	eax,6
 dsm7:		and	eax,0xfff
 		 mov	[edi-2],bl		;store texel3
 spreadg		mov	bl,[eax+SPACEFILLER4]	;read texel4
-spstep1g	 add	edx,[ds_xstep]
-spstep2g	adc	ecx,[ds_ystep]
+spstep1g	 add	edx,[esp]
+spstep2g	adc	ecx,[esp+4]
 spmapg		 mov	bl,[ebx+SPACEFILLER4]	;map texel4
 		dec	esi
 		 mov	[edi-1],bl		;store texel4
 		jnz near dsloop
 
-dsdone	pop	esi
+dsdone	add esp,8
+	pop	esi
 	pop	ebp
 	pop	edi
 	pop	ebx
@@ -448,6 +452,8 @@ GLOBAL R_DrawSpanMaskedP_ASM
 ; edi: dest
 ; ebp: scratch
 ; esi: count
+; [esp]: xstep
+; [esp+4]: ystep
 
 	align	16
 
@@ -463,6 +469,7 @@ R_DrawSpanMaskedP_ASM:
 	push	edi
 	push	ebp
 	push	esi
+	sub		esp,8
 
 	mov	edi,ecx
 	add	edi,[dc_destorg]
@@ -474,17 +481,17 @@ dmsy1:	shl	edx,6
 dmsy3:	shr	ebp,26
 	 xor	ebx,ebx
 	lea	esi,[eax+1]
-	 mov	[ds_xstep],edx
+	 mov	[esp],edx
 	mov	edx,[ds_ystep]
 	 mov	ecx,[ds_xfrac]
 dmsy4:	shr	ecx,26
-dmsm8:	 and	edx,0xffffffc0
+dmsm8:	 and	edx,strict dword 0xffffffc0
 	or	ebp,edx
-	 mov	[ds_ystep],ebp
+	 mov	[esp+4],ebp
 	mov	ebp,[ds_yfrac]
 	 mov	edx,[ds_xfrac]
 dmsy2:	shl	edx,6
-dmsm9:	 and	ebp,0xffffffc0
+dmsm9:	 and	ebp,strict dword 0xffffffc0
 	or	ecx,ebp
 	 shr	esi,1
 	jnc	dmseven1
@@ -494,8 +501,8 @@ dmsm9:	 and	ebp,0xffffffc0
 		mov	ebp,ecx
 dmsx1:		rol	ebp,6
 dmsm1:		and	ebp,0xfff
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 mspreada	 mov	bl,[ebp+SPACEFILLER4]
 		cmp	bl,0
 		 je	mspskipa
@@ -508,13 +515,13 @@ dmseven1	shr	esi,1
 
 ; do two more pixels
 		mov	ebp,ecx
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 dmsm2:		 and	ebp,0xfc00003f
 dmsx2:		rol	ebp,6
 		mov	eax,ecx
-		 add	edx,[ds_xstep]
-		adc	ecx,[ds_ystep]
+		 add	edx,[esp]
+		adc	ecx,[esp+4]
 mspreadb	 mov	bl,[ebp+SPACEFILLER4]	;read texel1
 dmsx3:		rol	eax,6
 dmsm6:		and	eax,0xfff
@@ -537,13 +544,13 @@ dmsrest		test	esi,esi
 		align 16
 
 dmsloop		mov	ebp,ecx
-mspstep1d	 add	edx,[ds_xstep]
-mspstep2d	adc	ecx,[ds_ystep]
+mspstep1d	 add	edx,[esp]
+mspstep2d	adc	ecx,[esp+4]
 dmsm3:		 and	ebp,0xfc00003f
 dmsx4:		rol	ebp,6
 		mov	eax,ecx
-mspstep1e	 add	edx,[ds_xstep]
-mspstep2e	adc	ecx,[ds_ystep]
+mspstep1e	 add	edx,[esp]
+mspstep2e	adc	ecx,[esp+4]
 mspreadd	 mov	bl,[ebp+SPACEFILLER4]	;read texel1
 dmsx5:		rol	eax,6
 dmsm5:		and	eax,0xfff
@@ -553,8 +560,8 @@ dmsm5:		and	eax,0xfff
 mspmapd		mov	bl,[ebx+SPACEFILLER4]	;map texel1
 		mov	[edi],bl		;store texel1
 mspreade	mov	bl,[eax+SPACEFILLER4]	;read texel2
-mspstep1f	 add	edx,[ds_xstep]
-mspstep2f	adc	ecx,[ds_ystep]
+mspstep1f	 add	edx,[esp]
+mspstep2f	adc	ecx,[esp+4]
 dmsm4:		 and	ebp,0xfc00003f
 dmsx6:		rol	ebp,6
 		 cmp	bl,0
@@ -571,8 +578,8 @@ dmsm7:		and	eax,0xfff
 mspmapf		mov	bl,[ebx+SPACEFILLER4]	;map texel3
 		 mov	[edi-2],bl		;store texel3
 mspreadg	mov	bl,[eax+SPACEFILLER4]	;read texel4
-mspstep1g	 add	edx,[ds_xstep]
-mspstep2g	adc	ecx,[ds_ystep]
+mspstep1g	 add	edx,[esp]
+mspstep2g	adc	ecx,[esp+4]
 		cmp	bl,0
 		 je	mspskipg
 mspmapg		 mov	bl,[ebx+SPACEFILLER4]	;map texel4
@@ -580,7 +587,8 @@ mspmapg		 mov	bl,[ebx+SPACEFILLER4]	;map texel4
 mspskipg	dec	esi
 		 jnz near dmsloop
 
-dmsdone	pop	esi
+dmsdone	add esp,8
+	pop	esi
 	pop	ebp
 	pop	edi
 	pop	ebx
@@ -842,8 +850,8 @@ GLOBAL	R_DrawColumnHorizP_ASM
 	align 16
 
 @R_DrawColumnHorizP_ASM@0:
-R_DrawColumnHorizP_ASM:
 _R_DrawColumnHorizP_ASM:
+R_DrawColumnHorizP_ASM:
 
 ; count = dc_yh - dc_yl;
 
@@ -862,8 +870,10 @@ _R_DrawColumnHorizP_ASM:
 	inc	eax			; make 0 count mean 0 pixels
 	 and	edx,3
 	push	eax
-	 mov	esi,[dc_ctspan+edx*4]
-	lea	eax,[dc_temp+ecx*4+edx] ; eax = top of column in buffer
+	 mov	eax,[dc_temp]
+	mov	esi,[dc_ctspan+edx*4]
+	 add	eax,edx
+	lea	eax,[eax+ecx*4] ; eax = top of column in buffer
 	 mov	ebp,[dc_yh]
 	mov	[esi],ecx
 	 mov	[esi+4],ebp
@@ -1094,8 +1104,9 @@ _rt_copy1col_asm:
 	lea	esi,[eax*4]
 	inc	ebx			; ebx = count
 	mov	eax,edx
-	lea	ecx,[dc_temp+ecx+esi]	; ecx = source
+	add ecx,esi
 	mov	edi,[ylookup+esi]
+	add ecx,[dc_temp]	; ecx = source
 	mov	esi,[dc_pitch]		; esi = pitch
 	add	eax,edi			; eax = dest
 	add	eax,[dc_destorg]
@@ -1161,10 +1172,11 @@ _rt_copy4cols_asm:
 	inc	ebx			; ebx = count
 	mov	eax,ecx
 	mov	esi,[ylookup+edx*4]
-	lea	ecx,[dc_temp+edx*4]	; ecx = source
-	mov	edx,[dc_pitch]		; edx = pitch
+	mov ecx,[dc_temp]
 	add	eax,esi			; eax = dest
 	add	eax,[dc_destorg]
+	lea	ecx,[ecx+edx*4]	; ecx = source
+	mov	edx,[dc_pitch]		; edx = pitch
 
 	shr	ebx,1
 	jnc	.even
@@ -1233,7 +1245,8 @@ _rt_map1col_asm:
 	mov	esi,[dc_colormap]		; esi = colormap
 	inc	ebx				; ebx = count
 	mov	eax,edx
-	lea	ebp,[dc_temp+ecx+edi]		; ebp = source
+	lea	ebp,[ecx+edi]		; ebp = source
+	add ebp,[dc_temp]
 	mov	ecx,[ylookup+edi]
 	mov	edi,[dc_pitch]			; edi = pitch
 	add	eax,ecx				; eax = dest
@@ -1312,7 +1325,8 @@ _rt_map4cols_asm1:
 	mov	eax,ecx
 	inc	ebx			; ebx = count
 	mov	edi,[ylookup+edx]
-	lea	ebp,[dc_temp+edx]	; ebp = source
+	mov	ebp,[dc_temp]
+	add ebp,edx		; ebp = source
 	add	eax,edi			; eax = dest
 	mov	edi,[dc_pitch]		; edi = pitch
 	add	eax,[dc_destorg]
@@ -1406,7 +1420,8 @@ _rt_map4cols_asm2:
 	mov	eax,ecx
 	inc	ebx			; ebx = count
 	mov	edi,[ylookup+edx]
-	lea	ebp,[dc_temp+edx]	; ebp = source
+	mov ebp,[dc_temp]
+	add ebp,edx		; ebp = source
 	add	eax,edi			; eax = dest
 	mov	edi,[dc_pitch]		; edi = pitch
 	add	eax,[dc_destorg]
@@ -1485,10 +1500,11 @@ _rt_shaded4cols_asm:
 		add		eax,[dc_destorg]				; eax = destination
 		push	ebx
 		push	esi
+		mov		esi,[dc_temp]
 		inc		ebp								; ebp = count
 		add		eax,[esp+16]
 		push	edi
-		lea		esi,[dc_temp+ecx*4]				; esi = source
+		lea		esi,[esi+ecx*4]				; esi = source
 
 		align	16
 
@@ -1572,10 +1588,11 @@ _rt_add4cols_asm:
 		add		eax,[dc_destorg]
 		push	ebx
 		push	esi
+		mov		esi,[dc_temp]
 		push	ebp
 		inc		edi
 		add		eax,[esp+20]
-		lea		esi,[dc_temp+ecx*4]
+		lea		esi,[esi+ecx*4]
 		
 		align 16
 a4loop:
@@ -1651,10 +1668,11 @@ _rt_addclamp4cols_asm:
 		add		eax,[dc_destorg]
 		push	ebx
 		push	esi
+		mov		esi,[dc_temp]
 		push	ebp
 		inc		edi
 		add		eax,[esp+20]
-		lea		esi,[dc_temp+ecx*4]
+		lea		esi,[esi+ecx*4]
 		push	edi
 		
 		align	16

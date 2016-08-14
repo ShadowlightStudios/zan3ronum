@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include "doomtype.h"
 
-#if defined(__GNUC__) && defined(__i386__)
+#if defined(__GNUC__) && defined(__i386__) && !defined(__clang__)
 #include "gccinlines.h"
 #elif defined(_MSC_VER) && defined(_M_IX86)
 #include "mscinlines.h"
@@ -139,5 +139,6 @@ inline SDWORD ModDiv (SDWORD num, SDWORD den, SDWORD *dmval)
 
 #define FLOAT2FIXED(f)		xs_Fix<16>::ToFix(f)
 #define FIXED2FLOAT(f)		((f) / float(65536))
+#define FIXED2DBL(f)		((f) / double(65536))
 
 #endif

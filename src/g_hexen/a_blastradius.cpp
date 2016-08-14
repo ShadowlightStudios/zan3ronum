@@ -22,7 +22,7 @@
 //
 //==========================================================================
 
-void BlastActor (AActor *victim, fixed_t strength, fixed_t speed, AActor * Owner, const PClass * blasteffect)
+void BlastActor (AActor *victim, fixed_t strength, fixed_t speed, AActor * Owner, const PClass * blasteffect, bool dontdamage)
 {
 	angle_t angle,ang;
 	AActor *mo = NULL; // [BB] Initialize with NULL.
@@ -67,7 +67,7 @@ void BlastActor (AActor *victim, fixed_t strength, fixed_t speed, AActor * Owner
 	{
 		// Players handled automatically
 	}
-	else
+	else if (!dontdamage)
 	{
 		victim->flags2 |= MF2_BLASTED;
 	}
@@ -80,16 +80,16 @@ void BlastActor (AActor *victim, fixed_t strength, fixed_t speed, AActor * Owner
 	// [BB] If we're the server, tell clients about all they need to know here.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
-		SERVERCOMMANDS_MoveThingExact( victim, CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( victim, CM_VELX|CM_VELY|CM_VELZ );
 		// [BB] Non-players got the blasted flag above.
-		if ( victim->player == false )
+		if ( victim->player == NULL )
 			SERVERCOMMANDS_SetThingFlags( victim, FLAGSET_FLAGS2 );
 		// [BB] Spawn the blast effect if necessary.
 		if ( mo )
 		{
 			SERVERCOMMANDS_SpawnThing( mo );
-			// [BB] Possibly set mo's momentum.
-			SERVER_SetThingNonZeroAngleAndMomentum( mo );
+			// [BB] Possibly set mo's velocity.
+			SERVER_SetThingNonZeroAngleAndVelocity( mo );
 		}
 	}
 }
@@ -99,6 +99,7 @@ enum
 	BF_USEAMMO = 1,
 	BF_DONTWARN = 2,
 	BF_AFFECTBOSSES = 4,
+	BF_NOIMPACTDAMAGE = 8,
 };
 
 //==========================================================================
@@ -170,6 +171,6 @@ DEFINE_ACTION_FUNCTION_PARAMS (AActor, A_Blast)
 		{ // Out of range
 			continue;
 		}
-		BlastActor (mo, strength, speed, self, blasteffect);
+		BlastActor (mo, strength, speed, self, blasteffect, !!(blastflags & BF_NOIMPACTDAMAGE));
 	}
 }

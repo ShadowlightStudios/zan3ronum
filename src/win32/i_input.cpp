@@ -91,7 +91,6 @@
 #include "i_input.h"
 #include "v_video.h"
 #include "i_sound.h"
-#include "m_menu.h"
 #include "g_game.h"
 #include "d_main.h"
 #include "d_gui.h"
@@ -150,6 +149,7 @@ extern HWND EAXEditWindow;
 EXTERN_CVAR (String, language)
 EXTERN_CVAR (Bool, lookstrafe)
 EXTERN_CVAR (Bool, use_joystick)
+EXTERN_CVAR (Bool, use_mouse)
 
 static int WheelDelta;
 extern bool CursorState;
@@ -163,6 +163,7 @@ LPDIRECTINPUT			g_pdi3;
 
 BOOL AppActive = TRUE;
 int SessionState = 0;
+int BlockMouseMove; 
 
 // [BB] Allows to keep the sound turned on, when the client is not the active app.
 CVAR (Bool, cl_soundwhennotactive, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -171,7 +172,7 @@ CVAR (Bool, k_allowfullscreentoggle, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 CUSTOM_CVAR(Bool, norawinput, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
 {
-	Printf("This won't take effect until "GAMENAME" is restarted.\n");
+	Printf("This won't take effect until " GAMENAME " is restarted.\n");
 }
 
 extern int chatmodeon;
@@ -197,6 +198,16 @@ static void I_CheckGUICapture ()
 			Keyboard->AllKeysUp();
 		}
 	}
+}
+
+void I_SetMouseCapture()
+{
+	SetCapture(Window);
+}
+
+void I_ReleaseMouseCapture()
+{
+	ReleaseCapture();
 }
 
 bool GUIWndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT *result)
@@ -236,28 +247,29 @@ bool GUIWndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESU
 		{
 			switch (wParam)
 			{
-			case VK_PRIOR:	ev.data1 = GK_PGUP;		break;
-			case VK_NEXT:	ev.data1 = GK_PGDN;		break;
-			case VK_END:	ev.data1 = GK_END;		break;
-			case VK_HOME:	ev.data1 = GK_HOME;		break;
-			case VK_LEFT:	ev.data1 = GK_LEFT;		break;
-			case VK_RIGHT:	ev.data1 = GK_RIGHT;	break;
-			case VK_UP:		ev.data1 = GK_UP;		break;
-			case VK_DOWN:	ev.data1 = GK_DOWN;		break;
-			case VK_DELETE:	ev.data1 = GK_DEL;		break;
-			case VK_ESCAPE:	ev.data1 = GK_ESCAPE;	break;
-			case VK_F1:		ev.data1 = GK_F1;		break;
-			case VK_F2:		ev.data1 = GK_F2;		break;
-			case VK_F3:		ev.data1 = GK_F3;		break;
-			case VK_F4:		ev.data1 = GK_F4;		break;
-			case VK_F5:		ev.data1 = GK_F5;		break;
-			case VK_F6:		ev.data1 = GK_F6;		break;
-			case VK_F7:		ev.data1 = GK_F7;		break;
-			case VK_F8:		ev.data1 = GK_F8;		break;
-			case VK_F9:		ev.data1 = GK_F9;		break;
-			case VK_F10:	ev.data1 = GK_F10;		break;
-			case VK_F11:	ev.data1 = GK_F11;		break;
-			case VK_F12:	ev.data1 = GK_F12;		break;
+			case VK_PRIOR:			ev.data1 = GK_PGUP;		break;
+			case VK_NEXT:			ev.data1 = GK_PGDN;		break;
+			case VK_END:			ev.data1 = GK_END;		break;
+			case VK_HOME:			ev.data1 = GK_HOME;		break;
+			case VK_LEFT:			ev.data1 = GK_LEFT;		break;
+			case VK_RIGHT:			ev.data1 = GK_RIGHT;	break;
+			case VK_UP:				ev.data1 = GK_UP;		break;
+			case VK_DOWN:			ev.data1 = GK_DOWN;		break;
+			case VK_DELETE:			ev.data1 = GK_DEL;		break;
+			case VK_ESCAPE:			ev.data1 = GK_ESCAPE;	break;
+			case VK_F1:				ev.data1 = GK_F1;		break;
+			case VK_F2:				ev.data1 = GK_F2;		break;
+			case VK_F3:				ev.data1 = GK_F3;		break;
+			case VK_F4:				ev.data1 = GK_F4;		break;
+			case VK_F5:				ev.data1 = GK_F5;		break;
+			case VK_F6:				ev.data1 = GK_F6;		break;
+			case VK_F7:				ev.data1 = GK_F7;		break;
+			case VK_F8:				ev.data1 = GK_F8;		break;
+			case VK_F9:				ev.data1 = GK_F9;		break;
+			case VK_F10:			ev.data1 = GK_F10;		break;
+			case VK_F11:			ev.data1 = GK_F11;		break;
+			case VK_F12:			ev.data1 = GK_F12;		break;
+			case VK_BROWSER_BACK:	ev.data1 = GK_BACK;		break;
 			}
 			if (ev.data1 != 0)
 			{
@@ -285,6 +297,9 @@ bool GUIWndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESU
 	case WM_RBUTTONUP:
 	case WM_MBUTTONDOWN:
 	case WM_MBUTTONUP:
+	case WM_XBUTTONDOWN:
+	case WM_XBUTTONUP:
+	case WM_MOUSEMOVE:
 		if (message >= WM_LBUTTONDOWN && message <= WM_LBUTTONDBLCLK)
 		{
 			ev.subtype = message - WM_LBUTTONDOWN + EV_GUI_LButtonDown;
@@ -297,11 +312,41 @@ bool GUIWndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESU
 		{
 			ev.subtype = message - WM_MBUTTONDOWN + EV_GUI_MButtonDown;
 		}
-		D_PostEvent(&ev);
+		else if (message >= WM_XBUTTONDOWN && message <= WM_XBUTTONUP)
+		{
+			ev.subtype = message - WM_XBUTTONDOWN + EV_GUI_BackButtonDown;
+			if (GET_XBUTTON_WPARAM(wParam) == 2)
+			{
+				ev.subtype += EV_GUI_FwdButtonDown - EV_GUI_BackButtonDown;
+			}
+			else if (GET_XBUTTON_WPARAM(wParam) != 1)
+			{
+				break;
+			}
+		}
+		else if (message == WM_MOUSEMOVE)
+		{
+			ev.subtype = EV_GUI_MouseMove;
+			if (BlockMouseMove > 0) return true;
+		}
+
+		{
+			int shift = screen? screen->GetPixelDoubling() : 0;
+			ev.data1 = LOWORD(lParam) >> shift; 
+			ev.data2 = HIWORD(lParam) >> shift; 
+			if (screen) ev.data2 -= (screen->GetTrueHeight() - screen->GetHeight())/2;
+		}
+
+		if (wParam & MK_SHIFT)				ev.data3 |= GKM_SHIFT;
+		if (wParam & MK_CONTROL)			ev.data3 |= GKM_CTRL;
+		if (GetKeyState(VK_MENU) & 0x8000)	ev.data3 |= GKM_ALT;
+
+		if (use_mouse) D_PostEvent(&ev);
 		return true;
 
 	// Note: If the mouse is grabbed, it sends the mouse wheel events itself.
 	case WM_MOUSEWHEEL:
+		if (!use_mouse)  return false;
 		if (wParam & MK_SHIFT)				ev.data3 |= GKM_SHIFT;
 		if (wParam & MK_CONTROL)			ev.data3 |= GKM_CTRL;
 		if (GetKeyState(VK_MENU) & 0x8000)	ev.data3 |= GKM_ALT;
@@ -392,6 +437,15 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		return result;
 	}
 
+	if ((gamestate == GS_DEMOSCREEN || gamestate == GS_TITLELEVEL) && message == WM_LBUTTONDOWN)
+	{
+		if (GUIWndProcHook(hWnd, message, wParam, lParam, &result))
+		{
+			return result;
+		}
+	}
+
+
 	switch (message)
 	{
 	case WM_DESTROY:
@@ -431,6 +485,10 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		{
 			SetCursor(NULL); // turn off window cursor
 			return TRUE;	// Prevent Windows from setting cursor to window class cursor
+		}
+		else
+		{
+			return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 		break;
 
@@ -765,6 +823,7 @@ void I_GetEvent ()
 //
 void I_StartTic ()
 {
+	BlockMouseMove--;
 	ResetButtonTriggers ();
 	I_CheckGUICapture ();
 	I_CheckNativeMouse (false);

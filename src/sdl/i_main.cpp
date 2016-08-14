@@ -61,7 +61,7 @@
 #include "g_level.h"
 #include "r_state.h"
 #include "cmdlib.h"
-#include "r_main.h"
+#include "r_utility.h"
 #include "doomstat.h"
 
 // MACROS ------------------------------------------------------------------
@@ -80,6 +80,10 @@ extern "C" int cc_install_handlers(int, char**, int, int*, const char*, int(*)(c
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
+
+#ifdef USE_XCURSOR
+extern bool UseXCursor;
+#endif
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -132,20 +136,6 @@ void STACK_ARGS call_terms ()
 //		printf ("term %d - %s\n", NumTerms, TermNames[NumTerms-1]);
 		TermFuncs[--NumTerms] ();
 	}
-}
-
-//==========================================================================
-//
-// FinalGC
-//
-// Collect garbage one last time before exiting.
-//
-//==========================================================================
-
-static void FinalGC()
-{
-	Args = NULL;
-	GC::FullGC();
 }
 
 static void STACK_ARGS NewFailure ()
@@ -246,12 +236,17 @@ static void unprotect_rtext()
 }
 #endif
 
+void I_StartupJoysticks();
+void I_ShutdownJoysticks();
+
 int main (int argc, char **argv)
 {
+#if !defined (__APPLE__)
 	{
 		int s[4] = { SIGSEGV, SIGILL, SIGFPE, SIGBUS };
 		cc_install_handlers(argc, argv, 4, s, GAMENAMELOWERCASE"-crash.log", DoomSpecificInfo);
  	}
+#endif // !__APPLE__
  	
 	printf(GAMENAME" %s - %s - SDL version\nCompiled on %s\n",
 		GetVersionString(), GetGitTime(), __DATE__);
@@ -262,7 +257,12 @@ int main (int argc, char **argv)
 #if defined(__MACH__) && !defined(NOASM)
 	unprotect_rtext();
 #endif
-	
+
+	// Set LC_NUMERIC environment variable in case some library decides to
+	// clear the setlocale call at least this will be correct.
+	// Note that the LANG environment variable is overridden by LC_*
+	setenv ("LC_NUMERIC", "C", 1);
+
 #ifndef NO_GTK
 	GtkAvailable = gtk_init_check (&argc, &argv);
 #endif
@@ -284,7 +284,7 @@ int main (int argc, char **argv)
 	}
 	else
 	{
-		if (SDL_Init (SDL_INIT_VIDEO|SDL_INIT_TIMER|SDL_INIT_NOPARACHUTE) == -1)
+		if (SDL_Init (SDL_INIT_VIDEO|SDL_INIT_TIMER|SDL_INIT_NOPARACHUTE|SDL_INIT_JOYSTICK) == -1)
 		{
 			fprintf (stderr, "Could not initialize SDL:\n%s\n", SDL_GetError());
 			return -1;
@@ -293,13 +293,45 @@ int main (int argc, char **argv)
 
 	atterm (SDL_Quit);
 
+	{
+		char viddriver[80];
+
+		if (SDL_VideoDriverName(viddriver, sizeof(viddriver)) != NULL)
+		{
+			printf("Using video driver %s\n", viddriver);
+#ifdef USE_XCURSOR
+			UseXCursor = (strcmp(viddriver, "x11") == 0);
+#endif
+		}
+		printf("\n");
+	}
+
 	char caption[100];
 	mysnprintf(caption, countof(caption), GAMESIG " %s (%s)", GetVersionString(), GetGitTime());
 	SDL_WM_SetCaption(caption, caption);
+
+#ifdef __APPLE__
+	
+	const SDL_VideoInfo* videoInfo = SDL_GetVideoInfo();
+	if ( NULL != videoInfo )
+	{
+		EXTERN_CVAR(  Int, vid_defwidth  )
+		EXTERN_CVAR(  Int, vid_defheight )
+		EXTERN_CVAR(  Int, vid_defbits   )
+		EXTERN_CVAR( Bool, vid_vsync     )
+		EXTERN_CVAR( Bool, fullscreen    )
+		
+		vid_defwidth  = videoInfo->current_w;
+		vid_defheight = videoInfo->current_h;
+		vid_defbits   = videoInfo->vfmt->BitsPerPixel;
+		vid_vsync     = True;
+		fullscreen    = True;
+	}
+	
+#endif // __APPLE__
 	
     try
     {
-		atterm(FinalGC);
 		/*
 		  killough 1/98:
 
@@ -334,11 +366,13 @@ int main (int argc, char **argv)
 			progdir = "./";
 		}
 
+		I_StartupJoysticks();
 		C_InitConsole (80*8, 25*8, false);
 		D_DoomMain ();
     }
     catch (class CDoomError &error)
     {
+		I_ShutdownJoysticks();
 		if (error.GetMessage ())
 			fprintf (stderr, "%s\n", error.GetMessage ());
 		exit (-1);

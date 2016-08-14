@@ -567,7 +567,7 @@ void BOTCMD_RunCommand( BOTCMD_e Command, CSkullBot *pBot )
 //	lExpectedStackPosition = pBot->m_ScriptData.lStackPosition - g_BotCommands[Command].lNumArgs;
 
 	if ( botdebug_commands )
-		Printf( "bot %s command: %s\n", pBot->GetPlayer( )->userinfo.netname, g_BotCommands[Command].pszName );
+		Printf( "bot %s command: %s\n", pBot->GetPlayer( )->userinfo.GetName(), g_BotCommands[Command].pszName );
 	g_BotCommands[Command].pvFunction( pBot );
 
 //	if ( pBot->m_ScriptData.lStackPosition != lExpectedStackPosition )
@@ -637,32 +637,32 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 
 			if (( strnicmp( pszInString + 1, "player_damagedby", strlen( "player_damagedby" )) == 0 ) && ( pBot->m_ulLastPlayerDamagedBy != MAXPLAYERS ))
 			{
-				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulLastPlayerDamagedBy].userinfo.netname );
-				pszOutString += strlen ( players[pBot->m_ulLastPlayerDamagedBy].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulLastPlayerDamagedBy].userinfo.GetName() );
+				pszOutString += strlen ( players[pBot->m_ulLastPlayerDamagedBy].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_damagedby" );
 			}
 			else if (( strnicmp( pszInString + 1, "player_enemy", strlen( "player_enemy" )) == 0 ) && ( pBot->m_ulPlayerEnemy != MAXPLAYERS ))
 			{
-				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerEnemy].userinfo.netname );
-				pszOutString += strlen( players[pBot->m_ulPlayerEnemy].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerEnemy].userinfo.GetName() );
+				pszOutString += strlen( players[pBot->m_ulPlayerEnemy].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_enemy" );
 			}
 			else if (( strnicmp( pszInString + 1, "player_killedby", strlen( "player_killedby" )) == 0 ) && ( pBot->m_ulPlayerKilledBy != MAXPLAYERS ))
 			{
-				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerKilledBy].userinfo.netname );
-				pszOutString += strlen( players[pBot->m_ulPlayerKilledBy].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerKilledBy].userinfo.GetName() );
+				pszOutString += strlen( players[pBot->m_ulPlayerKilledBy].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_killedby" );
 			}
 			else if (( strnicmp( pszInString + 1, "player_killed", strlen( "player_killed" )) == 0 ) && ( pBot->m_ulPlayerKilled != MAXPLAYERS ))
 			{
-				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerKilled].userinfo.netname );
-				pszOutString += strlen( players[pBot->m_ulPlayerKilled].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[pBot->m_ulPlayerKilled].userinfo.GetName() );
+				pszOutString += strlen( players[pBot->m_ulPlayerKilled].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_killed" );
@@ -681,8 +681,8 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 						ulBestPlayer = ulIdx;
 				}
 
-				sprintf( pszOutString, "%s\\c-", players[ulBestPlayer].userinfo.netname );
-				pszOutString += strlen( players[ulBestPlayer].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[ulBestPlayer].userinfo.GetName() );
+				pszOutString += strlen( players[ulBestPlayer].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_inlead" );
@@ -701,8 +701,8 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 						ulBestPlayer = ulIdx;
 				}
 
-				sprintf( pszOutString, "%s\\c-", players[ulBestPlayer].userinfo.netname );
-				pszOutString += strlen( players[ulBestPlayer].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[ulBestPlayer].userinfo.GetName() );
+				pszOutString += strlen( players[ulBestPlayer].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_lastplace" );
@@ -731,8 +731,8 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 					while (( ulPlayer == static_cast<unsigned> ( pBot->GetPlayer( ) - players )) || ( playeringame[ulPlayer] == false ));
 				}
 				
-				sprintf( pszOutString, "%s\\c-", players[ulPlayer].userinfo.netname );
-				pszOutString += strlen( players[ulPlayer].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[ulPlayer].userinfo.GetName() );
+				pszOutString += strlen( players[ulPlayer].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_random_notself" );
@@ -747,8 +747,8 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 				}
 				while ( playeringame[ulPlayer] == false );
 				
-				sprintf( pszOutString, "%s\\c-", players[ulPlayer].userinfo.netname );
-				pszOutString += strlen( players[ulPlayer].userinfo.netname );
+				sprintf( pszOutString, "%s\\c-", players[ulPlayer].userinfo.GetName() );
+				pszOutString += strlen( players[ulPlayer].userinfo.GetName() );
 				pszOutString += strlen( "\\c-" );
 
 				pszInString += strlen( "player_random" );
@@ -788,9 +788,10 @@ void BOTCMD_DoChatStringSubstitutions( CSkullBot *pBot, const char *pszInString,
 //
 bool BOTCMD_IgnoreItem( CSkullBot *pBot, LONG lIdx, bool bVisibilityCheck )
 {
-	if (( g_NetIDList[lIdx].bFree ) ||
-		(( g_NetIDList[lIdx].pActor->flags & MF_SPECIAL ) == false ) ||
-		( bVisibilityCheck && ( BOTS_IsVisible( pBot->GetPlayer( )->mo, g_NetIDList[lIdx].pActor ) == false )))
+	AActor *pActor = g_NetIDList.findPointerByID ( lIdx );
+	if (( pActor == NULL ) ||
+		(( pActor->flags & MF_SPECIAL ) == false ) ||
+		( bVisibilityCheck && ( BOTS_IsVisible( pBot->GetPlayer( )->mo, pActor ) == false )))
 	{
 		return ( true );
 	}
@@ -898,17 +899,17 @@ int botcmd_LookForItemType( CSkullBot *pBot, const char *FunctionName )
 	lIdx = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lIdx < 0 ) || ( lIdx >= MAX_NETID ))
+	if (( lIdx < 0 ) || ( lIdx >= IDList<AActor>::MAX_NETID ))
 		I_Error( "%s: Illegal item index, %d!", FunctionName, static_cast<int> (lIdx) );
 
 	while (( BOTCMD_IgnoreItem( pBot, lIdx, bVisibilityCheck )) ||
-		( g_NetIDList[lIdx].pActor->GetClass( )->IsDescendantOf( RUNTIME_CLASS( T )) == false ))
+		( g_NetIDList.findPointerByID ( lIdx )->GetClass( )->IsDescendantOf( RUNTIME_CLASS( T )) == false ))
 	{
-		if ( ++lIdx == MAX_NETID )
+		if ( ++lIdx == IDList<AActor>::MAX_NETID )
 			break;
 	}
 
-	if ( lIdx == MAX_NETID )
+	if ( lIdx == IDList<AActor>::MAX_NETID )
 		return g_iReturnInt = -1;
 	else
 		return g_iReturnInt = lIdx;
@@ -948,17 +949,17 @@ int botcmd_LookForItemWithFlag( CSkullBot *pBot, const int Flag, const char *Fun
 	lIdx = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lIdx < 0 ) || ( lIdx >= MAX_NETID ))
+	if (( lIdx < 0 ) || ( lIdx >= IDList<AActor>::MAX_NETID ))
 		I_Error( "%s: Illegal item index, %d!", FunctionName, static_cast<int> (lIdx) );
 
 	while (( BOTCMD_IgnoreItem( pBot, lIdx, bVisibilityCheck )) ||
-		(( g_NetIDList[lIdx].pActor->ulSTFlags & Flag ) == false ))
+		(( g_NetIDList.findPointerByID ( lIdx )->ulSTFlags & Flag ) == false ))
 	{
-		if ( ++lIdx == MAX_NETID )
+		if ( ++lIdx == IDList<AActor>::MAX_NETID )
 			break;
 	}
 
-	if ( lIdx == MAX_NETID )
+	if ( lIdx == IDList<AActor>::MAX_NETID )
 		return -1;
 	else
 		return lIdx;
@@ -1613,17 +1614,18 @@ static void botcmd_GetPathingCostToItem( CSkullBot *pBot )
 	lItem = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lItem < 0 ) || ( lItem >= MAX_NETID ))
+	if (( lItem < 0 ) || ( lItem >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_GetPathingCostToItem: Illegal item index, %d", static_cast<int> (lItem) );
 
-	if (( g_NetIDList[lItem].bFree ) || ( g_NetIDList[lItem].pActor == NULL ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lItem );
+	if ( pActor == NULL )
 	{
 		g_iReturnInt = -1;
 		return;
 	}
 
-	GoalPos.x = g_NetIDList[lItem].pActor->x;
-	GoalPos.y = g_NetIDList[lItem].pActor->y;
+	GoalPos.x = pActor->x;
+	GoalPos.y = pActor->y;
 
 	ASTAR_ClearPath(( pBot->GetPlayer( ) - players ) + MAXPLAYERS );
 
@@ -1649,13 +1651,14 @@ static void botcmd_GetDistanceToItem( CSkullBot *pBot )
 	lItem = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lItem < 0 ) || ( lItem >= MAX_NETID ))
+	if (( lItem < 0 ) || ( lItem >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_GetDistanceToItem: Illegal item index, %d", static_cast<int> (lItem) );
 
-	if (( g_NetIDList[lItem].bFree == false ) && ( g_NetIDList[lItem].pActor ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lItem );
+	if ( pActor )
 	{
-		g_iReturnInt = abs( P_AproxDistance( g_NetIDList[lItem].pActor->x - pBot->GetPlayer( )->mo->x, 
-											 g_NetIDList[lItem].pActor->y - pBot->GetPlayer( )->mo->y ) / FRACUNIT );
+		g_iReturnInt = abs( P_AproxDistance( pActor->x - pBot->GetPlayer( )->mo->x, 
+											 pActor->y - pBot->GetPlayer( )->mo->y ) / FRACUNIT );
 	}
 	else
 		g_iReturnInt = -1;
@@ -1670,13 +1673,14 @@ static void botcmd_GetItemName( CSkullBot *pBot )
 	lItem = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lItem < 0 ) || ( lItem >= MAX_NETID ))
+	if (( lItem < 0 ) || ( lItem >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_GetItemName: Illegal item index, %d", static_cast<int> (lItem) );
 
-	if (( g_NetIDList[lItem].bFree == false ) && ( g_NetIDList[lItem].pActor ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lItem );
+	if ( pActor )
 	{
-		if ( strlen( g_NetIDList[lItem].pActor->GetClass( )->TypeName.GetChars( )) < BOTCMD_RETURNSTRING_SIZE )
-			sprintf( g_szReturnString, "%s", g_NetIDList[lItem].pActor->GetClass( )->TypeName.GetChars( ));
+		if ( strlen( pActor->GetClass( )->TypeName.GetChars( )) < BOTCMD_RETURNSTRING_SIZE )
+			sprintf( g_szReturnString, "%s", pActor->GetClass( )->TypeName.GetChars( ));
 		else
 			g_szReturnString[0] = 0;
 	}
@@ -1688,18 +1692,17 @@ static void botcmd_GetItemName( CSkullBot *pBot )
 //
 static void botcmd_IsItemVisible( CSkullBot *pBot )
 {
-	AActor		*pActor;
 	LONG		lIdx;
 
 	lIdx = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lIdx < 0 ) || ( lIdx >= MAX_NETID ))
+	if (( lIdx < 0 ) || ( lIdx >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_IsItemVisible: Illegal item index, %d", static_cast<int> (lIdx) );
 
-	if (( g_NetIDList[lIdx].bFree == false ) && ( g_NetIDList[lIdx].pActor ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lIdx );
+	if ( pActor )
 	{
-		pActor = g_NetIDList[lIdx].pActor;
 
 		// Check if we have a line of sight to this object.
 		if ( P_CheckSight( pBot->GetPlayer( )->mo, pActor, SF_SEEPASTBLOCKEVERYTHING ))
@@ -1740,12 +1743,13 @@ static void botcmd_SetGoal( CSkullBot *pBot )
 	lIdx = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lIdx < 0 ) || ( lIdx >= MAX_NETID ))
+	if (( lIdx < 0 ) || ( lIdx >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_SetGoal: Illegal item index, %d", static_cast<int> (lIdx) );
 
-	if (( g_NetIDList[lIdx].bFree == false ) && ( g_NetIDList[lIdx].pActor != NULL ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lIdx );
+	if ( pActor )
 	{
-		pBot->m_pGoalActor = g_NetIDList[lIdx].pActor;
+		pBot->m_pGoalActor = pActor;
 		pBot->m_ulPathType = BOTPATHTYPE_NONE;
 	}
 	else
@@ -1970,17 +1974,18 @@ static void botcmd_GetWeaponFromItem( CSkullBot *pBot )
 	lItem = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lItem < 0 ) || ( lItem >= MAX_NETID ))
+	if (( lItem < 0 ) || ( lItem >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_GetWeaponFromItem: Illegal item index, %d", static_cast<int> (lItem) );
 
-	if (( g_NetIDList[lItem].bFree == false ) && ( g_NetIDList[lItem].pActor ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lItem );
+	if ( pActor )
 	{
-		if ( g_NetIDList[lItem].pActor->GetClass( )->IsDescendantOf( RUNTIME_CLASS( AWeapon )) == false )
+		if ( pActor->GetClass( )->IsDescendantOf( RUNTIME_CLASS( AWeapon )) == false )
 			g_szReturnString[0] = 0;
 		else
 		{
-			if ( strlen( g_NetIDList[lItem].pActor->GetClass( )->TypeName.GetChars( )) < BOTCMD_RETURNSTRING_SIZE )
-				sprintf( g_szReturnString, "%s", g_NetIDList[lItem].pActor->GetClass( )->TypeName.GetChars( ));
+			if ( strlen( pActor->GetClass( )->TypeName.GetChars( )) < BOTCMD_RETURNSTRING_SIZE )
+				sprintf( g_szReturnString, "%s", pActor->GetClass( )->TypeName.GetChars( ));
 			else
 				g_szReturnString[0] = 0;
 		}
@@ -1998,15 +2003,16 @@ static void botcmd_IsWeaponOwned( CSkullBot *pBot )
 	lItem = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lItem < 0 ) || ( lItem >= MAX_NETID ))
+	if (( lItem < 0 ) || ( lItem >= IDList<AActor>::MAX_NETID ))
 		I_Error( "botcmd_IsWeaponOwned: Illegal item index, %d", static_cast<int> (lItem) );
 
-	if (( g_NetIDList[lItem].bFree == false ) && ( g_NetIDList[lItem].pActor ))
+	AActor *pActor = g_NetIDList.findPointerByID ( lItem );
+	if ( pActor )
 	{
-		if ( g_NetIDList[lItem].pActor->GetClass( )->IsDescendantOf( RUNTIME_CLASS( AWeapon )) == false )
+		if ( pActor->GetClass( )->IsDescendantOf( RUNTIME_CLASS( AWeapon )) == false )
 			g_bReturnBool = -1;
 		else
-			g_bReturnBool = ( pBot->GetPlayer( )->mo->FindInventory( g_NetIDList[lItem].pActor->GetClass( )) != NULL );
+			g_bReturnBool = ( pBot->GetPlayer( )->mo->FindInventory( pActor->GetClass( )) != NULL );
 	}
 	else
 		g_bReturnBool = -1;
@@ -2351,28 +2357,24 @@ static void botcmd_TryToJoinGame( CSkullBot *pBot )
 		return;
 
 	// Player can't rejoin their LMS/survival game if they are dead.
-	if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) && ( pBot->GetPlayer( )->bDeadSpectator ))
+	if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) && ( pBot->GetPlayer( )->bDeadSpectator ))
 		return;
 
 	// [BB] If players aren't allowed to join at the moment, just put the bot in line.
 	if ( GAMEMODE_PreventPlayersFromJoining() )
 	{
-		JOINSLOT_t	JoinSlot;
-
-		JoinSlot.ulPlayer = pBot->GetPlayer( ) - players;
 		// [BB] Don't chose the team before the bot actually joins.
-		JoinSlot.ulTeam = teams.Size( );
-		JOINQUEUE_AddPlayer( JoinSlot );	
+		JOINQUEUE_AddPlayer( pBot->GetPlayer( ) - players, teams.Size() );
 		return;
 	}
 
 	// Everything's okay! Go ahead and join!
 	PLAYER_SpectatorJoinsGame ( pBot->GetPlayer( ) );
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 		PLAYER_SetTeam( pBot->GetPlayer( ), TEAM_ChooseBestTeamForPlayer( ), true );
 
-	Printf( "%s \\c-joined the game.\n", pBot->GetPlayer( )->userinfo.netname );
+	Printf( "%s \\c-joined the game.\n", pBot->GetPlayer( )->userinfo.GetName() );
 }
 
 //*****************************************************************************
@@ -2524,11 +2526,11 @@ static void botcmd_GetGameMode( CSkullBot *pBot )
 //
 static void botcmd_GetSpread( CSkullBot *pBot )
 {
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			g_iReturnInt = TEAM_GetScoreCountSpread( pBot->GetPlayer( )->ulTeam );
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 			g_iReturnInt = TEAM_GetFragCountSpread( pBot->GetPlayer( )->ulTeam );
 		else if ( teamlms )
 			g_iReturnInt = TEAM_GetWinCountSpread( pBot->GetPlayer( )->ulTeam );
@@ -2559,8 +2561,8 @@ static void botcmd_GetPlayerName( CSkullBot *pBot )
 	if (( lPlayer < 0 ) || ( lPlayer >= MAXPLAYERS ))
 		I_Error( "botcmd_GetPlayerName: Invalid player index, %d", static_cast<int> (lPlayer) );
 
-	if ( strlen( players[lPlayer].userinfo.netname ) < BOTCMD_RETURNSTRING_SIZE )
-		sprintf( g_szReturnString, "%s", players[lPlayer].userinfo.netname );
+	if ( strlen( players[lPlayer].userinfo.GetName() ) < BOTCMD_RETURNSTRING_SIZE )
+		sprintf( g_szReturnString, "%s", players[lPlayer].userinfo.GetName() );
 	else
 		g_szReturnString[0] = 0;
 }
@@ -2581,9 +2583,9 @@ static void botcmd_ACS_Execute( CSkullBot *pBot )
 {
 	LONG			lScript;
 	LONG			lMap;
-	LONG			lArg1;
-	LONG			lArg2;
-	LONG			lArg3;
+	int				lArg1;
+	int				lArg2;
+	int				lArg3;
 	level_info_t	*pLevelInfo;
 
 	lArg3 = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
@@ -2601,10 +2603,11 @@ static void botcmd_ACS_Execute( CSkullBot *pBot )
 	lScript = pBot->m_ScriptData.alStack[pBot->m_ScriptData.lStackPosition - 1];
 	pBot->PopStack( );
 
-	if (( lMap == 0 ) || (( pLevelInfo = FindLevelByNum( lMap )) == false ))
-		P_StartScript( pBot->GetPlayer( )->mo, NULL, lScript, level.mapname, 0, lArg1, lArg2, lArg3, 0, false );
+	int arg[3] = { lArg1, lArg2, lArg3 };
+	if (( lMap == 0 ) || (( pLevelInfo = FindLevelByNum( lMap )) == NULL ))
+		P_StartScript( pBot->GetPlayer( )->mo, NULL, lScript, level.mapname, arg, 3, 0 );
 	else
-		P_StartScript( pBot->GetPlayer( )->mo, NULL, lScript, pLevelInfo->mapname, 0, lArg1, lArg2, lArg3, 0, false );
+		P_StartScript( pBot->GetPlayer( )->mo, NULL, lScript, pLevelInfo->mapname, arg, 3, 0 );
 }
 
 //*****************************************************************************

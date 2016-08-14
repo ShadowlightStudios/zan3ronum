@@ -12,7 +12,7 @@
 #include "r_local.h"
 #include "r_bsp.h"
 #include "r_plane.h"
-
+#include "c_cvars.h"
 #include "r_3dfloors.h"
 
 // external variables
@@ -27,6 +27,8 @@ HeightLevel *height_top = NULL;
 HeightLevel *height_cur = NULL;
 int CurrentMirror = 0;
 int CurrentSkybox = 0;
+
+CVAR(Int, r_3dfloors, true, 0);
 
 // private variables
 int height_max = -1;
@@ -90,6 +92,8 @@ void R_3D_AddHeight(secplane_t *add, sector_t *sec)
 void R_3D_NewClip()
 {
 	ClipStack *curr;
+//	extern short floorclip[MAXWIDTH];
+//	extern short ceilingclip[MAXWIDTH];
 
 	curr = (ClipStack*)M_Malloc(sizeof(ClipStack));
 	curr->next = 0;

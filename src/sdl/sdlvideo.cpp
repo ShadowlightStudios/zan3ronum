@@ -11,6 +11,7 @@
 #include "stats.h"
 #include "v_palette.h"
 #include "sdlvideo.h"
+#include "r_swrenderer.h"
 
 #include <SDL.h>
 
@@ -69,19 +70,26 @@ struct MiniModeInfo
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
-void DoBlending (const PalEntry *from, PalEntry *to, int count, int r, int g, int b, int a);
-
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
 
 extern IVideo *Video;
+extern SDL_Surface *cursorSurface;
+extern SDL_Rect cursorBlit;
+extern bool GUICapture;
 
 EXTERN_CVAR (Float, Gamma)
+EXTERN_CVAR (Int, vid_maxfps)
+EXTERN_CVAR (Bool, cl_capfps)
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 CVAR (Int, vid_displaybits, 8, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+
+// vid_asyncblit needs a restart to work. SDL doesn't seem to change if the
+// frame buffer is changed at run time.
+CVAR (Bool, vid_asyncblit, 1, CVAR_NOINITCALL|CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 CUSTOM_CVAR (Float, rgamma, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 {
@@ -146,6 +154,7 @@ static MiniModeInfo WinModes[] =
 	{ 1600, 900 },	// 16:9
 	{ 1600, 1000 },	// 16:10
 	{ 1600, 1200 },
+	{ 1920, 1080 },
 };
 
 static cycle_t BlitCycles;
@@ -296,9 +305,8 @@ SDLFB::SDLFB (int width, int height, bool fullscreen)
 	UpdatePending = false;
 	NotPaletted = false;
 	FlashAmount = 0;
-	
 	Screen = SDL_SetVideoMode (width, height, vid_displaybits,
-		SDL_HWSURFACE|SDL_HWPALETTE|SDL_DOUBLEBUF|SDL_ANYFORMAT|
+		(vid_asyncblit ? SDL_ASYNCBLIT : 0)|SDL_HWSURFACE|SDL_HWPALETTE|SDL_DOUBLEBUF|SDL_ANYFORMAT|
 		(fullscreen ? SDL_FULLSCREEN : 0));
 
 	if (Screen == NULL)
@@ -371,6 +379,13 @@ void SDLFB::Update ()
 
 	DrawRateStuff ();
 
+#ifndef __APPLE__
+	if(vid_maxfps && !cl_capfps)
+	{
+		SEMAPHORE_WAIT(FPSLimitSemaphore)
+	}
+#endif
+
 	Buffer = NULL;
 	LockCount = 0;
 	UpdatePending = false;
@@ -404,7 +419,13 @@ void SDLFB::Update ()
 	}
 	
 	SDL_UnlockSurface (Screen);
-	
+
+	if (cursorSurface != NULL && GUICapture)
+	{
+		// SDL requires us to draw a surface to get true color cursors.
+		SDL_BlitSurface(cursorSurface, NULL, Screen, &cursorBlit);
+	}
+
 	SDLFlipCycles.Clock();
 	SDL_Flip (Screen);
 	SDLFlipCycles.Unclock();

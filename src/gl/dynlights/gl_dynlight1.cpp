@@ -45,6 +45,7 @@
 #include "gl/gl_functions.h"
 #include "g_level.h"
 
+#include "gl/system/gl_interface.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/data/gl_data.h"
@@ -69,7 +70,7 @@ CUSTOM_CVAR (Bool, gl_lights, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOIN
 
 CUSTOM_CVAR (Bool, gl_dynlight_shader, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
 {
-	if (self && gl.maxuniforms < 1024) self = false;
+	if (self && (gl.maxuniforms < 1024 || gl.shadermodel < 4)) self = false;
 }
 
 CVAR (Bool, gl_attachedlights, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG);
@@ -182,6 +183,10 @@ bool gl_SetupLight(Plane & p, ADynamicLight * light, Vector & nearPt, Vector & u
 	{
 		return false;
 	}
+	if (light->owned && light->target != NULL && !light->target->IsVisibleToPlayer())
+	{
+		return false;
+	}
 
 	scale = 1.0f / ((2.f * radius) - dist);
 
@@ -227,7 +232,7 @@ bool gl_SetupLight(Plane & p, ADynamicLight * light, Vector & nearPt, Vector & u
 		g= (g*(32-desaturation)+ gray*desaturation)/32;
 		b= (b*(32-desaturation)+ gray*desaturation)/32;
 	}
-	gl.Color3f(r,g,b);
+	glColor3f(r,g,b);
 	return true;
 }
 

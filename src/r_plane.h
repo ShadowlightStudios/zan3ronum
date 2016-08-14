@@ -24,7 +24,6 @@
 #define __R_PLANE_H__
 
 #include <stddef.h>
-#include "r_data.h"
 
 class ASkyViewpoint;
 
@@ -54,6 +53,8 @@ struct visplane_s
 	float		visibility;
 	fixed_t		viewx, viewy, viewz;
 	angle_t		viewangle;
+	fixed_t		Alpha;
+	bool		Additive;
 
 	// kg3D - keep track of mirror and skybox owner
 	int CurrentSkybox;
@@ -62,7 +63,7 @@ struct visplane_s
 
 	unsigned short *bottom;			// [RH] bottom and top arrays are dynamically
 	unsigned short pad;				//		allocated immediately after the
-	unsigned short top[3];			//		visplane.
+	unsigned short top[];			//		visplane.
 };
 typedef struct visplane_s visplane_t;
 
@@ -86,17 +87,19 @@ void R_InitPlanes ();
 void R_DeinitPlanes ();
 void R_ClearPlanes (bool fullclear);
 
-void R_DrawPlanes ();
+int R_DrawPlanes ();
 void R_DrawSkyBoxes ();
 void R_DrawSkyPlane (visplane_t *pl);
-void R_DrawNormalPlane (visplane_t *pl, fixed_t alpha, bool masked);
-void R_DrawTiltedPlane (visplane_t *pl, fixed_t alpha, bool masked);
+void R_DrawNormalPlane (visplane_t *pl, fixed_t alpha, bool additive, bool masked);
+void R_DrawTiltedPlane (visplane_t *pl, fixed_t alpha, bool additive, bool masked);
 void R_MapVisPlane (visplane_t *pl, void (*mapfunc)(int y, int x1));
 
 visplane_t *R_FindPlane
 ( const secplane_t &height,
   FTextureID	picnum,
   int			lightlevel,
+  fixed_t		alpha,
+  bool			additive,
   fixed_t		xoffs,		// killough 2/28/98: add x-y offsets
   fixed_t		yoffs,
   fixed_t		xscale,
@@ -114,6 +117,5 @@ bool R_PlaneInitData (void);
 
 extern visplane_t*		floorplane;
 extern visplane_t*		ceilingplane;
-
 
 #endif // __R_PLANE_H__

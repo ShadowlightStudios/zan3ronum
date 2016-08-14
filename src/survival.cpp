@@ -77,7 +77,7 @@ CUSTOM_CVAR( Int, sv_maxlives, 0, CVAR_SERVERINFO | CVAR_LATCH )
 
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 	}
 }
@@ -108,8 +108,7 @@ void SURVIVAL_Tick( void )
 	{
 	case SURVS_WAITINGFORPLAYERS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -131,8 +130,7 @@ void SURVIVAL_Tick( void )
 
 			// FIGHT!
 			if (( g_ulSurvivalCountdownTicks == 0 ) &&
-				( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+				( NETWORK_InClientMode() == false ))
 			{
 				SURVIVAL_DoFight( );
 			}
@@ -147,8 +145,7 @@ void SURVIVAL_Tick( void )
 		break;
 	case SURVS_INPROGRESS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -188,8 +185,7 @@ void SURVIVAL_StartCountdown( ULONG ulTicks )
 	}
 */
 	// Put the game in a countdown state.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		SURVIVAL_SetState( SURVS_COUNTDOWN );
 	}
@@ -212,8 +208,7 @@ void SURVIVAL_DoFight( void )
 	DHUDMessageFadeOut	*pMsg;
 
 	// The battle is now in progress.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		SURVIVAL_SetState( SURVS_INPROGRESS );
 	}
@@ -223,6 +218,9 @@ void SURVIVAL_DoFight( void )
 
 	// Reset everyone's kill count.
 	GAMEMODE_ResetPlayersKillCount ( false );
+
+	// Revert the map to how it was in its original state.
+	GAME_ResetMap( );
 
 	// Tell clients to "fight!".
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -249,8 +247,6 @@ void SURVIVAL_DoFight( void )
 	else
 		Printf( "FIGHT!\n" );
 
-	// Revert the map to how it was in its original state.
-	GAME_ResetMap( );
 	GAMEMODE_RespawnAllPlayers( );
 
 	// [BB] To properly handle respawning of the consoleplayer in single player

@@ -174,12 +174,16 @@ enum
 // This is the longest possible string we can pass over the network.
 #define	MAX_NETWORK_STRING			2048
 
+//*****************************************************************************
+// [BB] Allows to easily use char[4][4] references as function arguments.
+typedef char IPStringArray[4][4];
+
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- STRUCTURES ------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 
 //*****************************************************************************
-typedef struct
+struct NETADDRESS_s
 {
 	// Four digit IP address.
 	BYTE		abIP[4];
@@ -190,7 +194,24 @@ typedef struct
 	// What's this for?
 	USHORT		usPad;
 
-} NETADDRESS_s;
+	NETADDRESS_s();
+	explicit NETADDRESS_s ( const char* string, bool* ok = NULL );
+
+	bool Compare ( const NETADDRESS_s& other, bool ignorePort = false ) const;
+	bool CompareNoPort ( const NETADDRESS_s& other ) const { return Compare( other, true ); }
+	const char* ToHostName() const;
+	void ToIPStringArray ( IPStringArray& address ) const;
+	struct sockaddr_in ToSocketAddress() const;
+	void SetPort ( USHORT port );
+	const char* ToString() const;
+	const char* ToStringNoPort() const;
+	bool LoadFromString( const char* string );
+	void LoadFromSocketAddress ( const struct sockaddr_in& sockaddr );
+
+private:
+	bool operator==( const NETADDRESS_s& );
+	bool operator!=( const NETADDRESS_s& );
+};
 
 //*****************************************************************************
 typedef struct
@@ -207,14 +228,20 @@ typedef struct
 } IPADDRESSBAN_s;
 
 //*****************************************************************************
-typedef struct
+struct BYTESTREAM_s
 {
+	BYTESTREAM_s();
+	void EnsureBitSpace( int bits, bool writing );
+
 	// Pointer to our stream of data.
 	BYTE		*pbStream;
 
 	// Pointer to the end of the stream. When pbStream > pbStreamEnd, the
 	// entire stream has been read.
 	BYTE		*pbStreamEnd;
+
+	BYTE		*bitBuffer;
+	int			bitShift;
 
 #ifdef CREATE_PACKET_LOG
 	// [RC] Pointer to the start of the stream.
@@ -223,8 +250,7 @@ typedef struct
 	// [RC] Whether or not we've logged this.
 	bool		bPacketAlreadyLogged;
 #endif
-
-} BYTESTREAM_s;
+};
 
 
 //*****************************************************************************
@@ -248,10 +274,6 @@ typedef struct
 
 } NETBUFFER_s;
 
-//*****************************************************************************
-// [BB] Allows to easily use char[4][4] references as function arguments.
-typedef char IPStringArray[4][4];
-
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- PROTOTYPES ------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------------------------------------------------
@@ -270,21 +292,20 @@ int				NETWORK_ReadShort( BYTESTREAM_s *pByteStream );
 int				NETWORK_ReadLong( BYTESTREAM_s *pByteStream );
 float			NETWORK_ReadFloat( BYTESTREAM_s *pByteStream );
 const char		*NETWORK_ReadString( BYTESTREAM_s *pByteStream );
+bool			NETWORK_ReadBit( BYTESTREAM_s *byteStream );
+int				NETWORK_ReadVariable( BYTESTREAM_s *byteStream );
+int				NETWORK_ReadShortByte ( BYTESTREAM_s* byteStream, int bits );
 void			NETWORK_WriteByte( BYTESTREAM_s *pByteStream, int Byte );
 void			NETWORK_WriteShort( BYTESTREAM_s *pByteStream, int Short );
 void			NETWORK_WriteLong( BYTESTREAM_s *pByteStream, int Long );
 void			NETWORK_WriteFloat( BYTESTREAM_s *pByteStream, float Float );
 void			NETWORK_WriteString( BYTESTREAM_s *pByteStream, const char *pszString );
+void			NETWORK_WriteBit( BYTESTREAM_s *byteStream, bool bit );
+void			NETWORK_WriteVariable( BYTESTREAM_s *byteStream, int value );
+void			NETWORK_WriteShortByte( BYTESTREAM_s *byteStream, int value, int bits );
 
 void			NETWORK_WriteHeader( BYTESTREAM_s *pByteStream, int Byte );
-bool			NETWORK_CompareAddress( NETADDRESS_s Address1, NETADDRESS_s Address2, bool bIgnorePort );
-bool			NETWORK_StringToAddress( const char *pszString, NETADDRESS_s *pAddress );
-void			NETWORK_SocketAddressToNetAddress( struct sockaddr_in *s, NETADDRESS_s *a );
-void			NETWORK_NetAddressToSocketAddress( NETADDRESS_s &Address, struct sockaddr_in &SocketAddress );
 bool			NETWORK_StringToIP( const char *pszAddress, char *pszIP0, char *pszIP1, char *pszIP2, char *pszIP3 );
-void			NETWORK_AddressToIPStringArray( const NETADDRESS_s &Address, IPStringArray &szAddress );
-const char		*NETWORK_GetHostByIPAddress( NETADDRESS_s Address );
-std::string		GenerateCouldNotOpenFileErrorString( const char *pszFunctionHeader, const char *pszFileName, LONG lErrorCode );
 
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- CLASSES ---------------------------------------------------------------------------------------------------------------------------------------

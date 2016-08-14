@@ -40,7 +40,7 @@
 #include "i_musicinterns.h"
 #include "c_cvars.h"
 #include "critsec.h"
-#include "gme.h"
+#include <gme/gme.h>
 #include "v_text.h"
 
 // MACROS ------------------------------------------------------------------
@@ -349,6 +349,7 @@ bool GMESong::Read(SoundStream *stream, void *buff, int len, void *userdata)
 		else
 		{
 			memset(buff, 0, len);
+			song->CritSec.Leave();
 			return false;
 		}
 	}

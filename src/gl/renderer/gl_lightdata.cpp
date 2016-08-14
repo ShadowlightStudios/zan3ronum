@@ -40,6 +40,7 @@
 
 
 #include "gl/system/gl_system.h"
+#include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/data/gl_data.h"
 #include "gl/renderer/gl_colormap.h"
@@ -54,8 +55,6 @@
 
 // [BB] New #includes.
 #include "gl/gl_functions.h"
-
-//
 
 // externally settable lighting properties
 static float distfogtable[2][256];	// light to fog conversion table for black fog
@@ -72,6 +71,7 @@ CUSTOM_CVAR (Int, gl_light_ambient, 20, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 CVAR(Int, gl_weaponlight, 8, CVAR_ARCHIVE);
 CVAR(Bool,gl_enhanced_nightvision,true,CVAR_ARCHIVE)
+CVAR(Bool, gl_brightfog, false, CVAR_ARCHIVE);
 
 
 
@@ -131,24 +131,24 @@ CUSTOM_CVAR(Int,gl_fogmode,1,CVAR_ARCHIVE|CVAR_NOINITCALL)
 {
 	if (self>2) self=2;
 	if (self<0) self=0;
-	if (self == 2 && gl.shadermodel == 2) self = 1;
-	if (gl.shadermodel == 3) GLRenderer->mShaderManager->Recompile();
+	if (self == 2 && gl.shadermodel < 4) self = 1;
 }
 
 CUSTOM_CVAR(Int, gl_lightmode, 3 ,CVAR_ARCHIVE|CVAR_NOINITCALL)
 {
-	if (self>4) self=4;
-	if (self<0) self=0;
-	if (self == 2 && gl.shadermodel == 2) self = 3;
+	int newself = self;
+	if (newself > 4) newself=8;	// use 8 for software lighting to avoid conflicts with the bit mask
+	if (newself < 0) newself=0;
+	if ((newself == 2 || newself == 8) && gl.shadermodel < 4) newself = 3;
+	if (self != newself) self = newself;
 
 	// [BB] Enforce Doom lighting if requested by the dmflags.
 	// [EP] Honor the MAPINFO lightmode option if present.
 	if ( zadmflags & ZADF_FORCE_GL_DEFAULTS )
-		glset.lightmode = (( glset.map_lightmode < 0 ) || ( glset.map_lightmode > 4 ) ||
-			( glset.map_lightmode == 2 && gl.shadermodel == 2 )) ? 3 : glset.map_lightmode;
+		glset.lightmode = (( IsLightmodeValid() == false ) ||
+			( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && gl.shadermodel < 4 )) ? 3 : glset.map_lightmode;
 	else
-		glset.lightmode = self;
-	if (gl.shadermodel == 3) GLRenderer->mShaderManager->Recompile();
+		glset.lightmode = newself;
 }
 
 
@@ -165,11 +165,12 @@ void gl_GetRenderStyle(FRenderStyle style, bool drawopaque, bool allowcolorblend
 					   int *tm, int *sb, int *db, int *be)
 {
 	static int blendstyles[] = { GL_ZERO, GL_ONE, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA };
-	static int renderops[] = { 0, GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, -1, -1, -1, -1};
+	static int renderops[] = { 0, GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, -1, -1, -1, -1, 
+		-1, -1, -1, -1, -1, -1, -1, -1 };
 
 	int srcblend = blendstyles[style.SrcAlpha&3];
 	int dstblend = blendstyles[style.DestAlpha&3];
-	int blendequation = renderops[style.BlendOp&7];
+	int blendequation = renderops[style.BlendOp&15];
 	int texturemode = drawopaque? TM_OPAQUE : TM_MODULATE;
 
 	if (style.Flags & STYLEF_ColorIsFixed)
@@ -232,7 +233,7 @@ int gl_CalcLightLevel(int lightlevel, int rellight, bool weapon)
 
 	if (lightlevel == 0) return 0;
 
-	if (glset.lightmode&2 && lightlevel<192 && !weapon) 
+	if ((glset.lightmode & 2) && lightlevel < 192 && !weapon) 
 	{
 		light = xs_CRoundToInt(192.f - (192-lightlevel)* 1.95f);
 	}
@@ -241,7 +242,7 @@ int gl_CalcLightLevel(int lightlevel, int rellight, bool weapon)
 		light=lightlevel;
 	}
 
-	if (light<gl_light_ambient) 
+	if (light<gl_light_ambient && glset.lightmode != 8)		// ambient clipping only if not using software lighting model.
 	{
 		light = gl_light_ambient;
 		if (rellight<0) rellight>>=1;
@@ -255,11 +256,15 @@ int gl_CalcLightLevel(int lightlevel, int rellight, bool weapon)
 //
 //==========================================================================
 
-PalEntry gl_CalcLightColor(int light, PalEntry pe, int blendfactor)
+PalEntry gl_CalcLightColor(int light, PalEntry pe, int blendfactor, bool force)
 {
 	int r,g,b;
 
-	if (blendfactor == 0)
+	if (glset.lightmode == 8 && !force)
+	{
+		return pe;
+	}
+	else if (blendfactor == 0)
 	{
 		r = pe.r * light / 255;
 		g = pe.g * light / 255;
@@ -338,8 +343,27 @@ void gl_SetColor(int light, int rellight, const FColormap * cm, float *red, floa
 void gl_SetColor(int light, int rellight, const FColormap * cm, float alpha, PalEntry ThingColor, bool weapon)
 { 
 	float r,g,b;
+
 	gl_GetLightColor(light, rellight, cm, &r, &g, &b, weapon);
-	gl.Color4f(r * ThingColor.r/255.0f, g * ThingColor.g/255.0f, b * ThingColor.b/255.0f, alpha);
+
+	if (glset.lightmode != 8)
+	{
+		glColor4f(r * ThingColor.r/255.0f, g * ThingColor.g/255.0f, b * ThingColor.b/255.0f, alpha);
+	}
+	else
+	{ 
+		glColor4f(r, g, b, alpha);
+
+		if (gl_fixedcolormap)
+		{
+			glVertexAttrib1f(VATTR_LIGHTLEVEL, 1.0);
+		}
+		else
+		{
+			float lightlevel = gl_CalcLightLevel(light, rellight, weapon) / 255.0f;
+			glVertexAttrib1f(VATTR_LIGHTLEVEL, lightlevel); 
+		}
+	}
 }
 
 //==========================================================================
@@ -372,7 +396,14 @@ float gl_GetFogDensity(int lightlevel, PalEntry fogcolor)
 	else if ((fogcolor.d & 0xffffff) == 0)
 	{
 		// case 1: black fog
-		density=distfogtable[glset.lightmode!=0][lightlevel];
+		if (glset.lightmode != 8)
+		{
+			density=distfogtable[glset.lightmode!=0][gl_ClampLight(lightlevel)];
+		}
+		else
+		{
+			density = 0;
+		}
 	}
 	else if (outsidefogdensity != 0 && outsidefogcolor.a!=0xff && (fogcolor.d & 0xffffff) == (outsidefogcolor.d & 0xffffff))
 	{
@@ -452,7 +483,7 @@ bool gl_CheckFog(sector_t *frontsector, sector_t *backsector)
 	{
 		frontfog = true;
 	}
-	else  if (fogdensity!=0)
+	else  if (fogdensity!=0 || (glset.lightmode & 4))
 	{
 		// case 3: level has fog density set
 		frontfog = true;
@@ -475,7 +506,7 @@ bool gl_CheckFog(sector_t *frontsector, sector_t *backsector)
 	{
 		backfog = true;
 	}
-	else  if (fogdensity!=0)
+	else  if (fogdensity!=0 || (glset.lightmode & 4))
 	{
 		// case 3: level has fog density set
 		backfog = true;
@@ -597,6 +628,10 @@ void gl_SetFog(int lightlevel, int rellight, const FColormap *cmap, bool isaddit
 
 		gl_RenderState.EnableFog(true);
 		gl_RenderState.SetFog(fogcolor, fogdensity);
+
+		// Korshun: fullbright fog like in software renderer.
+		if (glset.lightmode == 8 && glset.brightfog && fogdensity != 0 && fogcolor != 0)
+			glVertexAttrib1f(VATTR_LIGHTLEVEL, 1.0);
 	}
 }
 
@@ -609,7 +644,7 @@ void gl_SetFog(int lightlevel, int rellight, const FColormap *cmap, bool isaddit
 void gl_ModifyColor(BYTE & red, BYTE & green, BYTE & blue, int cm)
 {
 	int gray = (red*77 + green*143 + blue*36)>>8;
-	if (cm >= CM_FIRSTSPECIALCOLORMAP && cm < CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size())
+	if (cm >= CM_FIRSTSPECIALCOLORMAP && cm < CM_MAXCOLORMAP)
 	{
 		PalEntry pe = SpecialColormaps[cm - CM_FIRSTSPECIALCOLORMAP].GrayscaleToColor[gray];
 		red = pe.r;

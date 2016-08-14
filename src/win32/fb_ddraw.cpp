@@ -143,6 +143,7 @@ DDrawFB::DDrawFB (int width, int height, bool fullscreen)
 	NeedGammaUpdate = false;
 	NeedPalUpdate = false;
 	NeedResRecreate = false;
+	PaletteChangeExpected = false;
 	MustBuffer = false;
 	BufferingNow = false;
 	WasBuffering = false;
@@ -461,7 +462,7 @@ bool DDrawFB::CreateSurfacesComplex ()
 {
 	DDSURFACEDESC ddsd = { sizeof(ddsd), };
 	HRESULT hr;
-	int tries = 0;
+	int tries = 2;
 
 	LOG ("creating surfaces using a complex primary\n");
 
@@ -717,7 +718,7 @@ void DDrawFB::PaletteChanged ()
 	// they are obviously jerks, and we need to restore our own palette.
 	if (!Windowed)
 	{
-		if (Palette != NULL)
+		if (!PaletteChangeExpected && Palette != NULL)
 		{
 			// It is not enough to set NeedPalUpdate to true. Some palette
 			// entries might now be reserved for system usage, and nothing
@@ -729,6 +730,7 @@ void DDrawFB::PaletteChanged ()
 			// somebody tries to lock it.
 			NeedResRecreate = true;
 		}
+		PaletteChangeExpected = false;
 	}
 	else
 	{
@@ -784,6 +786,25 @@ void DDrawFB::RebuildColorTable ()
 	}
 }
 
+bool DDrawFB::Is8BitMode()
+{
+	if (Windowed)
+	{
+		return Write8bit;
+	}
+	DDPIXELFORMAT fmt = { sizeof(fmt), };
+	HRESULT hr;
+
+	hr = PrimarySurf->GetPixelFormat(&fmt);
+	if (SUCCEEDED(hr))
+	{
+		return !!(fmt.dwFlags & DDPF_PALETTEINDEXED8);
+	}
+	// Can't get the primary surface's pixel format, so assume
+	// vid_displaybits is accurate.
+	return vid_displaybits == 8;
+}
+
 bool DDrawFB::IsValid ()
 {
 	return PrimarySurf != NULL;
@@ -792,11 +813,6 @@ bool DDrawFB::IsValid ()
 HRESULT DDrawFB::GetHR ()
 {
 	return LastHR;
-}
-
-bool DDrawFB::Lock ()
-{
-	return Lock (false);
 }
 
 bool DDrawFB::Lock (bool useSimpleCanvas)
@@ -1180,6 +1196,10 @@ void DDrawFB::Update ()
 	LockCount = 0;
 	UpdatePending = false;
 
+	if (FPSLimitEvent != NULL)
+	{
+		WaitForSingleObject(FPSLimitEvent, 1000);
+	}
 	if (!Windowed && AppActive && !SessionState /*&& !UseBlitter && !MustBuffer*/)
 	{
 		HRESULT hr = PrimarySurf->Flip (NULL, FlipFlags);
@@ -1197,6 +1217,7 @@ void DDrawFB::Update ()
 
 	if (pchanged && AppActive && !SessionState)
 	{
+		PaletteChangeExpected = true;
 		Palette->SetEntries (0, 0, 256, PalEntries);
 	}
 }

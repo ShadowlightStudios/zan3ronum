@@ -10,7 +10,8 @@
 #include "g_level.h"
 #include "c_console.h"
 #include "c_dispatch.h"
-#include "r_main.h"
+#include "r_utility.h"
+#include "v_video.h"
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_convert.h"
 
@@ -163,25 +164,7 @@ ADD_STAT(lightstats)
 	return out;
 }
 
-extern int DirtyCount;
-
-ADD_STAT(dirty)
-{
-	static FString buff;
-	static int lasttime=0;
-	int t=I_FPSTime();
-	if (t-lasttime>1000) 
-	{
-		buff.Format("Dirty=%2.8f (%d)\n", Dirty.TimeMS(), DirtyCount);
-		lasttime=t;
-	}
-	Dirty.Reset();
-	DirtyCount = 0;
-	return buff;
-}
-
 void AppendMissingTextureStats(FString &out);
-extern int viewpitch;
 
 
 static int printstats;

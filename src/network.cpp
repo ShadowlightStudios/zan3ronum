@@ -69,6 +69,7 @@
 #include <list>
 #include "../GeoIP/GeoIP.h"
 
+#include "c_console.h"
 #include "c_dispatch.h"
 #include "cl_demo.h"
 #include "cl_main.h"
@@ -85,6 +86,7 @@
 #include "p_lnspec.h"
 #include "cmdlib.h"
 #include "templates.h"
+#include "p_acs.h"
 
 #include "md5.h"
 #include "network/sv_auth.h"
@@ -95,12 +97,11 @@ enum LumpAuthenticationMode {
 	ALL_LUMPS
 };
 
-// [BB] Implement the string table and the conversion functions for the SVC and SVC2 enums (so far only needed in debug mode).
-#ifdef _DEBUG
+// [BB] Implement the string table and the conversion functions for the SVC and SVC2 enums.
+#include "network_enums.h"
 #define GENERATE_ENUM_STRINGS  // Start string generation
 #include "network_enums.h"
 #undef GENERATE_ENUM_STRINGS   // Stop string generation
-#endif
 
 void SERVERCONSOLE_UpdateIP( NETADDRESS_s LocalAddress );
 
@@ -147,6 +148,14 @@ static	TArray<const PClass*> g_ActorNetworkIndexClassPointerMap;
 // [BB]
 static GeoIP * g_GeoIPDB = NULL;
 
+// [BB]
+extern int restart;
+
+// [TP] Named ACS scripts share the name pool with all other names in the engine, which means named script numbers may
+// differ wildly between systems, e.g. if the server and client have different vid_renderer values the names will
+// already be off. So we create a special index of script names here.
+static TArray<FName> g_ACSNameIndex;
+
 //*****************************************************************************
 //	PROTOTYPES
 
@@ -169,94 +178,110 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 	// Initialize the Huffman buffer.
 	HUFFMAN_Construct( );
 
+	if ( !restart )
+	{
 #ifdef __WIN32__
-	// [BB] Linux doesn't know WSADATA, so this may not be moved outside the ifdef.
-	WSADATA			WSAData;
-	if ( WSAStartup( 0x0101, &WSAData ))
-		network_Error( "Winsock initialization failed!\n" );
+		// [BB] Linux doesn't know WSADATA, so this may not be moved outside the ifdef.
+		WSADATA			WSAData;
+		if ( WSAStartup( 0x0101, &WSAData ))
+			network_Error( "Winsock initialization failed!\n" );
 
-	Printf( "Winsock initialization succeeded!\n" );
+		Printf( "Winsock initialization succeeded!\n" );
 #endif
 
-	ULONG ulInAddr = INADDR_ANY;
-	const char* pszIPAddress = Args->CheckValue( "-useip" );
-	// [BB] An IP was specfied. Check if it's valid and if it is, try to bind our socket to it.
-	if ( pszIPAddress )
-	{
-		ULONG requestedIP = inet_addr( pszIPAddress );
-		if ( requestedIP == INADDR_NONE )
+		ULONG ulInAddr = INADDR_ANY;
+		const char* pszIPAddress = Args->CheckValue( "-useip" );
+		// [BB] An IP was specfied. Check if it's valid and if it is, try to bind our socket to it.
+		if ( pszIPAddress )
 		{
-			sprintf( szString, "NETWORK_Construct: %s is not a valid IP address\n", pszIPAddress );
-			network_Error( szString );
-		}
-		else
-			ulInAddr = requestedIP;
-	}
-
-	g_usLocalPort = usPort;
-
-	// Allocate a socket, and attempt to bind it to the given port.
-	g_NetworkSocket = network_AllocateSocket( );
-	// [BB] If we can't allocate a socket, sending / receiving net packets won't work.
-	if ( g_NetworkSocket == INVALID_SOCKET )
-		network_Error( "NETWORK_Construct: Couldn't allocate socket. You will not be able to host or join servers.\n" );
-	else if ( network_BindSocketToPort( g_NetworkSocket, ulInAddr, g_usLocalPort, false ) == false )
-	{
-		bSuccess = true;
-		bool bSuccessIP = true;
-		usNewPort = g_usLocalPort;
-		while ( network_BindSocketToPort( g_NetworkSocket, ulInAddr, ++usNewPort, false ) == false )
-		{
-			// Didn't find an available port. Oh well...
-			if ( usNewPort == g_usLocalPort )
+			ULONG requestedIP = inet_addr( pszIPAddress );
+			if ( requestedIP == INADDR_NONE )
 			{
-				// [BB] We couldn't use the specified IP, so just try any.
-				if ( ulInAddr != INADDR_ANY )
+				sprintf( szString, "NETWORK_Construct: %s is not a valid IP address\n", pszIPAddress );
+				network_Error( szString );
+			}
+			else
+				ulInAddr = requestedIP;
+		}
+
+		g_usLocalPort = usPort;
+
+		// Allocate a socket, and attempt to bind it to the given port.
+		g_NetworkSocket = network_AllocateSocket( );
+		// [BB] If we can't allocate a socket, sending / receiving net packets won't work.
+		if ( g_NetworkSocket == INVALID_SOCKET )
+			network_Error( "NETWORK_Construct: Couldn't allocate socket. You will not be able to host or join servers.\n" );
+		else if ( network_BindSocketToPort( g_NetworkSocket, ulInAddr, g_usLocalPort, false ) == false )
+		{
+			bSuccess = true;
+			bool bSuccessIP = true;
+			usNewPort = g_usLocalPort;
+			while ( network_BindSocketToPort( g_NetworkSocket, ulInAddr, ++usNewPort, false ) == false )
+			{
+				// Didn't find an available port. Oh well...
+				if ( usNewPort == g_usLocalPort )
 				{
-					ulInAddr = INADDR_ANY;
-					bSuccessIP = false;
-					continue;
+					// [BB] We couldn't use the specified IP, so just try any.
+					if ( ulInAddr != INADDR_ANY )
+					{
+						ulInAddr = INADDR_ANY;
+						bSuccessIP = false;
+						continue;
+					}
+					bSuccess = false;
+					break;
 				}
-				bSuccess = false;
-				break;
+			}
+
+			if ( bSuccess == false )
+			{
+				sprintf( szString, "NETWORK_Construct: Couldn't bind socket to port: %d\n", g_usLocalPort );
+				network_Error( szString );
+			}
+			else if ( bSuccessIP == false )
+			{
+				sprintf( szString, "NETWORK_Construct: Couldn't bind socket to IP %s, using the default IP instead:\n", pszIPAddress );
+				network_Error( szString );
+			}
+			else
+			{
+				Printf( "NETWORK_Construct: Couldn't bind to %d. Binding to %d instead...\n", g_usLocalPort, usNewPort );
+				g_usLocalPort = usNewPort;
 			}
 		}
 
-		if ( bSuccess == false )
+		ulArg = true;
+		if ( ioctlsocket( g_NetworkSocket, FIONBIO, &ulArg ) == -1 )
+			printf( "network_AllocateSocket: ioctl FIONBIO: %s", strerror( errno ));
+
+		// If we're not starting a server, setup a socket to listen for LAN servers.
+		if ( bAllocateLANSocket )
 		{
-			sprintf( szString, "NETWORK_Construct: Couldn't bind socket to port: %d\n", g_usLocalPort );
-			network_Error( szString );
+			g_LANSocket = network_AllocateSocket( );
+			if ( network_BindSocketToPort( g_LANSocket, ulInAddr, DEFAULT_BROADCAST_PORT, true ) == false )
+			{
+				sprintf( szString, "network_BindSocketToPort: Couldn't bind LAN socket to port: %d. You will not be able to see LAN servers in the browser.", DEFAULT_BROADCAST_PORT );
+				network_Error( szString );
+				// [BB] The socket won't work in this case, make sure not to use it.
+				g_bLANSocketInvalid = true;
+			}
+
+			if ( ioctlsocket( g_LANSocket, FIONBIO, &ulArg ) == -1 )
+				printf( "network_AllocateSocket: ioctl FIONBIO: %s", strerror( errno ));
 		}
-		else if ( bSuccessIP == false )
-		{
-			sprintf( szString, "NETWORK_Construct: Couldn't bind socket to IP %s, using the default IP instead:\n", pszIPAddress );
-			network_Error( szString );
-		}
+
+		// [BB] Get and save our local IP.
+		if ( ( ulInAddr == INADDR_ANY ) || ( pszIPAddress == NULL ) )
+			g_LocalAddress = NETWORK_GetLocalAddress( );
+		// [BB] We are using a specified IP, so we don't need to figure out what IP we have, but just use the specified one.
 		else
 		{
-			Printf( "NETWORK_Construct: Couldn't bind to %d. Binding to %d instead...\n", g_usLocalPort, usNewPort );
-			g_usLocalPort = usNewPort;
-		}
-	}
-
-	ulArg = true;
-	if ( ioctlsocket( g_NetworkSocket, FIONBIO, &ulArg ) == -1 )
-		printf( "network_AllocateSocket: ioctl FIONBIO: %s", strerror( errno ));
-
-	// If we're not starting a server, setup a socket to listen for LAN servers.
-	if ( bAllocateLANSocket )
-	{
-		g_LANSocket = network_AllocateSocket( );
-		if ( network_BindSocketToPort( g_LANSocket, ulInAddr, DEFAULT_BROADCAST_PORT, true ) == false )
-		{
-			sprintf( szString, "network_BindSocketToPort: Couldn't bind LAN socket to port: %d. You will not be able to see LAN servers in the browser.", DEFAULT_BROADCAST_PORT );
-			network_Error( szString );
-			// [BB] The socket won't work in this case, make sure not to use it.
-			g_bLANSocketInvalid = true;
+			g_LocalAddress.LoadFromString( pszIPAddress );
+			g_LocalAddress.usPort = htons ( NETWORK_GetLocalPort() );
 		}
 
-		if ( ioctlsocket( g_LANSocket, FIONBIO, &ulArg ) == -1 )
-			printf( "network_AllocateSocket: ioctl FIONBIO: %s", strerror( errno ));
+		// Print out our local IP address.
+		Printf( "IP address %s\n", g_LocalAddress.ToString() );
 	}
 
 	// Init our read buffer.
@@ -266,19 +291,6 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 	// the incoming UDP packet.
 	NETWORK_InitBuffer( &g_NetworkMessage, ((MAX_UDP_PACKET * 8) / 3 + 1), BUFFERTYPE_READ );
 	NETWORK_ClearBuffer( &g_NetworkMessage );
-
-	// [BB] Get and save our local IP.
-	if ( ( ulInAddr == INADDR_ANY ) || ( pszIPAddress == NULL ) )
-		g_LocalAddress = NETWORK_GetLocalAddress( );
-	// [BB] We are using a specified IP, so we don't need to figure out what IP we have, but just use the specified one.
-	else
-	{
-		NETWORK_StringToAddress ( pszIPAddress, &g_LocalAddress );
-		g_LocalAddress.usPort = htons ( NETWORK_GetLocalPort() );
-	}
-
-	// Print out our local IP address.
-	Printf( "IP address %s\n", NETWORK_AddressToString( g_LocalAddress ));
 
 	// If hosting, update the server GUI.
 	if( NETWORK_GetState() == NETSTATE_SERVER )
@@ -421,6 +433,7 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 	}
 
 	// [BB] Initialize the actor network class indices.
+	g_ActorNetworkIndexClassPointerMap.Clear();
 	for ( unsigned int i = 0; i < PClass::m_Types.Size(); i++ )
 	{
 		PClass* cls = PClass::m_Types[i];
@@ -462,7 +475,7 @@ void NETWORK_Construct( USHORT usPort, bool bAllocateLANSocket )
 		// "'THINGS' not found in'. I don't think this is the case in recent ZDoom versions?
 		try
 		{
-			if (( mdata = P_OpenMapData( info.mapname )) != NULL )
+			if (( mdata = P_OpenMapData( info.mapname, false )) != NULL )
 			{
 				// [TP] The wad that had this map is no longer optional.
 				Wads.LumpIsMandatory( mdata->lumpnum );
@@ -497,6 +510,10 @@ void NETWORK_Destruct( void )
 
 	// [BB] Delete the GeoIP database.
 	GeoIP_delete ( g_GeoIPDB );
+	g_GeoIPDB = NULL;
+
+	// [BB] This needs to be cleared since we assume it to be empty during a restart.
+	g_LumpNumsToAuthenticate.Clear();
 }
 
 //*****************************************************************************
@@ -535,7 +552,7 @@ int NETWORK_GetPackets( void )
 
 		if ( errno == WSAEMSGSIZE )
 		{
-			Printf( "NETWORK_GetPackets:  WARNING! Oversize packet from %s\n", NETWORK_AddressToString( g_AddressFrom ));
+			Printf( "NETWORK_GetPackets:  WARNING! Oversized packet from %s\n", g_AddressFrom.ToString() );
 			return ( false );
 		}
 
@@ -566,11 +583,11 @@ int NETWORK_GetPackets( void )
 		return ( 0 );
 
 	// Store the IP address of the sender.
-	NETWORK_SocketAddressToNetAddress( &SocketFrom, &g_AddressFrom );
+	g_AddressFrom.LoadFromSocketAddress( SocketFrom );
 
 	// Decode the huffman-encoded message we received.
 	// [BB] Communication with the auth server is not Huffman-encoded.
-	if ( NETWORK_CompareAddress( g_AddressFrom, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+	if ( g_AddressFrom.Compare( NETWORK_AUTH_GetCachedServerAddress() ) == false )
 	{
 		HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
 		g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
@@ -584,6 +601,8 @@ int NETWORK_GetPackets( void )
 	}
 	g_NetworkMessage.ByteStream.pbStream = g_NetworkMessage.pbData;
 	g_NetworkMessage.ByteStream.pbStreamEnd = g_NetworkMessage.ByteStream.pbStream + g_NetworkMessage.ulCurrentSize;
+	g_NetworkMessage.ByteStream.bitBuffer = NULL;
+	g_NetworkMessage.ByteStream.bitShift = -1;
 
 	return ( g_NetworkMessage.ulCurrentSize );
 }
@@ -624,7 +643,7 @@ int NETWORK_GetLANPackets( void )
 
         if ( errno == WSAEMSGSIZE )
 		{
-             Printf( "NETWORK_GetPackets:  WARNING! Oversize packet from %s\n", NETWORK_AddressToString( g_AddressFrom ));
+             Printf( "NETWORK_GetPackets:  WARNING! Oversized packet from %s\n", g_AddressFrom.ToString() );
              return ( false );
         }
 
@@ -655,11 +674,11 @@ int NETWORK_GetLANPackets( void )
 		return ( 0 );
 
 	// Store the IP address of the sender.
-	NETWORK_SocketAddressToNetAddress( &SocketFrom, &g_AddressFrom );
+	g_AddressFrom.LoadFromSocketAddress( SocketFrom );
 
 	// Decode the huffman-encoded message we received.
 	// [BB] Communication with the auth server is not Huffman-encoded.
-	if ( NETWORK_CompareAddress( g_AddressFrom, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+	if ( g_AddressFrom.Compare( NETWORK_AUTH_GetCachedServerAddress() ) == false )
 	{
 		HUFFMAN_Decode( g_ucHuffmanBuffer, (unsigned char *)g_NetworkMessage.pbData, lNumBytes, &iDecodedNumBytes );
 		g_NetworkMessage.ulCurrentSize = iDecodedNumBytes;
@@ -690,7 +709,6 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 {
 	LONG				lNumBytes;
 	INT					iNumBytesOut = sizeof(g_ucHuffmanBuffer);
-	struct sockaddr_in	SocketAddress;
 
 	pBuffer->ulCurrentSize = NETWORK_CalcBufferSize( pBuffer );
 
@@ -699,10 +717,10 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 		return;
 
 	// Convert the IP address to a socket address.
-	NETWORK_NetAddressToSocketAddress( Address, SocketAddress );
+	struct sockaddr_in SocketAddress = Address.ToSocketAddress();
 
 	// [BB] Communication with the auth server is not Huffman-encoded.
-	if ( NETWORK_CompareAddress( Address, NETWORK_AUTH_GetCachedServerAddress( ), false ) == false )
+	if ( Address.Compare( NETWORK_AUTH_GetCachedServerAddress() ) == false )
 		HUFFMAN_Encode( (unsigned char *)pBuffer->pbData, g_ucHuffmanBuffer, pBuffer->ulCurrentSize, &iNumBytesOut );
 	else
 	{
@@ -728,19 +746,19 @@ void NETWORK_LaunchPacket( NETBUFFER_s *pBuffer, NETADDRESS_s Address )
 		{
 		case WSAEACCES:
 
-			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEACCES: Permission denied for address: %s\n", iError, NETWORK_AddressToString( Address ));
+			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEACCES: Permission denied for address: %s\n", iError, Address.ToString() );
 			return;
 		case WSAEAFNOSUPPORT:
 
-			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEAFNOSUPPORT: Address %s incompatible with the requested protocol\n", iError, NETWORK_AddressToString( Address ));
+			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEAFNOSUPPORT: Address %s incompatible with the requested protocol\n", iError, Address.ToString() );
 			return;
 		case WSAEADDRNOTAVAIL:
 
-			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEADDRENOTAVAIL: Address %s not available\n", iError, NETWORK_AddressToString( Address ));
+			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEADDRENOTAVAIL: Address %s not available\n", iError, Address.ToString() );
 			return;
 		case WSAEHOSTUNREACH:
 
-			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEHOSTUNREACH: Address %s unreachable\n", iError, NETWORK_AddressToString( Address ));
+			Printf( "NETWORK_LaunchPacket: Error #%d, WSAEHOSTUNREACH: Address %s unreachable\n", iError, Address.ToString() );
 			return;				
 		default:
 
@@ -755,7 +773,7 @@ return;
               return;
 
 		Printf( "NETWORK_LaunchPacket: %s\n", strerror( errno ));
-		Printf( "NETWORK_LaunchPacket: Address %s\n", NETWORK_AddressToString( Address ));
+		Printf( "NETWORK_LaunchPacket: Address %s\n", Address.ToString() );
 
 #endif
 	}
@@ -767,40 +785,10 @@ return;
 
 //*****************************************************************************
 //
-const char *NETWORK_AddressToString( NETADDRESS_s Address )
-{
-	static char	s_szAddress[64];
-
-	sprintf( s_szAddress, "%i.%i.%i.%i:%i", Address.abIP[0], Address.abIP[1], Address.abIP[2], Address.abIP[3], ntohs( Address.usPort ));
-
-	return ( s_szAddress );
-}
-
-//*****************************************************************************
-//
-const char *NETWORK_AddressToStringIgnorePort( NETADDRESS_s Address )
-{
-	static char	s_szAddress[64];
-
-	sprintf( s_szAddress, "%i.%i.%i.%i", Address.abIP[0], Address.abIP[1], Address.abIP[2], Address.abIP[3] );
-
-	return ( s_szAddress );
-}
-
-//*****************************************************************************
-//
-void NETWORK_SetAddressPort( NETADDRESS_s &Address, USHORT usPort )
-{
-	Address.usPort = htons( usPort );
-}
-
-//*****************************************************************************
-//
 NETADDRESS_s NETWORK_GetLocalAddress( void )
 {
 	char				szBuffer[512];
 	struct sockaddr_in	SocketAddress;
-	NETADDRESS_s		Address;
 	int					iNameLength;
 
 #ifndef __WINE__
@@ -809,7 +797,8 @@ NETADDRESS_s NETWORK_GetLocalAddress( void )
 	szBuffer[512-1] = 0;
 
 	// Convert the host name to our local 
-	bool stringToAddress = NETWORK_StringToAddress( szBuffer, &Address );
+	bool ok;
+	NETADDRESS_s Address ( szBuffer, &ok );
 
 	iNameLength = sizeof( SocketAddress );
 #ifndef	WIN32
@@ -824,7 +813,7 @@ NETADDRESS_s NETWORK_GetLocalAddress( void )
 #ifdef unix
 	// [BB] The "gethostname -> gethostbyname" trick didn't reveal the local IP.
 	// Now we need to resort to something more complicated.
-	if ( stringToAddress == false );
+	if ( ok == false )
 	{
 #ifndef __FreeBSD__
 		unsigned char      *u;
@@ -961,7 +950,7 @@ bool NETWORK_IsGeoIPAvailable ( void )
 // [BB] 
 FString NETWORK_GetCountryCodeFromAddress( NETADDRESS_s Address )
 {
-	const char * addressString = NETWORK_AddressToStringIgnorePort( Address );
+	const char * addressString = Address.ToStringNoPort();
 	if ( ( strnicmp( "10.", addressString, 3 ) == 0 ) ||
 		 ( strnicmp( "192.168.", addressString, 8 ) == 0 ) ||
 		 ( strnicmp( "127.", addressString, 4 ) == 0 ) )
@@ -970,7 +959,7 @@ FString NETWORK_GetCountryCodeFromAddress( NETADDRESS_s Address )
 	if ( g_GeoIPDB == NULL )
 		return "";
 
-	FString country = GeoIP_country_code_by_addr ( g_GeoIPDB, NETWORK_AddressToStringIgnorePort( Address ) );
+	FString country = GeoIP_country_code_by_addr ( g_GeoIPDB, Address.ToStringNoPort() );
 	return country.IsEmpty() ? "N/A" : country;
 }
 
@@ -1063,7 +1052,7 @@ FString NETWORK_MapCollectionChecksum( )
 		if ( P_CheckIfMapExists ( mname ) == false )
 			continue;
 
-		MapData* mdata = P_OpenMapData( mname );
+		MapData* mdata = P_OpenMapData( mname, false );
 		if ( !mdata )
 			continue;
 
@@ -1087,6 +1076,133 @@ void NETWORK_MakeMapCollectionChecksum( )
 {
 	if ( g_MapCollectionChecksum.IsEmpty( ) )
 		g_MapCollectionChecksum = NETWORK_MapCollectionChecksum( );
+}
+
+//*****************************************************************************
+// [TP]
+static int STACK_ARGS namesort( const void* p1, const void* p2 )
+{
+	FName n1 = *reinterpret_cast<const FName*>( p1 );
+	FName n2 = *reinterpret_cast<const FName*>( p2 );
+	return stricmp( n1, n2 );
+}
+
+//*****************************************************************************
+// [TP] Generates a name index of scripts for the below conversions. Done at map load.
+void NETWORK_MakeScriptNameIndex()
+{
+	g_ACSNameIndex = FBehavior::StaticGetAllScriptNames();
+	qsort( &g_ACSNameIndex[0], g_ACSNameIndex.Size(), sizeof g_ACSNameIndex[0], namesort );
+
+	// Remove duplicates if there are any
+	for ( unsigned int i = 1; i < g_ACSNameIndex.Size(); )
+	{
+		if ( g_ACSNameIndex[i - 1] == g_ACSNameIndex[i] )
+			g_ACSNameIndex.Delete( i );
+		else
+			++i;
+	}
+}
+
+//*****************************************************************************
+// [TP] Converts a network representation of a script to a local script number.
+int NETWORK_ACSScriptFromNetID( int netid )
+{
+	if ( netid < 0 )
+	{
+		unsigned idx = -netid - 2;
+		if ( idx < g_ACSNameIndex.Size() )
+		{
+			return -g_ACSNameIndex[idx];
+		}
+		else
+		{
+			return 0;
+		}
+	}
+	else
+	{
+		return netid;
+	}
+}
+
+//*****************************************************************************
+// [TP] Converts a script number to a network representation.
+int NETWORK_ACSScriptToNetID( int script )
+{
+	if ( script < 0 )
+	{
+		FName name = FName ( ENamedName ( -script ));
+		for ( int i = 0; i < (signed) g_ACSNameIndex.Size(); ++i )
+		{
+			if ( g_ACSNameIndex[i] == name )
+			{
+				return -i - 2;
+			}
+		}
+
+		return NO_SCRIPT_NETID;
+	}
+	else
+	{
+		return script;
+	}
+}
+
+//*****************************************************************************
+//
+FName NETWORK_ReadName( BYTESTREAM_s* bytestream )
+{
+	SDWORD index = NETWORK_ReadShort( bytestream );
+
+	if ( index == -1 )
+		return FName( NETWORK_ReadString( bytestream ));
+	else
+		return FName( static_cast<ENamedName>( index ));
+}
+
+//*****************************************************************************
+//
+void NETWORK_WriteName( BYTESTREAM_s* bytestream, FName name )
+{
+	// Predefined names are the same on both the server and client in any case, so we can index those
+	// with a short instead of a string. However, the ones that don't eat up 2 more bytes.
+	// So, use this if most of the time the name is predefined.
+	if ( name.IsPredefined() )
+	{
+		NETWORK_WriteShort( bytestream, name );
+	}
+	else
+	{
+		NETWORK_WriteShort( bytestream, -1 );
+		NETWORK_WriteString( bytestream, name );
+	}
+}
+
+//*****************************************************************************
+// [TP]
+void STACK_ARGS NETWORK_Printf( const char* format, ... )
+{
+	va_list argptr;
+	va_start( argptr, format );
+
+	if ( NETWORK_GetState() == NETSTATE_SERVER )
+		SERVER_VPrintf( PRINT_HIGH, format, argptr, MAXPLAYERS );
+	else
+		VPrintf( PRINT_HIGH, format, argptr );
+
+	va_end( argptr );
+}
+
+//*****************************************************************************
+// [TP]
+CCMD( dumpacsnetids )
+{
+	for ( int i = 0; i < (signed) g_ACSNameIndex.Size(); ++i )
+	{
+		FName name = g_ACSNameIndex[i];
+		Printf( "%d: \"%s\" (%d)\n", -i - 2, name.GetChars(), name.GetIndex() );
+	}
 }
 
 // [CW]
@@ -1168,7 +1284,7 @@ bool NETWORK_IsActorClientHandled( const AActor *pActor )
 //
 bool NETWORK_InClientModeAndActorNotClientHandled( const AActor *pActor )
 {
-	return ( NETWORK_InClientMode( ) && ( NETWORK_IsActorClientHandled ( pActor ) == false ) );
+	return ( NETWORK_InClientMode() && ( NETWORK_IsActorClientHandled ( pActor ) == false ) );
 }
 
 //*****************************************************************************
@@ -1439,7 +1555,7 @@ CCMD( ip )
 
 	LocalAddress = NETWORK_GetLocalAddress( );
 
-	Printf( PRINT_HIGH, "IP address is %s\n", NETWORK_AddressToString( LocalAddress ));
+	Printf( PRINT_HIGH, "IP address is %s\n", LocalAddress.ToString() );
 }
 
 //*****************************************************************************

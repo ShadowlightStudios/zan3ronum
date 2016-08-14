@@ -61,6 +61,8 @@
 #include "lastmanstanding.h"
 #include "deathmatch.h"
 #include "chat.h"
+#include "network_enums.h"
+#include "p_acs.h"
 
 //*****************************************************************************
 //	VARIABLES
@@ -137,33 +139,34 @@ void CLIENTCOMMANDS_UserInfo( ULONG ulFlags )
 
 	if ( ulFlags & USERINFO_NAME )
 	{ // [RC] Clean the name before we use it
-		V_CleanPlayerName(players[consoleplayer].userinfo.netname);
-		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.netname );
+		// [BB] the name is already checked when storing it, so this shouldn't be necessary.
+		players[consoleplayer].userinfo.NameChanged ( players[consoleplayer].userinfo.GetName() );
+		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetName() );
 	}
 	if ( ulFlags & USERINFO_GENDER )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.gender );
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetGender() );
 	if ( ulFlags & USERINFO_COLOR )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.color );
+		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetColor() );
 	if ( ulFlags & USERINFO_AIMDISTANCE )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.aimdist );
+		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetAimDist() );
 	if ( ulFlags & USERINFO_SKIN )
-		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, skins[players[consoleplayer].userinfo.skin].name );
+		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, skins[players[consoleplayer].userinfo.GetSkin()].name );
 	if ( ulFlags & USERINFO_RAILCOLOR )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.lRailgunTrailColor );
+		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetRailColor() );
 	if ( ulFlags & USERINFO_HANDICAP )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.lHandicap );
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetHandicap() );
 	if ( ulFlags & USERINFO_TICSPERUPDATE )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.ulTicsPerUpdate );
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetTicsPerUpdate() );
 	if ( ulFlags & USERINFO_CONNECTIONTYPE )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.ulConnectionType );
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetConnectionType() );
 	if ( ulFlags & USERINFO_CLIENTFLAGS )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.clientFlags ); // [CK] Bitfields are used now.
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.GetClientFlags() ); // [CK] Bitfields are used now.
 	if (( PlayerClasses.Size( ) > 1 ) && ( ulFlags & USERINFO_PLAYERCLASS ))
 	{
-		if ( players[consoleplayer].userinfo.PlayerClass == -1 )
+		if ( players[consoleplayer].userinfo.GetPlayerClassNum() == -1 )
 			NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, "random" );
 		else
-			NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, PlayerClasses[players[consoleplayer].userinfo.PlayerClass].Type->Meta.GetMetaString( APMETA_DisplayName ));
+			NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, PlayerClasses[players[consoleplayer].userinfo.GetPlayerClassNum()].Type->Meta.GetMetaString( APMETA_DisplayName ));
 	}
 }
 
@@ -376,7 +379,7 @@ void CLIENTCOMMANDS_RequestJoin( const char *pszJoinPassword )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_RequestRCON( char *pszRCONPassword )
+void CLIENTCOMMANDS_RequestRCON( const char *pszRCONPassword )
 {
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_REQUESTRCON );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszRCONPassword );
@@ -384,7 +387,7 @@ void CLIENTCOMMANDS_RequestRCON( char *pszRCONPassword )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_RCONCommand( char *pszCommand )
+void CLIENTCOMMANDS_RCONCommand( const char *pszCommand )
 {
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_RCONCOMMAND );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszCommand );
@@ -447,9 +450,28 @@ void CLIENTCOMMANDS_GiveCheat( char *pszItem, LONG lAmount )
 
 //*****************************************************************************
 //
+void CLIENTCOMMANDS_TakeCheat( const char *item, LONG amount )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_TAKECHEAT );
+	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, item );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, amount );
+}
+
+//*****************************************************************************
+//
 void CLIENTCOMMANDS_SummonCheat( const char *pszItem, LONG lType, const bool bSetAngle, const SHORT sAngle )
 {
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, lType );
+	int commandtype = 0;
+
+	switch ( lType )
+	{
+	case DEM_SUMMON: commandtype = CLC_SUMMONCHEAT; break;
+	case DEM_SUMMONFRIEND: commandtype = CLC_SUMMONFRIENDCHEAT; break;
+	case DEM_SUMMONFOE: commandtype = CLC_SUMMONFOECHEAT; break;
+	default: return;
+	}
+
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, commandtype );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszItem );
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, bSetAngle );
 	if ( bSetAngle )
@@ -525,6 +547,13 @@ void CLIENTCOMMANDS_RequestInventoryUse( AInventory *item )
 //
 void CLIENTCOMMANDS_RequestInventoryDrop( AInventory *pItem )
 {
+	// [BB] The server may forbid dropping completely.
+	if ( zadmflags & ZADF_NODROP )
+	{
+		Printf( "Dropping items is not allowed in this server.\n" );
+		return;
+	}
+
 	if ( sv_limitcommands && ( g_ulLastDropTime > 0 ) && ( (ULONG)gametic < g_ulLastDropTime + TICRATE ))
 	{
 		Printf( "You must wait at least one second before using drop again.\n" );
@@ -544,21 +573,32 @@ void CLIENTCOMMANDS_RequestInventoryDrop( AInventory *pItem )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_Puke ( LONG lScript, int args[3] )
+void CLIENTCOMMANDS_Puke ( int scriptNum, int args[4], bool always )
 {
-	// [Dusk] Calculate argn from args.
-	int argn = ( args[2] != 0 ) ? 3 :
+	if ( ACS_ExistsScript( scriptNum ) == false )
+		return;
+
+	// [TP] Calculate argn from args.
+	int argn = ( args[3] != 0 ) ? 4 :
+	           ( args[2] != 0 ) ? 3 :
 	           ( args[1] != 0 ) ? 2 :
 	           ( args[0] != 0 ) ? 1 : 0;
 
+	const int scriptNetID = NETWORK_ACSScriptToNetID( scriptNum );
+
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_PUKE );
-	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, (lScript < 0) ? -lScript : lScript );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, scriptNetID );
+
+	// [TP/BB] If we don't have a netID on file for this script, we send the name as a string.
+	if ( scriptNetID == NO_SCRIPT_NETID )
+		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, FName( ENamedName( -scriptNum )));
+
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, argn );
 
-	for ( int Idx = 0; Idx < argn; ++Idx )
-		NETWORK_WriteLong ( &CLIENT_GetLocalBuffer( )->ByteStream, args[Idx] );
+	for ( int i = 0; i < argn; ++i )
+		NETWORK_WriteLong ( &CLIENT_GetLocalBuffer( )->ByteStream, args[i] );
 
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, (lScript < 0) );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, always );
 }
 
 //*****************************************************************************
@@ -595,4 +635,41 @@ void CLIENTCOMMANDS_InfoCheat( AActor* mobj, bool extended )
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_INFOCHEAT );
 	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, mobj->lNetID );
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, extended );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_WarpCheat( fixed_t x, fixed_t y )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_WARPCHEAT );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, x );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, y );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_KillCheat( const char* what )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_KILLCHEAT );
+	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, what );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_SpecialCheat( int special, const TArray<int> &args )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SPECIALCHEAT );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, special );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, args.Size() );
+
+	for ( unsigned int i = 0; i < args.Size(); ++i )
+		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, args[i] );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_SetWantHideAccount( bool wantHideAccount )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SETWANTHIDEACCOUNT );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, wantHideAccount );
 }

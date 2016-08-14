@@ -271,8 +271,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_MLightningAttack)
 	AActor *fmo, *cmo;
 
 	// [BC/BB] The projectile spawning is handled by the server.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		goto spawningdone;
 	}
@@ -294,7 +293,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_MLightningAttack)
 
 	// [BC] Apply spread.
 	if (( self->player ) &&
-		( self->player->cheats & CF_SPREAD ))
+		( self->player->cheats2 & CF2_SPREAD ))
 	{
 		fmo = P_SpawnPlayerMissile (self, PClass::FindClass ("LightningFloor"), self->angle + ( ANGLE_45 / 3 ));
 		cmo = P_SpawnPlayerMissile (self, PClass::FindClass ("LightningCeiling"), self->angle + ( ANGLE_45 / 3 ));
