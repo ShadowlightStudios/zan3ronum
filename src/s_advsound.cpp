@@ -46,10 +46,11 @@
 #include "gi.h"
 #include "doomstat.h"
 #include "i_sound.h"
-#include "r_data.h"
 #include "m_random.h"
 #include "d_netinf.h"
 #include "i_system.h"
+#include "d_player.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "network.h"
 #include "cl_demo.h"
@@ -102,6 +103,7 @@ public:
 	void AddSound (int player_sound_id, int sfx_id);
 	int LookupSound (int player_sound_id);
 	FPlayerSoundHashTable &operator= (const FPlayerSoundHashTable &other);
+	void MarkUsed();
 
 protected:
 	struct Entry
@@ -124,7 +126,7 @@ struct FAmbientSound
 	int			periodmax;	// max # of tics for random ambients
 	float		volume;		// relative volume of sound
 	float		attenuation;
-	FString		sound;		// Logical name of sound to play
+	FSoundID	sound;		// Sound to play
 };
 TMap<int, FAmbientSound> Ambients;
 
@@ -152,6 +154,9 @@ enum SICommands
 	SI_IfStrife,
 	SI_Rolloff,
 	SI_Volume,
+	SI_MusicAlias,
+	SI_EDFOverride,
+	SI_Attenuation,
 };
 
 // Blood was a cool game. If Monolith ever releases the source for it,
@@ -186,6 +191,7 @@ struct FSavedPlayerSoundInfo
 };
 
 // This specifies whether Timidity or Windows playback is preferred for a certain song (only useful for Windows.)
+MusicAliasMap MusicAliases;
 MidiDeviceMap MidiDevices;
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
@@ -217,6 +223,7 @@ extern int sfx_empty;
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 TArray<sfxinfo_t> S_sfx (128);
+TMap<int, FString> HexenMusic;
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -244,6 +251,9 @@ static const char *SICommandStrings[] =
 	"$ifstrife",
 	"$rolloff",
 	"$volume",
+	"$musicalias",
+	"$edfoverride",
+	"$attenuation",
 	NULL
 };
 
@@ -256,6 +266,7 @@ static bool PlayerClassesIsSorted;
 
 static TArray<FPlayerClassLookup> PlayerClassLookups;
 static TArray<FPlayerSoundHashTable> PlayerSounds;
+
 
 static FString DefPlayerClassName;
 static int DefPlayerClass;
@@ -497,6 +508,7 @@ int S_AddSoundLump (const char *logicalname, int lump)
 	newsfx.next = 0;
 	newsfx.index = 0;
 	newsfx.Volume = 1;
+	newsfx.Attenuation = 1;
 	newsfx.PitchMask = CurrentPitchMask;
 	newsfx.NearLimit = 2;
 	newsfx.LimitRange = 256*256;
@@ -510,6 +522,7 @@ int S_AddSoundLump (const char *logicalname, int lump)
 	newsfx.bUsed = false;
 	newsfx.bSingular = false;
 	newsfx.bTentative = false;
+	newsfx.bPlayerSilent = false;
 	newsfx.link = sfxinfo_t::NO_LINK;
 	newsfx.Rolloff.RolloffType = ROLLOFF_Doom;
 	newsfx.Rolloff.MinDistance = 0;
@@ -825,6 +838,25 @@ int FPlayerSoundHashTable::LookupSound (int player_sound_id)
 
 //==========================================================================
 //
+// FPlayerSoundHashTable :: Mark
+//
+// Marks all sounds defined for this class/gender as used.
+//
+//==========================================================================
+
+void FPlayerSoundHashTable::MarkUsed()
+{
+	for (size_t i = 0; i < NUM_BUCKETS; ++i)
+	{
+		for (Entry *probe = Buckets[i]; probe != NULL; probe = probe->Next)
+		{
+			S_sfx[probe->SfxID].bUsed = true;
+		}
+	}
+}
+
+//==========================================================================
+//
 // S_ClearSoundData
 //
 // clears all sound tables
@@ -857,6 +889,9 @@ static void S_ClearSoundData()
 	PlayerSounds.Clear();
 	DefPlayerClass = 0;
 	DefPlayerClassName = "";
+	MusicAliases.Clear();
+	MidiDevices.Clear();
+	HexenMusic.Clear();
 }
 
 //==========================================================================
@@ -867,10 +902,11 @@ static void S_ClearSoundData()
 // Also registers Blood SFX files and Strife's voices.
 //==========================================================================
 
-void S_ParseSndInfo ()
+void S_ParseSndInfo (bool redefine)
 {
 	int lump;
 
+	if (!redefine) SavedPlayerSounds.Clear();	// clear skin sounds only for initial parsing.
 	atterm (S_ClearSoundData);
 	S_ClearSoundData();	// remove old sound data first!
 
@@ -974,10 +1010,10 @@ static void S_AddSNDINFO (int lump)
 				ambient->periodmax = 0;
 				ambient->volume = 0;
 				ambient->attenuation = 0;
-				ambient->sound = "";
+				ambient->sound = 0;
 
 				sc.MustGetString ();
-				ambient->sound = sc.String;
+				ambient->sound = FSoundID(S_FindSoundTentative(sc.String));
 				ambient->attenuation = 0;
 
 				sc.MustGetString ();
@@ -1054,22 +1090,21 @@ static void S_AddSNDINFO (int lump)
 
 			case SI_Map: {
 				// Hexen-style $MAP command
-				level_info_t *info;
-				char temp[16];
+				int mapnum;
 
-				sc.MustGetNumber ();
-				mysnprintf (temp, countof(temp), "MAP%02d", sc.Number);
-				info = FindLevelInfo (temp);
-				sc.MustGetString ();
-				if (info->mapname[0] && (!(info->flags2 & LEVEL2_MUSICDEFINED)))
+				sc.MustGetNumber();
+				mapnum = sc.Number;
+				sc.MustGetString();
+				if (mapnum != 0)
 				{
-					info->Music = sc.String;
+					HexenMusic[mapnum] = sc.String;
 				}
 				}
 				break;
 
 			case SI_Registered:
 				// I don't think Hexen even pays attention to the $registered command.
+			case SI_EDFOverride:
 				break;
 
 			case SI_ArchivePath:
@@ -1079,10 +1114,14 @@ static void S_AddSNDINFO (int lump)
 			case SI_PlayerSound: {
 				// $playersound <player class> <gender> <logical name> <lump name>
 				FString pclass;
-				int gender, refid;
+				int gender, refid, sfxnum;
 
 				S_ParsePlayerSoundCommon (sc, pclass, gender, refid);
-				S_AddPlayerSound (pclass, gender, refid, sc.String);
+				sfxnum = S_AddPlayerSound (pclass, gender, refid, sc.String);
+				if (0 == stricmp(sc.String, "dsempty"))
+				{
+					S_sfx[sfxnum].bPlayerSilent = true;
+				}
 				}
 				break;
 
@@ -1196,6 +1235,17 @@ static void S_AddSNDINFO (int lump)
 				}
 				break;
 
+			case SI_Attenuation: {
+				// $attenuation <logical name> <attenuation>
+				int sfx;
+
+				sc.MustGetString();
+				sfx = S_FindSoundTentative(sc.String);
+				sc.MustGetFloat();
+				S_sfx[sfx].Attenuation = (float)sc.Float;
+				}
+				break;
+
 			case SI_Rolloff: {
 				// $rolloff *|<logical name> [linear|log|custom] <min dist> <max dist/rolloff factor>
 				// Using * for the name makes it the default for sounds that don't specify otherwise.
@@ -1289,6 +1339,32 @@ static void S_AddSNDINFO (int lump)
 				}
 				break;
 
+			case SI_MusicAlias: {
+				sc.MustGetString();
+				int lump = Wads.CheckNumForName(sc.String, ns_music);
+				if (lump >= 0)
+				{
+					// do not set the alias if a later WAD defines its own music of this name
+					int file = Wads.GetLumpFile(lump);
+					int sndifile = Wads.GetLumpFile(sc.LumpNum);
+					if (file > sndifile)
+					{
+						sc.MustGetString();
+						continue;
+					}
+				}
+				FName alias = sc.String;
+				sc.MustGetString();
+				FName mapped = sc.String;
+
+				// only set the alias if the lump it maps to exists.
+				if (mapped == NAME_None || Wads.CheckNumForName(sc.String, ns_music) >= 0)
+				{
+					MusicAliases[alias] = mapped;
+				}
+				}
+				break;
+
 			case SI_MidiDevice: {
 				sc.MustGetString();
 				FName nm = sc.String;
@@ -1298,36 +1374,17 @@ static void S_AddSNDINFO (int lump)
 				else if (sc.Compare("standard")) MidiDevices[nm] = MDEV_MMAPI;
 				else if (sc.Compare("opl")) MidiDevices[nm] = MDEV_OPL;
 				else if (sc.Compare("default")) MidiDevices[nm] = MDEV_DEFAULT;
+				else if (sc.Compare("fluidsynth")) MidiDevices[nm] = MDEV_FLUIDSYNTH;
+				else if (sc.Compare("gus")) MidiDevices[nm] = MDEV_GUS;
 				else sc.ScriptError("Unknown MIDI device %s\n", sc.String);
 				}
 				break;
 
 			case SI_IfDoom: //also Chex
-				if (!(gameinfo.gametype & GAME_DoomChex))
-				{
-					skipToEndIf = true;
-				}
-				break;
-
 			case SI_IfStrife:
-				if (gameinfo.gametype != GAME_Strife)
-				{
-					skipToEndIf = true;
-				}
-				break;
-
 			case SI_IfHeretic:
-				if (gameinfo.gametype != GAME_Heretic)
-				{
-					skipToEndIf = true;
-				}
-				break;
-
 			case SI_IfHexen:
-				if (gameinfo.gametype != GAME_Hexen)
-				{
-					skipToEndIf = true;
-				}
+				skipToEndIf = !CheckGame(sc.String+3, true);
 				break;
 			}
 		}
@@ -1632,7 +1689,9 @@ static int S_LookupPlayerSound (int classidx, int gender, FSoundID refid)
 	// If we're not done parsing SNDINFO yet, assume that the target sound is valid
 	if (PlayerClassesIsSorted &&
 		(sndnum == 0 ||
-		((S_sfx[sndnum].lumpnum == -1 || S_sfx[sndnum].lumpnum == sfx_empty) && S_sfx[sndnum].link == sfxinfo_t::NO_LINK)))
+		((S_sfx[sndnum].lumpnum == -1 || S_sfx[sndnum].lumpnum == sfx_empty) &&
+		 S_sfx[sndnum].link == sfxinfo_t::NO_LINK &&
+		 !S_sfx[sndnum].bPlayerSilent)))
 	{ // This sound is unavailable.
 		if (ingender != 0)
 		{ // Try "male"
@@ -1757,7 +1816,7 @@ int S_FindSkinnedSound (AActor *actor, FSoundID refid)
 	if (actor != NULL && actor->IsKindOf(RUNTIME_CLASS(APlayerPawn)))
 	{
 		pclass = static_cast<APlayerPawn*>(actor)->GetSoundClass ();
-		if (actor->player != NULL) gender = actor->player->userinfo.gender;
+		if (actor->player != NULL) gender = actor->player->userinfo.GetGender();
 	}
 	else
 	{
@@ -1888,6 +1947,44 @@ bool S_ParseTimeTag(const char *tag, bool *as_samples, unsigned int *time)
 
 //==========================================================================
 //
+// sfxinfo_t :: MarkUsed
+//
+// Marks this sound for precaching.
+//
+//==========================================================================
+
+void sfxinfo_t::MarkUsed()
+{
+	bUsed = true;
+}
+
+//==========================================================================
+//
+// S_MarkPlayerSounds
+//
+// Marks all sounds from a particular player class for precaching.
+//
+//==========================================================================
+
+void S_MarkPlayerSounds (const char *playerclass)
+{
+	int classidx = S_FindPlayerClass(playerclass);
+	if (classidx < 0)
+	{
+		classidx = DefPlayerClass;
+	}
+	for (int g = 0; g < 3; ++g)
+	{
+		int listidx = PlayerClassLookups[classidx].ListIndex[0];
+		if (listidx != 0xffff)
+		{
+			PlayerSounds[listidx].MarkUsed();
+		}
+	}
+}
+
+//==========================================================================
+//
 // CCMD soundlist
 //
 //==========================================================================
@@ -2001,6 +2098,7 @@ class AAmbientSound : public AActor
 public:
 	void Serialize (FArchive &arc);
 
+	void MarkPrecacheSounds () const;
 	void BeginPlay ();
 	void Tick ();
 	void Activate (AActor *activator);
@@ -2026,36 +2124,22 @@ IMPLEMENT_CLASS (AAmbientSound)
 void AAmbientSound::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << bActive;
-	
-	if (SaveVersion < 1902)
+	arc << bActive << NextCheck;
+}
+
+//==========================================================================
+//
+// AmbientSound :: MarkPrecacheSounds
+//
+//==========================================================================
+
+void AAmbientSound::MarkPrecacheSounds() const
+{
+	Super::MarkPrecacheSounds();
+	FAmbientSound *ambient = Ambients.CheckKey(args[0]);
+	if (ambient != NULL)
 	{
-		arc << NextCheck;
-		NextCheck += gametic;
-		if (NextCheck < 0) NextCheck = INT_MAX;
-	}
-	else
-	{
-		if (arc.IsStoring())
-		{
-			if (NextCheck != INT_MAX)
-			{
-				int checktime = NextCheck - gametic;
-				arc << checktime;
-			}
-			else
-			{
-				arc << NextCheck;
-			}
-		}
-		else
-		{
-			arc << NextCheck;
-			if (NextCheck != INT_MAX)
-			{
-				NextCheck += gametic;
-			}
-		}
+		ambient->sound.MarkUsed();
 	}
 }
 
@@ -2069,7 +2153,7 @@ void AAmbientSound::Tick ()
 {
 	Super::Tick ();
 
-	if (!bActive || gametic < NextCheck)
+	if (!bActive || level.maptime < NextCheck)
 		return;
 
 	FAmbientSound *ambient;
@@ -2086,7 +2170,7 @@ void AAmbientSound::Tick ()
 		loop = CHAN_LOOP;
 	}
 
-	if (ambient->sound.IsNotEmpty())
+	if (ambient->sound != 0)
 	{
 		// The second argument scales the ambient sound's volume.
 		// 0 and 100 are normal volume. The maximum volume level
@@ -2182,8 +2266,7 @@ void AAmbientSound::Activate (AActor *activator)
 	{
 		// [BC] In client mode, it's possible that the arguments haven't seen sent yet.
 		// Therefore, just break out without destroying the sound.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			bActive = true;
 			return;
@@ -2206,7 +2289,7 @@ void AAmbientSound::Activate (AActor *activator)
 			amb->periodmin = Scale(S_GetMSLength(sndnum), TICRATE, 1000);
 		}
 
-		NextCheck = gametic;
+		NextCheck = level.maptime;
 		if (amb->type & (RANDOM|PERIODIC))
 			SetTicker (amb);
 

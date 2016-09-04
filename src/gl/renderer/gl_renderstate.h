@@ -92,6 +92,7 @@ class FRenderState
 	bool mBrightmapEnabled;
 	int mSpecialEffect;
 	int mTextureMode;
+	float mDynLight[3];
 	float mLightParms[2];
 	int mNumLights[3];
 	float *mLightData;
@@ -183,6 +184,13 @@ public:
 		mGlowBottom.Set(b[0], b[1], b[2], b[3]);
 	}
 
+	void SetDynLight(float r,float g, float b)
+	{
+		mDynLight[0] = r;
+		mDynLight[1] = g;
+		mDynLight[2] = b;
+	}
+
 	void SetFog(PalEntry c, float d)
 	{
 		mFogColor = c;
@@ -201,6 +209,11 @@ public:
 		mNumLights[1] = numlights[1];
 		mNumLights[2] = numlights[2];
 		mLightData = lightdata;	// caution: the data must be preserved by the caller until the 'apply' call!
+	}
+
+	void SetFixedColormap(int cm)
+	{
+		mColormapState = cm;
 	}
 
 	PalEntry GetFogColor() const
@@ -255,7 +268,7 @@ public:
 		}
 		else
 		{
-			gl.BlendEquation(eq);
+			::glBlendEquation(eq);
 		}
 	}
 

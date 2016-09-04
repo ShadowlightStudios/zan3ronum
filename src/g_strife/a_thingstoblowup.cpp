@@ -69,7 +69,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_ExtraLightOff)
 
 DEFINE_ACTION_FUNCTION(AActor, A_Explode512)
 {
-	P_RadiusAttack (self, self->target, 512, 512, NAME_None, true);
+	P_RadiusAttack (self, self->target, 512, 512, NAME_None, RADF_HURTSOURCE);
 	if (self->target != NULL && self->target->player != NULL)
 	{
 		self->target->player->extralight = 5;
@@ -89,8 +89,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_LightGoesOut)
 
 	sec->SetLightLevel(0);
 
-	newheight = sec->FindLowestFloorSurrounding (&spot);
+	fixed_t oldtheight = sec->floorplane.Zat0();
+	newheight = sec->FindLowestFloorSurrounding(&spot);
 	sec->floorplane.d = sec->floorplane.PointToDist (spot, newheight);
+	fixed_t newtheight = sec->floorplane.Zat0();
+	sec->ChangePlaneTexZ(sector_t::floor, newtheight - oldtheight);
 
 	for (int i = 0; i < 8; ++i)
 	{

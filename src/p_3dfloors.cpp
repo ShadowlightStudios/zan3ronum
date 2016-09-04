@@ -40,11 +40,10 @@
 #include "p_lnspec.h"
 #include "w_wad.h"
 #include "sc_man.h"
-#include "v_palette.h"
 #include "g_level.h"
+#include "r_data/colormaps.h"
 
 #ifdef _3DFLOORS
-
 EXTERN_CVAR(Int, vid_renderer)
 
 //==========================================================================
@@ -62,7 +61,7 @@ EXTERN_CVAR(Int, vid_renderer)
 FDynamicColormap *F3DFloor::GetColormap()
 {
 	// If there's no fog in either model or target sector this is easy and fast.
-	if ((target->ColorMap->Fade == 0 && model->ColorMap->Fade == 0) || (flags & FF_FADEWALLS))
+	if ((target->ColorMap->Fade == 0 && model->ColorMap->Fade == 0) || (flags & (FF_FADEWALLS|FF_FOG)))
 	{
 		return model->ColorMap;
 	}
@@ -110,7 +109,7 @@ void F3DFloor::UpdateColormap(FDynamicColormap *&map)
 // Add one 3D floor to the sector
 //
 //==========================================================================
-static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flags,int transluc)
+static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flags, int alpha)
 {
 	F3DFloor*      ffloor;
 	unsigned  i;
@@ -181,7 +180,7 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 
 	ffloor->flags  = flags;
 	ffloor->master = master;
-	ffloor->alpha  = transluc;
+	ffloor->alpha  = alpha;
 	ffloor->top.vindex = ffloor->bottom.vindex = -1;
 
 	// The engine cannot handle sloped translucent floors. Sorry
@@ -202,7 +201,11 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 
 	// kg3D - software renderer only hack
 	// this is really required because of ceilingclip and floorclip
-	if(flags & FF_BOTHPLANES && vid_renderer == 0) P_Add3DFloor(sec, sec2, master, FF_EXISTS | FF_THISINSIDE | FF_RENDERPLANES | FF_NOSHADE | FF_SEETHROUGH | FF_SHOOTTHROUGH | (flags & FF_INVERTSECTOR), transluc);
+	if((vid_renderer == 0) && (flags & FF_BOTHPLANES))
+	{
+		P_Add3DFloor(sec, sec2, master, FF_EXISTS | FF_THISINSIDE | FF_RENDERPLANES | FF_NOSHADE | FF_SEETHROUGH | FF_SHOOTTHROUGH |
+			(flags & (FF_INVERTSECTOR | FF_TRANSLUCENT | FF_ADDITIVETRANS)), alpha);
+	}
 }
 
 //==========================================================================
@@ -210,7 +213,7 @@ static void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flag
 // Creates all 3D floors defined by one linedef
 //
 //==========================================================================
-static int P_Set3DFloor(line_t * line, int param,int param2, int alpha)
+static int P_Set3DFloor(line_t * line, int param, int param2, int alpha)
 {
 	int s,i;
 	int flags;
@@ -291,8 +294,9 @@ static int P_Set3DFloor(line_t * line, int param,int param2, int alpha)
 			FTextureID tex = line->sidedef[0]->GetTexture(side_t::top);
 			if (!tex.Exists() && alpha<255)
 			{
-				alpha=clamp(-tex.GetIndex(), 0, 255);
+				alpha = -tex.GetIndex();
 			}
+			alpha = clamp(alpha, 0, 255);
 			if (alpha==0) flags&=~(FF_RENDERALL|FF_BOTHPLANES|FF_ALLSIDES);
 			else if (alpha!=255) flags|=FF_TRANSLUCENT;
 										 
@@ -605,6 +609,11 @@ void P_Recalculate3DFloors(sector_t * sector)
 	}
 }
 
+//==========================================================================
+//
+// recalculates 3D floors for all attached sectors
+//
+//==========================================================================
 
 void P_RecalculateAttached3DFloors(sector_t * sec)
 {
@@ -665,6 +674,7 @@ void P_RecalculateAttachedLights(sector_t *sector)
 //
 //
 //==========================================================================
+
 lightlist_t * P_GetPlaneLight(sector_t * sector, secplane_t * plane, bool underside)
 {
 	unsigned   i;
@@ -687,7 +697,7 @@ lightlist_t * P_GetPlaneLight(sector_t * sector, secplane_t * plane, bool unders
 //==========================================================================
 
 void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *linedef, 
-							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy)
+							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, bool restrict)
 {
     if(thing)
     {
@@ -733,7 +743,7 @@ void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *li
 						lowestceilingpic = *rover->bottom.texture;
 					}
 					
-					if(ff_top > highestfloor && delta1 < delta2)
+					if(ff_top > highestfloor && delta1 < delta2 && (!restrict || thing->z >= ff_top))
 					{
 						highestfloor = ff_top;
 						highestfloorpic = *rover->top.texture;
@@ -787,14 +797,20 @@ void P_Spawn3DFloors (void)
 			break;
 
 		case Sector_Set3DFloor:
-			if (line->args[1]&8)
+			// The flag high-byte/line id is only needed in Hexen format.
+			// UDMF can set both of these parameters without any restriction of the usable values.
+			// In Doom format the translators can take full integers for the tag and the line ID always is the same as the tag.
+			if (level.maptype == MAPTYPE_HEXEN)	
 			{
-				line->id = line->args[4];
-			}
-			else
-			{
-				line->args[0]+=256*line->args[4];
-				line->args[4]=0;
+				if (line->args[1]&8)
+				{
+					line->id = line->args[4];
+				}
+				else
+				{
+					line->args[0]+=256*line->args[4];
+					line->args[4]=0;
+				}
 			}
 			P_Set3DFloor(line, line->args[1]&~8, line->args[2], line->args[3]);
 			break;
@@ -841,5 +857,59 @@ secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z)
 	return retplane;
 }
 
+//==========================================================================
+//
+// Gives the index to an extra floor above or below the given location.
+// -1 means normal floor or ceiling
+//
+//==========================================================================
+
+int	P_Find3DFloor(sector_t * sec, fixed_t x, fixed_t y, fixed_t z, bool above, bool floor, fixed_t &cmpz)
+{
+	// If no sector given, find the one appropriate
+	if (sec == NULL)
+		sec = R_PointInSubsector(x, y)->sector;
+
+	// Above normal ceiling
+	cmpz = sec->ceilingplane.ZatPoint(x, y);
+	if (z >= cmpz)
+		return -1;
+
+	// Below normal floor
+	cmpz = sec->floorplane.ZatPoint(x, y);
+	if (z <= cmpz)
+		return -1;
+
+	// Looking through planes from top to bottom
+	for (int i = 0; i < (signed)sec->e->XFloor.ffloors.Size(); ++i)
+	{
+		F3DFloor *rover = sec->e->XFloor.ffloors[i];
+
+		// We are only interested in solid 3D floors here
+		if(!(rover->flags & FF_SOLID) || !(rover->flags & FF_EXISTS)) continue;
+
+		if (above)
+		{
+			// z is above that floor
+			if (floor && (z >= (cmpz = rover->top.plane->ZatPoint(x, y))))
+				return i - 1;
+			// z is above that ceiling
+			if (z >= (cmpz = rover->bottom.plane->ZatPoint(x, y)))
+				return i - 1;
+		}
+		else // below
+		{
+			// z is below that ceiling
+			if (!floor && (z <= (cmpz = rover->bottom.plane->ZatPoint(x, y))))
+				return i;
+			// z is below that floor
+			if (z <= (cmpz = rover->top.plane->ZatPoint(x, y)))
+				return i;
+		}
+	}
+
+	// Failsafe
+	return -1;
+}
 
 #endif

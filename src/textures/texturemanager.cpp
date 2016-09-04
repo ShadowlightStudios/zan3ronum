@@ -35,11 +35,11 @@
 */
 
 #include "doomtype.h"
+#include "doomstat.h"
 #include "w_wad.h"
-#include "r_data.h"
 #include "templates.h"
 #include "i_system.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "c_dispatch.h"
 #include "v_text.h"
 #include "sc_man.h"
@@ -47,11 +47,22 @@
 #include "st_start.h"
 #include "cmdlib.h"
 #include "g_level.h"
-
-extern void R_InitBuildTiles();
-
+#include "m_fixed.h"
+#include "farchive.h"
+#include "v_video.h"
+#include "r_renderer.h"
+#include "r_sky.h"
+#include "textures/textures.h"
+// [BB] New #includes.
+#include "cl_demo.h"
 
 FTextureManager TexMan;
+
+CUSTOM_CVAR(Bool, vid_nopalsubstitutions, false, CVAR_ARCHIVE)
+{
+	// This is in case the sky texture has been substituted.
+	R_InitSkyMap ();
+}
 
 //==========================================================================
 //
@@ -62,8 +73,6 @@ FTextureManager TexMan;
 FTextureManager::FTextureManager ()
 {
 	memset (HashFirst, -1, sizeof(HashFirst));
-	// Texture 0 is a dummy texture used to indicate "no texture"
-	AddTexture (new FDummyTexture);
 
 }
 
@@ -75,10 +84,62 @@ FTextureManager::FTextureManager ()
 
 FTextureManager::~FTextureManager ()
 {
+	DeleteAll();
+}
+
+//==========================================================================
+//
+// FTextureManager :: DeleteAll
+//
+//==========================================================================
+
+void FTextureManager::DeleteAll()
+{
 	for (unsigned int i = 0; i < Textures.Size(); ++i)
 	{
 		delete Textures[i].Texture;
 	}
+	Textures.Clear();
+	Translation.Clear();
+	FirstTextureForFile.Clear();
+	memset (HashFirst, -1, sizeof(HashFirst));
+	DefaultTexture.SetInvalid();
+
+	for (unsigned i = 0; i < mAnimations.Size(); i++)
+	{
+		if (mAnimations[i] != NULL)
+		{
+			M_Free (mAnimations[i]);
+			mAnimations[i] = NULL;
+		}
+	}
+	mAnimations.Clear();
+
+	for (unsigned i = 0; i < mSwitchDefs.Size(); i++)
+	{
+		if (mSwitchDefs[i] != NULL)
+		{
+			M_Free (mSwitchDefs[i]);
+			mSwitchDefs[i] = NULL;
+		}
+	}
+	mSwitchDefs.Clear();
+
+	for (unsigned i = 0; i < mAnimatedDoors.Size(); i++)
+	{
+		if (mAnimatedDoors[i].TextureFrames != NULL)
+		{
+			delete[] mAnimatedDoors[i].TextureFrames;
+			mAnimatedDoors[i].TextureFrames = NULL;
+		}
+	}
+	mAnimatedDoors.Clear();
+
+	for (unsigned int i = 0; i < BuildTileFiles.Size(); ++i)
+	{
+		delete[] BuildTileFiles[i];
+	}
+	BuildTileFiles.Clear();
 }
 
 //==========================================================================
@@ -117,7 +178,8 @@ FTextureID FTextureManager::CheckForTexture (const char *name, int usetype, BITF
 			{
 				// All NULL textures should actually return 0
 				if (tex->UseType == FTexture::TEX_FirstDefined && !(flags & TEXMAN_ReturnFirst)) return 0;
-				return FTextureID(tex->UseType==FTexture::TEX_Null? 0 : i);
+				if (tex->UseType == FTexture::TEX_SkinGraphic && !(flags & TEXMAN_AllowSkins)) return 0;
+				return FTextureID(tex->UseType==FTexture::TEX_Null ? 0 : i);
 			}
 			else if ((flags & TEXMAN_Overridable) && tex->UseType == FTexture::TEX_Override)
 			{
@@ -368,7 +430,7 @@ void FTextureManager::ReplaceTexture (FTextureID picnum, FTexture *newtexture, b
 	Textures[index].Texture = newtexture;
 
 	newtexture->id = oldtexture->id;
-	if (free)
+	if (free && !oldtexture->bKeepAround)
 	{
 		delete oldtexture;
 	}
@@ -697,7 +759,7 @@ void FTextureManager::AddPatches (int lumpnum)
 	{
 		file->Read (name, 8);
 
-		if (CheckForTexture (name, FTexture::TEX_WallPatch, false) == -1)
+		if (CheckForTexture (name, FTexture::TEX_WallPatch, 0) == -1)
 		{
 			CreateTexture (Wads.CheckNumForName (name, ns_patches), FTexture::TEX_WallPatch);
 		}
@@ -772,6 +834,7 @@ void FTextureManager::AddTexturesForWad(int wadnum)
 
 	for (int i= firsttx; i <= lasttx; i++)
 	{
+		bool skin = false;
 		char name[9];
 		Wads.GetLumpName(name, i);
 		name[8]=0;
@@ -810,11 +873,17 @@ void FTextureManager::AddTexturesForWad(int wadnum)
 			// Don't bother looking this lump if something later overrides it.
 			if (Wads.CheckNumForName(name, ns_graphics) != i) continue;
 		}
+		else if (ns >= ns_firstskin)
+		{
+			// Don't bother looking this lump if something later overrides it.
+			if (Wads.CheckNumForName(name, ns) != i) continue;
+			skin = true;
+		}
 		else continue;
 
 		// Try to create a texture from this lump and add it.
 		// Unfortunately we have to look at everything that comes through here...
-		FTexture *out = FTexture::CreateTexture(i, FTexture::TEX_MiscPatch);
+		FTexture *out = FTexture::CreateTexture(i, skin ? FTexture::TEX_SkinGraphic : FTexture::TEX_MiscPatch);
 
 		if (out != NULL) 
 		{
@@ -863,7 +932,7 @@ void FTextureManager::SortTexturesByType(int start, int end)
 	static int texturetypes[] = {
 		FTexture::TEX_Sprite, FTexture::TEX_Null, FTexture::TEX_FirstDefined, 
 		FTexture::TEX_WallPatch, FTexture::TEX_Wall, FTexture::TEX_Flat, 
-		FTexture::TEX_Override, FTexture::TEX_MiscPatch 
+		FTexture::TEX_Override, FTexture::TEX_MiscPatch, FTexture::TEX_SkinGraphic
 	};
 
 	for(unsigned int i=0;i<countof(texturetypes);i++)
@@ -896,7 +965,13 @@ void FTextureManager::SortTexturesByType(int start, int end)
 
 void FTextureManager::Init()
 {
+	DeleteAll();
+	// Init Build Tile data if it hasn't been done already
+	if (BuildTileFiles.Size() == 0) CountBuildTiles ();
 	FTexture::InitGrayMap();
+
+	// Texture 0 is a dummy texture used to indicate "no texture"
+	AddTexture (new FDummyTexture);
 
 	int wadcnt = Wads.GetNumWads();
 	for(int i = 0; i< wadcnt; i++)
@@ -907,7 +982,7 @@ void FTextureManager::Init()
 	// Add one marker so that the last WAD is easier to handle and treat
 	// Build tiles as a completely separate block.
 	FirstTextureForFile.Push(Textures.Size());
-	R_InitBuildTiles ();
+	InitBuildTiles ();
 	FirstTextureForFile.Push(Textures.Size());
 
 	DefaultTexture = CheckForTexture ("-NOFLAT-", FTexture::TEX_Override, 0);
@@ -938,6 +1013,62 @@ void FTextureManager::Init()
 			}
 		}
 	}
+
+	InitAnimated();
+	InitAnimDefs();
+	FixAnimations();
+	InitSwitchList();
+	InitPalettedVersions();
+}
+
+//==========================================================================
+//
+// FTextureManager :: InitPalettedVersions
+//
+//==========================================================================
+
+void FTextureManager::InitPalettedVersions()
+{
+	int lump, lastlump = 0;
+
+	PalettedVersions.Clear();
+	while ((lump = Wads.FindLump("PALVERS", &lastlump)) != -1)
+	{
+		FScanner sc(lump);
+
+		while (sc.GetString())
+		{
+			FTextureID pic1 = CheckForTexture(sc.String, FTexture::TEX_Any);
+			if (!pic1.isValid())
+			{
+				sc.ScriptMessage("Unknown texture %s to replace", sc.String);
+			}
+			sc.MustGetString();
+			FTextureID pic2 = CheckForTexture(sc.String, FTexture::TEX_Any);
+			if (!pic2.isValid())
+			{
+				sc.ScriptMessage("Unknown texture %s to use as replacement", sc.String);
+			}
+			if (pic1.isValid() && pic2.isValid())
+			{
+				PalettedVersions[pic1.GetIndex()] = pic2.GetIndex();
+			}
+		}
+	}
+}
+
+//==========================================================================
+//
+// FTextureManager :: PalCheck
+//
+//==========================================================================
+
+FTextureID FTextureManager::PalCheck(FTextureID tex)
+{
+	if (vid_nopalsubstitutions) return tex;
+	int *newtex = PalettedVersions.CheckKey(tex.GetIndex());
+	if (newtex == NULL || *newtex == 0) return tex;
+	return *newtex;
 }
 
 //==========================================================================
@@ -987,6 +1118,140 @@ int FTextureManager::ReadTexture (FArchive &arc)
 	}
 	else return -1;
 }
+
+//===========================================================================
+//
+// R_GuesstimateNumTextures
+//
+// Returns an estimate of the number of textures R_InitData will have to
+// process. Used by D_DoomMain() when it calls ST_Init().
+//
+//===========================================================================
+
+int FTextureManager::GuesstimateNumTextures ()
+{
+	int numtex = 0;
+	
+	for(int i = Wads.GetNumLumps()-1; i>=0; i--)
+	{
+		int space = Wads.GetLumpNamespace(i);
+		switch(space)
+		{
+		case ns_flats:
+		case ns_sprites:
+		case ns_newtextures:
+		case ns_hires:
+		case ns_patches:
+		case ns_graphics:
+			numtex++;
+			break;
+
+		default:
+			if (Wads.GetLumpFlags(i) & LUMPF_MAYBEFLAT) numtex++;
+
+			break;
+		}
+	}
+
+	numtex += CountBuildTiles ();
+	numtex += CountTexturesX ();
+	return numtex;
+}
+
+//===========================================================================
+//
+// R_CountTexturesX
+//
+// See R_InitTextures() for the logic in deciding what lumps to check.
+//
+//===========================================================================
+
+int FTextureManager::CountTexturesX ()
+{
+	int count = 0;
+	int wadcount = Wads.GetNumWads();
+	for (int wadnum = 0; wadnum < wadcount; wadnum++)
+	{
+		// Use the most recent PNAMES for this WAD.
+		// Multiple PNAMES in a WAD will be ignored.
+		int pnames = Wads.CheckNumForName("PNAMES", ns_global, wadnum, false);
+
+		// should never happen except for zdoom.pk3
+		if (pnames < 0) continue;
+
+		// Only count the patches if the PNAMES come from the current file
+		// Otherwise they have already been counted.
+		if (Wads.GetLumpFile(pnames) == wadnum) 
+		{
+			count += CountLumpTextures (pnames);
+		}
+
+		int texlump1 = Wads.CheckNumForName ("TEXTURE1", ns_global, wadnum);
+		int texlump2 = Wads.CheckNumForName ("TEXTURE2", ns_global, wadnum);
+
+		count += CountLumpTextures (texlump1) - 1;
+		count += CountLumpTextures (texlump2) - 1;
+	}
+	return count;
+}
+
+//===========================================================================
+//
+// R_CountLumpTextures
+//
+// Returns the number of patches in a PNAMES/TEXTURE1/TEXTURE2 lump.
+//
+//===========================================================================
+
+int FTextureManager::CountLumpTextures (int lumpnum)
+{
+	if (lumpnum >= 0)
+	{
+		FWadLump file = Wads.OpenLumpNum (lumpnum); 
+		DWORD numtex;
+
+		file >> numtex;
+		return int(numtex) >= 0 ? numtex : 0;
+	}
+	return 0;
+}
+
+//===========================================================================
+//
+// R_PrecacheLevel
+//
+
+// Preloads all relevant graphics for the level.
+//
+//===========================================================================
+
+void FTextureManager::PrecacheLevel (void)
+{
+	BYTE *hitlist;
+	int cnt = NumTextures();
+
+	// [BC] The server doesn't need to precache the level.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		return;
+
+	// [BC] Support for client-side demos.
+	if (demoplayback || CLIENTDEMO_IsPlaying( ))
+		return;
+
+	hitlist = new BYTE[cnt];
+	memset (hitlist, 0, cnt);
+
+	screen->GetHitlist(hitlist);
+	for (int i = cnt - 1; i >= 0; i--)
+	{
+		Renderer->PrecacheTexture(ByIndex(i), hitlist[i]);
+	}
+
+	delete[] hitlist;
+}
+
+
+
 
 //==========================================================================
 //

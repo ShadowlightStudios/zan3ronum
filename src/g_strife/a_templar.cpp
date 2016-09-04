@@ -21,12 +21,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_TemplarAttack)
 	if (self->target == NULL)
 		return;
 
-	S_Sound (self, CHAN_WEAPON, "templar/shoot", 1, ATTN_NORM);
-
-	// [CW] Tell clients to play the sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "templar/shoot", 1, ATTN_NORM );
-
+	S_Sound (self, CHAN_WEAPON, "templar/shoot", 1, ATTN_NORM, true);	// [CW] Inform the clients.
 	A_FaceTarget (self);
 	pitch = P_AimLineAttack (self, self->angle, MISSILERANGE);
 
@@ -35,6 +30,6 @@ DEFINE_ACTION_FUNCTION(AActor, A_TemplarAttack)
 		damage = (pr_templar() & 4) * 2;
 		angle = self->angle + (pr_templar.Random2() << 19);
 		pitchdiff = pr_templar.Random2() * 332063;
-		P_LineAttack (self, angle, MISSILERANGE+64*FRACUNIT, pitch+pitchdiff, damage, NAME_None, NAME_MaulerPuff);
+		P_LineAttack (self, angle, MISSILERANGE+64*FRACUNIT, pitch+pitchdiff, damage, NAME_Hitscan, NAME_MaulerPuff);
 	}
 }

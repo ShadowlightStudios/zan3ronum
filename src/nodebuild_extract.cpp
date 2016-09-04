@@ -43,7 +43,6 @@
 
 #include "nodebuild.h"
 #include "templates.h"
-#include "r_main.h"
 
 #if 0
 #define D(x) x
@@ -54,7 +53,7 @@
 #endif
 
 void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
-	seg_t *&outSegs, int &segCount,
+	seg_t *&outSegs, glsegextra_t *&outSegExtras, int &segCount,
 	subsector_t *&outSubs, int &subCount,
 	vertex_t *&outVerts, int &vertCount)
 {
@@ -79,7 +78,8 @@ void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
 	memcpy (outNodes, &Nodes[0], nodeCount*sizeof(node_t));
 	for (i = 0; i < nodeCount; ++i)
 	{
-		D(Printf(PRINT_LOG, "Node %d:\n", i));
+		D(Printf(PRINT_LOG, "Node %d:  Splitter[%08x,%08x] [%08x,%08x]\n", i,
+			outNodes[i].x, outNodes[i].y, outNodes[i].dx, outNodes[i].dy));
 		// Go backwards because on 64-bit systems, both of the intchildren are
 		// inside the first in-game child.
 		for (int j = 1; j >= 0; --j)
@@ -99,7 +99,7 @@ void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
 
 	if (GLNodes)
 	{
-		TArray<seg_t> segs (Segs.Size()*5/4);
+		TArray<glseg_t> segs (Segs.Size()*5/4);
 
 		for (i = 0; i < subCount; ++i)
 		{
@@ -110,13 +110,19 @@ void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
 
 		segCount = segs.Size ();
 		outSegs = new seg_t[segCount];
-		memcpy (outSegs, &segs[0], segCount*sizeof(seg_t));
+		outSegExtras = new glsegextra_t[segCount];
 
 		for (i = 0; i < segCount; ++i)
 		{
-			if (outSegs[i].PartnerSeg != NULL)
+			outSegs[i] = *(seg_t *)&segs[i];
+
+			if (segs[i].Partner != DWORD_MAX)
 			{
-				outSegs[i].PartnerSeg = &outSegs[Segs[(unsigned int)(size_t)outSegs[i].PartnerSeg-1].storedseg];
+				outSegExtras[i].PartnerSeg = Segs[segs[i].Partner].storedseg;
+			}
+			else
+			{
+				outSegExtras[i].PartnerSeg = DWORD_MAX;
 			}
 		}
 	}
@@ -125,6 +131,7 @@ void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
 		memcpy (outSubs, &Subsectors[0], subCount*sizeof(subsector_t));
 		segCount = Segs.Size ();
 		outSegs = new seg_t[segCount];
+		outSegExtras = NULL;
 		for (i = 0; i < segCount; ++i)
 		{
 			const FPrivSeg *org = &Segs[SegList[i].SegNum];
@@ -138,8 +145,6 @@ void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
 			out->frontsector = org->frontsector;
 			out->linedef = Level.Lines + org->linedef;
 			out->sidedef = Level.Sides + org->sidedef;
-			out->PartnerSeg = NULL;
-			out->bPolySeg = false;
 		}
 	}
 	for (i = 0; i < subCount; ++i)
@@ -160,6 +165,7 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 {
 	unsigned int i;
 
+	bsp->bDirty = false;
 	bsp->Verts.Resize(Vertices.Size());
 	for (i = 0; i < Vertices.Size(); ++i)
 	{
@@ -194,19 +200,17 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 
 	if (GLNodes)
 	{
+		TArray<glseg_t> glsegs;
 		for (i = 0; i < Subsectors.Size(); ++i)
 		{
-			DWORD numsegs = CloseSubsector (bsp->Segs, i, &bsp->Verts[0]);
+			DWORD numsegs = CloseSubsector (glsegs, i, &bsp->Verts[0]);
 			bsp->Subsectors[i].numlines = numsegs;
 			bsp->Subsectors[i].firstline = &bsp->Segs[bsp->Segs.Size() - numsegs];
 		}
-
-		for (i = 0; i < Segs.Size(); ++i)
+		bsp->Segs.Resize(glsegs.Size());
+		for (i = 0; i < glsegs.Size(); ++i)
 		{
-			if (bsp->Segs[i].PartnerSeg != NULL)
-			{
-				bsp->Segs[i].PartnerSeg = &bsp->Segs[Segs[(unsigned int)(size_t)bsp->Segs[i].PartnerSeg-1].storedseg];
-			}
+			bsp->Segs[i] = *(seg_t *)&glsegs[i];
 		}
 	}
 	else
@@ -234,8 +238,6 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 				out->linedef = NULL;
 				out->sidedef = NULL;
 			}
-			out->PartnerSeg = NULL;
-			out->bPolySeg = false;
 		}
 		for (i = 0; i < bsp->Subsectors.Size(); ++i)
 		{
@@ -244,7 +246,7 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 	}
 }
 
-int FNodeBuilder::CloseSubsector (TArray<seg_t> &segs, int subsector, vertex_t *outVerts)
+int FNodeBuilder::CloseSubsector (TArray<glseg_t> &segs, int subsector, vertex_t *outVerts)
 {
 	FPrivSeg *seg, *prev;
 	angle_t prevAngle;
@@ -295,12 +297,14 @@ int FNodeBuilder::CloseSubsector (TArray<seg_t> &segs, int subsector, vertex_t *
 	{
 		seg = &Segs[SegList[j].SegNum];
 		angle_t ang = PointToAngle (Vertices[seg->v1].x - midx, Vertices[seg->v1].y - midy);
-		Printf(PRINT_LOG, "%d%c %5d(%5d,%5d)->%5d(%5d,%5d) - %3.3f  %d,%d\n", j,
+		Printf(PRINT_LOG, "%d%c %5d(%5d,%5d)->%5d(%5d,%5d) - %3.5f  %d,%d  [%08x,%08x]-[%08x,%08x]\n", j,
 			seg->linedef == -1 ? '+' : ':',
 			seg->v1, Vertices[seg->v1].x>>16, Vertices[seg->v1].y>>16,
 			seg->v2, Vertices[seg->v2].x>>16, Vertices[seg->v2].y>>16,
 			double(ang/2)*180/(1<<30),
-			seg->planenum, seg->planefront);
+			seg->planenum, seg->planefront,
+			Vertices[seg->v1].x, Vertices[seg->v1].y,
+			Vertices[seg->v2].x, Vertices[seg->v2].y);
 	}
 #endif
 
@@ -394,19 +398,23 @@ int FNodeBuilder::CloseSubsector (TArray<seg_t> &segs, int subsector, vertex_t *
 	Printf(PRINT_LOG, "Output GL subsector %d:\n", subsector);
 	for (i = segs.Size() - count; i < (int)segs.Size(); ++i)
 	{
-		Printf(PRINT_LOG, "  Seg %5d%c(%5d,%5d)-(%5d,%5d)\n", i,
+		Printf(PRINT_LOG, "  Seg %5d%c(%5d,%5d)-(%5d,%5d)  [%08x,%08x]-[%08x,%08x]\n", i,
 			segs[i].linedef == NULL ? '+' : ' ',
 			segs[i].v1->x>>16,
 			segs[i].v1->y>>16,
 			segs[i].v2->x>>16,
-			segs[i].v2->y>>16);
+			segs[i].v2->y>>16,
+			segs[i].v1->x,
+			segs[i].v1->y,
+			segs[i].v2->x,
+			segs[i].v2->y);
 	}
 #endif
 
 	return count;
 }
 
-int FNodeBuilder::OutputDegenerateSubsector (TArray<seg_t> &segs, int subsector, bool bForward, double lastdot, FPrivSeg *&prev, vertex_t *outVerts)
+int FNodeBuilder::OutputDegenerateSubsector (TArray<glseg_t> &segs, int subsector, bool bForward, double lastdot, FPrivSeg *&prev, vertex_t *outVerts)
 {
 	static const double bestinit[2] = { -DBL_MAX, DBL_MAX };
 	FPrivSeg *seg;
@@ -473,9 +481,9 @@ int FNodeBuilder::OutputDegenerateSubsector (TArray<seg_t> &segs, int subsector,
 	return count;
 }
 
-DWORD FNodeBuilder::PushGLSeg (TArray<seg_t> &segs, const FPrivSeg *seg, vertex_t *outVerts)
+DWORD FNodeBuilder::PushGLSeg (TArray<glseg_t> &segs, const FPrivSeg *seg, vertex_t *outVerts)
 {
-	seg_t newseg;
+	glseg_t newseg;
 
 	newseg.v1 = outVerts + seg->v1;
 	newseg.v2 = outVerts + seg->v2;
@@ -491,14 +499,13 @@ DWORD FNodeBuilder::PushGLSeg (TArray<seg_t> &segs, const FPrivSeg *seg, vertex_
 		newseg.linedef = NULL;
 		newseg.sidedef = NULL;
 	}
-	newseg.PartnerSeg = (seg_t *)(seg->partner == DWORD_MAX ? 0 : (size_t)seg->partner + 1);
-	newseg.bPolySeg = false;
+	newseg.Partner = seg->partner;
 	return (DWORD)segs.Push (newseg);
 }
 
-void FNodeBuilder::PushConnectingGLSeg (int subsector, TArray<seg_t> &segs, vertex_t *v1, vertex_t *v2)
+void FNodeBuilder::PushConnectingGLSeg (int subsector, TArray<glseg_t> &segs, vertex_t *v1, vertex_t *v2)
 {
-	seg_t newseg;
+	glseg_t newseg;
 
 	newseg.v1 = v1;
 	newseg.v2 = v2;
@@ -506,7 +513,6 @@ void FNodeBuilder::PushConnectingGLSeg (int subsector, TArray<seg_t> &segs, vert
 	newseg.frontsector = NULL;
 	newseg.linedef = NULL;
 	newseg.sidedef = NULL;
-	newseg.PartnerSeg = NULL;
-	newseg.bPolySeg = false;
+	newseg.Partner = DWORD_MAX;
 	segs.Push (newseg);
 }

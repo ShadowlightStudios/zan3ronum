@@ -47,9 +47,9 @@
 #include "nodebuild.h"
 #include "templates.h"
 #include "m_bbox.h"
-#include "r_main.h"
 #include "i_system.h"
 #include "po_man.h"
+#include "r_state.h"
 
 static const int PO_LINE_START = 1;
 static const int PO_LINE_EXPLICIT = 5;
@@ -79,7 +79,7 @@ angle_t FNodeBuilder::PointToAngle (fixed_t x, fixed_t y)
 
 void FNodeBuilder::FindUsedVertices (vertex_t *oldverts, int max)
 {
-	int *map = (int *)alloca (max*sizeof(int));
+	int *map = new int[max];
 	int i;
 	FPrivVert newvert;
 
@@ -106,6 +106,17 @@ void FNodeBuilder::FindUsedVertices (vertex_t *oldverts, int max)
 		Level.Lines[i].v1 = (vertex_t *)(size_t)map[v1];
 		Level.Lines[i].v2 = (vertex_t *)(size_t)map[v2];
 	}
+	OldVertexTable = map;
+}
+
+// Retrieves the original vertex -> current vertex table.
+// Doing so prevents the node builder from freeing it.
+
+const int *FNodeBuilder::GetOldVertexTable()
+{
+	int *table = OldVertexTable;
+	OldVertexTable = NULL;
+	return table;
 }
 
 // For every sidedef in the map, create a corresponding seg.
@@ -178,6 +189,9 @@ int FNodeBuilder::CreateSeg (int linenum, int sidenum)
 	segnum = (int)Segs.Push (seg);
 	Vertices[seg.v1].segs = segnum;
 	Vertices[seg.v2].segs2 = segnum;
+	D(Printf(PRINT_LOG, "Seg %4d: From line %d, side %s (%5d,%5d)-(%5d,%5d)  [%08x,%08x]-[%08x,%08x]\n", segnum, linenum, sidenum ? "back " : "front",
+		Vertices[seg.v1].x>>16, Vertices[seg.v1].y>>16, Vertices[seg.v2].x>>16, Vertices[seg.v2].y>>16,
+		Vertices[seg.v1].x, Vertices[seg.v1].y, Vertices[seg.v2].x, Vertices[seg.v2].y));
 
 	return segnum;
 }
@@ -421,7 +435,7 @@ void FNodeBuilder::FindPolyContainers (TArray<FPolyStart> &spots, TArray<FPolySt
 				// Scan right for the seg closest to the polyobject's center after it
 				// gets moved to its start spot.
 				fixed_t closestdist = FIXED_MAX;
-				DWORD closestseg = 0;
+				unsigned int closestseg = UINT_MAX;
 
 				P(Printf ("start %d,%d -- center %d, %d\n", spot->x>>16, spot->y>>16, center.x>>16, center.y>>16));
 
@@ -456,7 +470,7 @@ void FNodeBuilder::FindPolyContainers (TArray<FPolyStart> &spots, TArray<FPolySt
 						}
 					}
 				}
-				if (closestseg >= 0)
+				if (closestseg != UINT_MAX)
 				{
 					loop = MarkLoop (closestseg, loop);
 					P(Printf ("Found polyobj in sector %d (loop %d)\n", Segs[closestseg].frontsector,

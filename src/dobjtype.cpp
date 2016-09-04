@@ -80,6 +80,24 @@ void PClass::StaticInit ()
 	}
 }
 
+void PClass::ClearRuntimeData ()
+{
+	StaticShutdown();
+
+	m_RuntimeActors.Clear();
+	m_Types.Clear();
+	memset(TypeHash, 0, sizeof(TypeHash));
+	bShutdown = false;
+
+	// Immediately reinitialize the internal classes
+	FAutoSegIterator probe(CRegHead, CRegTail);
+
+	while (*++probe != NULL)
+	{
+		((ClassReg *)*probe)->RegisterClass ();
+	}
+}
+
 void PClass::StaticShutdown ()
 {
 	TArray<size_t *> uniqueFPs(64);
@@ -105,6 +123,8 @@ void PClass::StaticShutdown ()
 				uniqueFPs.Push(const_cast<size_t *>(type->FlatPointers));
 			}
 		}
+		type->FlatPointers = NULL;
+
 		// For runtime classes, this call will also delete the PClass.
 		PClass::StaticFreeData (type);
 	}
@@ -222,7 +242,7 @@ const PClass *PClass::FindClass (FName zaname)
 		}
 		else if (lexx == 0)
 		{
-			return cls->Size<0? NULL : cls;
+			return cls;
 		}
 		else
 		{
@@ -316,6 +336,7 @@ PClass *PClass::CreateDerivedClass (FName name, unsigned int size)
 		info->StateList = NULL;
 		info->DamageFactors = NULL;
 		info->PainChances = NULL;
+		info->PainFlashes = NULL;
 		info->ColorSets = NULL;
 		m_RuntimeActors.Push (type);
 	}
@@ -336,8 +357,8 @@ unsigned int PClass::Extend(unsigned int extension)
 }
 
 // Like FindClass but creates a placeholder if no class
-// is found. CreateDerivedClass will automatcally fill in
-// the placeholder when the actual class is defined.
+// is found. CreateDerivedClass will automatically fill
+// in the placeholder when the actual class is defined.
 const PClass *PClass::FindClassTentative (FName name)
 {
 	if (name == NAME_None)
@@ -410,6 +431,7 @@ void PClass::InitializeActorInfo ()
 	info->StateList = NULL;
 	info->DamageFactors = NULL;
 	info->PainChances = NULL;
+	info->PainFlashes = NULL;
 	info->ColorSets = NULL;
 	m_RuntimeActors.Push (this);
 }
@@ -484,6 +506,11 @@ const PClass *PClass::NativeClass() const
 		cls = cls->ParentClass;
 
 	return cls;
+}
+
+PClass *PClass::GetReplacement() const
+{
+	return ActorInfo->GetReplacement()->Class;
 }
 
 // Symbol tables ------------------------------------------------------------

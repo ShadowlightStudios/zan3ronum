@@ -125,6 +125,7 @@ struct PClass
 	static void StaticInit ();
 	static void StaticShutdown ();
 	static void StaticFreeData (PClass *type);
+	static void ClearRuntimeData();
 
 	// Per-class information -------------------------------------
 	FName				 TypeName;		// this class's name
@@ -180,6 +181,7 @@ struct PClass
 	static const PClass *FindClass (ENamedName name) { return FindClass (FName (name)); }
 	static const PClass *FindClass (FName name);
 	const PClass *FindClassTentative (FName name);	// not static!
+	PClass *GetReplacement() const;
 
 	static TArray<PClass *> m_Types;
 	static TArray<PClass *> m_RuntimeActors;

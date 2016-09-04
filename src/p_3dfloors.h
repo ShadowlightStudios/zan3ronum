@@ -1,7 +1,6 @@
 #ifndef __SECTORE_H
 #define __SECTORE_H
 
-#include "v_palette.h"
 
 #define CenterSpot(sec) (vertex_t*)&(sec)->soundorg[0]
 
@@ -37,7 +36,7 @@ typedef enum
   FF_FADEWALLS         = 0x8000000,	// Applies real fog to walls and doesn't blend the view		
   FF_ADDITIVETRANS	   = 0x10000000, // Render this floor with additive translucency
   FF_FLOOD			   = 0x20000000, // extends towards the next lowest flooding or solid 3D floor or the bottom of the sector
-  FF_THISINSIDE			   = 0x40000000, // hack for software 3D with FF_BOTHPLANES
+  FF_THISINSIDE		   = 0x40000000, // hack for software 3D with FF_BOTHPLANES
 } ffloortype_e;
 
 // This is for the purpose of Sector_SetContents:
@@ -65,6 +64,8 @@ enum
 
 
 struct secplane_t;
+struct FDynamicColormap;
+
 
 struct F3DFloor
 {
@@ -82,7 +83,7 @@ struct F3DFloor
 	planeref			bottom;
 	planeref			top;
 
-	unsigned char		*toplightlevel;
+	short				*toplightlevel;
 	
 	fixed_t				delta;
 	
@@ -106,13 +107,11 @@ struct F3DFloor
 };
 
 
-//struct FDynamicColormap;
-
 
 struct lightlist_t
 {
 	secplane_t				plane;
-	unsigned char *			p_lightlevel;
+	short *					p_lightlevel;
 	FDynamicColormap *		extra_colormap;
 	PalEntry				blend;
 	int						flags;
@@ -130,17 +129,19 @@ bool P_CheckFor3DFloorHit(AActor * mo);
 bool P_CheckFor3DCeilingHit(AActor * mo);
 void P_Recalculate3DFloors(sector_t *);
 void P_RecalculateAttached3DFloors(sector_t * sec);
-lightlist_t * P_GetPlaneLight(sector_t * , secplane_t * plane, bool underside);
-void P_Spawn3DFloors( void );
 void P_RecalculateLights(sector_t *sector);
 void P_RecalculateAttachedLights(sector_t *sector);
+
+lightlist_t * P_GetPlaneLight(sector_t * , secplane_t * plane, bool underside);
+void P_Spawn3DFloors( void );
 
 struct FLineOpening;
 
 void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *linedef, 
-							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy);
+							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, bool restrict);
 
 secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z);
+int	P_Find3DFloor(sector_t * sec, fixed_t x, fixed_t y, fixed_t z, bool above, bool floor, fixed_t &cmpz);
 							
 #else
 
@@ -170,9 +171,9 @@ inline void P_Spawn3DFloors( void ) {}
 struct FLineOpening;
 
 inline void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *linedef, 
-							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy) {}
+							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, bool restrict) {}
 
-secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z){return sector->floorplane;}
+//secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z){return sector->floorplane;}
 
 #endif
 

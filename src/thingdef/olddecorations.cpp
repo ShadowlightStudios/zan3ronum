@@ -40,7 +40,6 @@
 #include "tarray.h"
 #include "templates.h"
 #include "r_defs.h"
-#include "r_draw.h"
 #include "a_pickups.h"
 #include "s_sound.h"
 #include "cmdlib.h"
@@ -49,7 +48,7 @@
 #include "decallib.h"
 #include "i_system.h"
 #include "thingdef.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 // [BC] New #includes.
 #include "cl_demo.h"
 #include "network.h"
@@ -83,14 +82,13 @@ public:
 	bool TryPickup (AActor *&toucher)
 	{
 		// [BC] The server told us we picked up the item; thus make it so!
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			GoAwayAndDie( );
 			return ( true );
 		}
 
-		INTBOOL success = LineSpecials[special] (NULL, toucher, false,
+		INTBOOL success = P_ExecuteSpecial(special, NULL, toucher, false,
 			args[0], args[1], args[2], args[3], args[4]);
 
 		if (success)
@@ -211,6 +209,7 @@ void ParseOldDecoration(FScanner &sc, EDefinitionType def)
 	if (info->NumOwnedStates == 1)
 	{
 		info->OwnedStates->Tics = -1;
+		info->OwnedStates->TicRange = 0;
 		info->OwnedStates->Misc1 = 0;
 	}
 	else
@@ -238,6 +237,7 @@ void ParseOldDecoration(FScanner &sc, EDefinitionType def)
 			else
 			{
 				info->OwnedStates[i].Tics = -1;
+				info->OwnedStates[i].TicRange = 0;
 				info->OwnedStates[i].Misc1 = 0;
 			}
 
@@ -285,6 +285,7 @@ void ParseOldDecoration(FScanner &sc, EDefinitionType def)
 			else
 			{
 				info->OwnedStates[i].Tics = -1;
+				info->OwnedStates[i].TicRange = 0;
 				info->OwnedStates[i].Misc1 = 0;
 			}
 
@@ -319,12 +320,14 @@ void ParseOldDecoration(FScanner &sc, EDefinitionType def)
 			}
 			info->OwnedStates[i].NextState = &info->OwnedStates[info->NumOwnedStates-1];
 			info->OwnedStates[i].Tics = 5;
+			info->OwnedStates[i].TicRange = 0;
 			info->OwnedStates[i].Misc1 = 0;
 			info->OwnedStates[i].SetAction(FindGlobalActionFunction("A_FreezeDeath"));
 
 			i = info->NumOwnedStates - 1;
 			info->OwnedStates[i].NextState = &info->OwnedStates[i];
 			info->OwnedStates[i].Tics = 1;
+			info->OwnedStates[i].TicRange = 0;
 			info->OwnedStates[i].Misc1 = 0;
 			info->OwnedStates[i].SetAction(FindGlobalActionFunction("A_FreezeDeathChunks"));
 			bag.statedef.SetStateLabel("Ice", &info->OwnedStates[extra.IceDeathStart]);
@@ -689,6 +692,7 @@ static void ParseSpriteFrames (FActorInfo *info, TArray<FState> &states, FScanne
 		}
 
 		state.Tics = rate;
+		state.TicRange = 0;
 
 		while (*token)
 		{

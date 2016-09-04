@@ -14,8 +14,7 @@ static FRandom pr_reaverattack ("ReaverAttack");
 DEFINE_ACTION_FUNCTION(AActor, A_ReaverRanged)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -26,12 +25,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_ReaverRanged)
 		int pitch;
 
 		A_FaceTarget (self);
-
-		// [BC] If we're the server, play the sound to clients.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "reaver/attack", 1, ATTN_NORM );
-
-		S_Sound (self, CHAN_WEAPON, "reaver/attack", 1, ATTN_NORM);
+		S_Sound (self, CHAN_WEAPON, "reaver/attack", 1, ATTN_NORM, true);	// [BC] Inform the clients.
 		bangle = self->angle;
 		pitch = P_AimLineAttack (self, bangle, MISSILERANGE);
 
@@ -39,7 +33,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_ReaverRanged)
 		{
 			angle_t angle = bangle + (pr_reaverattack.Random2() << 20);
 			int damage = ((pr_reaverattack() & 7) + 1) * 3;
-			P_LineAttack (self, angle, MISSILERANGE, pitch, damage, NAME_None, NAME_StrifePuff);
+			P_LineAttack (self, angle, MISSILERANGE, pitch, damage, NAME_Hitscan, NAME_StrifePuff);
 		}
 	}
 }

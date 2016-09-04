@@ -220,7 +220,7 @@ public:
 		while(AvailOut && Stream.State != STREAM_FINAL);
 
 		assert(AvailOut == 0);
-		return Out - (BYTE*)buffer;
+		return (long)(Out - (BYTE*)buffer);
 	}
 };
 
@@ -354,7 +354,7 @@ bool FWadFile::Open(bool quiet)
 	{
 		uppercopy (Lumps[i].Name, fileinfo[i].Name);
 		Lumps[i].Name[8] = 0;
-		Lumps[i].Compressed = Lumps[i].Name[0] & 0x80;
+		Lumps[i].Compressed = (Lumps[i].Name[0] & 0x80) == 0x80;
 		Lumps[i].Name[0] &= ~0x80;
 
 		Lumps[i].Owner = this;
@@ -379,6 +379,7 @@ bool FWadFile::Open(bool quiet)
 		SetNamespace("TX_START", "TX_END", ns_newtextures);
 		SetNamespace("V_START", "V_END", ns_strifevoices);
 		SetNamespace("HI_START", "HI_END", ns_hires);
+		SetNamespace("VX_START", "VX_END", ns_voxels);
 		SkinHack();
 	}
 	return true;
@@ -418,7 +419,7 @@ inline bool FWadFile::IsMarker(int lump, const char *marker)
 struct Marker
 {
 	int markertype;
-	int index;
+	unsigned int index;
 };
 
 void FWadFile::SetNamespace(const char *startmarker, const char *endmarker, namespace_t space, bool flathack)
@@ -432,13 +433,13 @@ void FWadFile::SetNamespace(const char *startmarker, const char *endmarker, name
 	{
 		if (IsMarker(i, startmarker))
 		{
-			Marker m = {0, i };
+			Marker m = { 0, i };
 			markers.Push(m);
 			numstartmarkers++;
 		}
 		else if (IsMarker(i, endmarker))
 		{
-			Marker m = {1, i };
+			Marker m = { 1, i };
 			markers.Push(m);
 			numendmarkers++;
 		}
@@ -455,8 +456,8 @@ void FWadFile::SetNamespace(const char *startmarker, const char *endmarker, name
 		{
 			// We have found no F_START but one or more F_END markers.
 			// mark all lumps before the last F_END marker as potential flats.
-			int end = markers[markers.Size()-1].index;
-			for(int i = 0; i < end; i++)
+			unsigned int end = markers[markers.Size()-1].index;
+			for(unsigned int i = 0; i < end; i++)
 			{
 				if (Lumps[i].LumpSize == 4096)
 				{

@@ -55,10 +55,10 @@ static TArray<FVariableInfo*> variables;
 //==========================================================================
 
 // [RH] Keep GCC quiet by not using offsetof on Actor types.
-#define DEFINE_FLAG(prefix, name, type, variable) { prefix##_##name, #name, (int)(size_t)&((type*)1)->variable - 1 }
-#define DEFINE_FLAG2(symbol, name, type, variable) { symbol, #name, (int)(size_t)&((type*)1)->variable - 1 }
-#define DEFINE_DEPRECATED_FLAG(name) { DEPF_##name, #name, -1 }
-#define DEFINE_DUMMY_FLAG(name) { DEPF_UNUSED, #name, -1 }
+#define DEFINE_FLAG(prefix, name, type, variable) { prefix##_##name, #name, (int)(size_t)&((type*)1)->variable - 1, sizeof(((type *)0)->variable) }
+#define DEFINE_FLAG2(symbol, name, type, variable) { symbol, #name, (int)(size_t)&((type*)1)->variable - 1, sizeof(((type *)0)->variable) }
+#define DEFINE_DEPRECATED_FLAG(name) { DEPF_##name, #name, -1, 0 }
+#define DEFINE_DUMMY_FLAG(name) { DEPF_UNUSED, #name, -1, 0 }
 
 static FFlagDef ActorFlags[]=
 {
@@ -182,9 +182,10 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF4, NOSKIN, AActor, flags4),
 	DEFINE_FLAG(MF4, BOSSDEATH, AActor, flags4),
 
-	DEFINE_FLAG(MF5, FASTER, AActor, flags5),
-	DEFINE_FLAG(MF5, FASTMELEE, AActor, flags5),
+	DEFINE_FLAG(MF5, DONTDRAIN, AActor, flags5),
 	DEFINE_FLAG(MF5, NODROPOFF, AActor, flags5),
+	DEFINE_FLAG(MF5, NOFORWARDFALL, AActor, flags5),
+	DEFINE_FLAG(MF5, COUNTSECRET, AActor, flags5),
 	DEFINE_FLAG(MF5, NODAMAGE, AActor, flags5),
 	DEFINE_FLAG(MF5, BLOODSPLATTER, AActor, flags5),
 	DEFINE_FLAG(MF5, OLDRADIUSDMG, AActor, flags5),
@@ -227,7 +228,23 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG(MF6, ADDITIVEPOISONDAMAGE, AActor, flags6),
 	DEFINE_FLAG(MF6, ADDITIVEPOISONDURATION, AActor, flags6),
 	DEFINE_FLAG(MF6, BLOCKEDBYSOLIDACTORS, AActor, flags6),
+	DEFINE_FLAG(MF6, NOMENU, AActor, flags6),
+	DEFINE_FLAG(MF6, SEEINVISIBLE, AActor, flags6),
+	DEFINE_FLAG(MF6, DONTCORPSE, AActor, flags6),
+	DEFINE_FLAG(MF6, DOHARMSPECIES, AActor, flags6),
+	DEFINE_FLAG(MF6, POISONALWAYS, AActor, flags6),
+	DEFINE_FLAG(MF6, NOTAUTOAIMED, AActor, flags6),
+	DEFINE_FLAG(MF6, NOTONAUTOMAP, AActor, flags6),
+	DEFINE_FLAG(MF6, RELATIVETOFLOOR, AActor, flags6),
 
+	DEFINE_FLAG(MF7, NEVERTARGET, AActor, flags7),
+	DEFINE_FLAG(MF7, NOTELESTOMP, AActor, flags7),
+	DEFINE_FLAG(MF7, ALWAYSTELEFRAG, AActor, flags7),
+
+	DEFINE_FLAG(MF7, HITTARGET, AActor, flags7),
+	DEFINE_FLAG(MF7, HITMASTER, AActor, flags7),
+	DEFINE_FLAG(MF7, HITTRACER, AActor, flags7),
+	
 	// [BC] New DECORATE flag defines here.
 	DEFINE_FLAG(STFL, BLUETEAM, AActor, ulSTFlags),
 	DEFINE_FLAG(STFL, REDTEAM, AActor, ulSTFlags),
@@ -269,6 +286,8 @@ static FFlagDef ActorFlags[]=
 	DEFINE_FLAG2(BOUNCE_AllActors, BOUNCEONACTORS, AActor, BounceFlags),
 	DEFINE_FLAG2(BOUNCE_ExplodeOnWater, EXPLODEONWATER, AActor, BounceFlags),
 	DEFINE_FLAG2(BOUNCE_MBF, MBFBOUNCER, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_AutoOffFloorOnly, BOUNCEAUTOOFFFLOORONLY, AActor, BounceFlags),
+	DEFINE_FLAG2(BOUNCE_UseBounceState, USEBOUNCESTATE, AActor, BounceFlags),
 
 	// Deprecated flags. Handling must be performed in HandleDeprecatedFlags
 	DEFINE_DEPRECATED_FLAG(FIREDAMAGE),
@@ -282,12 +301,17 @@ static FFlagDef ActorFlags[]=
 	DEFINE_DEPRECATED_FLAG(HEXENBOUNCE),
 	DEFINE_DEPRECATED_FLAG(DOOMBOUNCE),
 
+	// Deprecated flags with no more existing functionality.
+	DEFINE_DUMMY_FLAG(FASTER),				// obsolete, replaced by 'Fast' state flag
+	DEFINE_DUMMY_FLAG(FASTMELEE),			// obsolete, replaced by 'Fast' state flag
+
 	// [BB] ST supports these flags.
 	/*
-// Various Skulltag flags that are quite irrelevant to ZDoom
+	// Various Skulltag flags that are quite irrelevant to ZDoom
 	DEFINE_DUMMY_FLAG(NONETID),				// netcode-based
 	DEFINE_DUMMY_FLAG(ALLOWCLIENTSPAWN),	// netcode-based
 	DEFINE_DUMMY_FLAG(CLIENTSIDEONLY),	    // netcode-based
+	DEFINE_DUMMY_FLAG(SERVERSIDEONLY),		// netcode-based
 	DEFINE_DUMMY_FLAG(EXPLODEONDEATH),	    // seems useless
 	*/
 };
@@ -300,20 +324,24 @@ static FFlagDef InventoryFlags[] =
 	DEFINE_FLAG(IF, UNDROPPABLE, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, INVBAR, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, HUBPOWER, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, UNTOSSABLE, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, ADDITIVETIME, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, ALWAYSPICKUP, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, FANCYPICKUPSOUND, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, BIGPOWERUP, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, KEEPDEPLETED, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, IGNORESKILL, AInventory, ItemFlags),
-	DEFINE_FLAG(IF, ADDITIVETIME, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, NOATTENPICKUPSOUND, AInventory, ItemFlags),
 	DEFINE_FLAG(IF, PERSISTENTPOWER, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, RESTRICTABSOLUTELY, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, NEVERRESPAWN, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, NOSCREENFLASH, AInventory, ItemFlags),
+	DEFINE_FLAG(IF, TOSSED, AInventory, ItemFlags),
 	// [BB] New ST flags.
 	DEFINE_FLAG(IF, FORCERESPAWNINSURVIVAL, AInventory, ItemFlags),
 
 	DEFINE_DEPRECATED_FLAG(PICKUPFLASH),
-	DEFINE_DEPRECATED_FLAG(INTERHUBSTRIP),
-};
+	DEFINE_DEPRECATED_FLAG(INTERHUBSTRIP),};
 
 static FFlagDef WeaponFlags[] =
 {
@@ -338,12 +366,21 @@ static FFlagDef WeaponFlags[] =
 	DEFINE_FLAG(WIF, NOAUTOAIM, AWeapon, WeaponFlags),
 	DEFINE_FLAG(WIF, ALLOW_WITH_RESPAWN_INVUL, AWeapon, WeaponFlags), // [BB] Marks weapons that can be used while respawn invulnerability is active.
 	DEFINE_FLAG(WIF, NOLMS, AWeapon, WeaponFlags), // [BB] Marks weapons that are not given to the player in LMS.
+	DEFINE_FLAG(WIF, ALT_USES_BOTH, AWeapon, WeaponFlags),
 };
 
 static FFlagDef PlayerPawnFlags[] =
 {
 	// PlayerPawn flags
 	DEFINE_FLAG(PPF, NOTHRUSTWHENINVUL, APlayerPawn, PlayerFlags),
+	DEFINE_FLAG(PPF, CANSUPERMORPH, APlayerPawn, PlayerFlags),
+	DEFINE_FLAG(PPF, CROUCHABLEMORPH, APlayerPawn, PlayerFlags),
+};
+
+static FFlagDef PowerSpeedFlags[] =
+{
+	// PowerSpeed flags
+	DEFINE_FLAG(PSF, NOTRAIL, APowerSpeed, SpeedFlags),
 };
 
 static const struct FFlagList { const PClass *Type; FFlagDef *Defs; int NumDefs; } FlagLists[] =
@@ -352,6 +389,7 @@ static const struct FFlagList { const PClass *Type; FFlagDef *Defs; int NumDefs;
 	{ RUNTIME_CLASS(AInventory), 	InventoryFlags,	countof(InventoryFlags) },
 	{ RUNTIME_CLASS(AWeapon), 		WeaponFlags,	countof(WeaponFlags) },
 	{ RUNTIME_CLASS(APlayerPawn),	PlayerPawnFlags,countof(PlayerPawnFlags) },
+	{ RUNTIME_CLASS(APowerSpeed),	PowerSpeedFlags,countof(PowerSpeedFlags) },
 };
 #define NUM_FLAG_LISTS (countof(FlagLists))
 
@@ -436,7 +474,7 @@ FFlagDef *FindFlag (const PClass *type, const char *part1, const char *part2)
 //
 //==========================================================================
 
-const char *GetFlagName(int flagnum, int flagoffset)
+const char *GetFlagName(unsigned int flagnum, int flagoffset)
 {
 	for(unsigned i = 0; i < countof(ActorFlags); i++)
 	{
@@ -606,6 +644,7 @@ void InitThingdef()
 	}
 
 	// Create a sorted list of properties
+	if (properties.Size() == 0)
 	{
 		FAutoSegIterator probe(GRegHead, GRegTail);
 
@@ -618,6 +657,7 @@ void InitThingdef()
 	}
 
 	// Create a sorted list of native action functions
+	if (AFTable.Size() == 0)
 	{
 		FAutoSegIterator probe(ARegHead, ARegTail);
 
@@ -630,6 +670,7 @@ void InitThingdef()
 	}
 
 	// Create a sorted list of native variables
+	if (variables.Size() == 0)
 	{
 		FAutoSegIterator probe(MRegHead, MRegTail);
 

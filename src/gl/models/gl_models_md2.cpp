@@ -78,7 +78,7 @@ static void UnpackVector(unsigned short packed, float vec[3])
 //
 //===========================================================================
 
-bool FDMDModel::Load(const char * path, const char * buffer, int length)
+bool FDMDModel::Load(const char * path, int, const char * buffer, int length)
 {
 	struct dmd_chunk_t
 	{
@@ -176,7 +176,7 @@ bool FDMDModel::Load(const char * path, const char * buffer, int length)
 		// Translate each vertex.
 		for(k = 0, pVtx = pfr->vertices; k < info.numVertices; k++, pVtx++)
 		{
-			UnpackVector(USHORT(pVtx->normal), frame->normals[k].xyz);
+			UnpackVector((unsigned short)(pVtx->normal), frame->normals[k].xyz);
 			for(c = 0; c < 3; c++)
 			{
 				frame->vertices[k].xyz[axis[c]] =
@@ -208,7 +208,7 @@ bool FDMDModel::Load(const char * path, const char * buffer, int length)
 	for(i = 0; i < info.numLODs; i++)
 		for(k = 0; k < lodInfo[i].numTriangles; k++)
 			for(c = 0; c < 3; c++)
-				vertexUsage[SHORT(triangles[i][k].vertexIndices[c])] |= 1 << i;
+				vertexUsage[short(triangles[i][k].vertexIndices[c])] |= 1 << i;
 
 	loaded=true;
 	return true;
@@ -220,18 +220,21 @@ FDMDModel::~FDMDModel()
 	int i;
 
 	// clean up
-	for (i=0;i<info.numSkins;i++)
+	if (skins != NULL)
 	{
-		if (skins[i]!=NULL) delete skins[i];
+		// skins are managed by the texture manager so they must not be deleted here.
+		delete [] skins;
 	}
-	delete [] skins;
 
-	for (i=0;i<info.numFrames;i++)
+	if (frames != NULL)
 	{
-		delete [] frames[i].vertices;
-		delete [] frames[i].normals;
+		for (i=0;i<info.numFrames;i++)
+		{
+			delete [] frames[i].vertices;
+			delete [] frames[i].normals;
+		}
+		delete [] frames;
 	}
-	delete [] frames;
 
 	for(i = 0; i < info.numLODs; i++)
 	{
@@ -260,7 +263,7 @@ int FDMDModel::FindFrame(const char * name)
 // Render a set of GL commands using the given data.
 //
 //===========================================================================
-void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FModelVertex * vertices, Matrix3x4 *modeltoworld)
+void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FModelVertex * vertices)
 {
 	char   *pos;
 	FGLCommandVertex * v;
@@ -273,7 +276,7 @@ void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FMod
 		pos += 4;
 
 		// The type of primitive depends on the sign.
-		gl.Begin(count > 0 ? GL_TRIANGLE_STRIP : GL_TRIANGLE_FAN);
+		glBegin(count > 0 ? GL_TRIANGLE_STRIP : GL_TRIANGLE_FAN);
 		count = abs(count);
 
 		while(count--)
@@ -281,28 +284,16 @@ void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FMod
 			v = (FGLCommandVertex *) pos;
 			pos += sizeof(FGLCommandVertex);
 
-			gl.TexCoord2fv(&v->s);
-
-			if (modeltoworld == NULL)
-			{
-				gl.Vertex3fv((float*)&vertices[v->index]);
-			}
-			else
-			{
-				float *f = (float*)&vertices[v->index];
-
-				Vector v = *modeltoworld * Vector(f[0], f[1], f[2]);
-				gl.Vertex3fv(&v[0]);
-			}
-
+			glTexCoord2fv(&v->s);
+			glVertex3fv((float*)&vertices[v->index]);
 		}
 
-		gl.End();
+		glEnd();
 	}
 }
 
 
-void FDMDModel::RenderFrame(FTexture * skin, int frameno, int cm, Matrix3x4 *modeltoworld, int translation)
+void FDMDModel::RenderFrame(FTexture * skin, int frameno, int cm, int translation)
 {
 	int activeLod;
 
@@ -343,10 +334,10 @@ void FDMDModel::RenderFrame(FTexture * skin, int frameno, int cm, Matrix3x4 *mod
 		activeLod = 0;
 	}
 
-	RenderGLCommands(lods[activeLod].glCommands, numVerts, frame->vertices, modeltoworld/*, modelColors, NULL*/);
+	RenderGLCommands(lods[activeLod].glCommands, numVerts, frame->vertices/*, modelColors, NULL*/);
 }
 
-void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int frameno2, double inter, int cm, Matrix3x4 *modeltoworld, int translation)
+void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int frameno2, double inter, int cm, int translation)
 {
 	int activeLod = 0;
 
@@ -376,7 +367,7 @@ void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 			verticesInterpolated[k].xyz[i] = (1-inter)*vertices1[k].xyz[i]+ (inter)*vertices2[k].xyz[i];
 	}
 
-	RenderGLCommands(lods[activeLod].glCommands, numVerts, verticesInterpolated, modeltoworld/*, modelColors, NULL*/);
+	RenderGLCommands(lods[activeLod].glCommands, numVerts, verticesInterpolated/*, modelColors, NULL*/);
 	delete[] verticesInterpolated;
 }
 
@@ -387,7 +378,7 @@ void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 //
 //===========================================================================
 
-bool FMD2Model::Load(const char * path, const char * buffer, int length)
+bool FMD2Model::Load(const char * path, int, const char * buffer, int length)
 {
 	// Internal data structures of MD2 files - only used during loading!
 	struct md2_header_t
@@ -457,6 +448,11 @@ bool FMD2Model::Load(const char * path, const char * buffer, int length)
 	if (info.offsetFrames + info.frameSize * info.numFrames > length)
 	{
 		Printf("LoadModel: Model '%s' file too short\n", path);
+		return false;
+	}
+	if (lodInfo[0].numGlCommands <= 0)
+	{
+		Printf("LoadModel: Model '%s' invalid NumGLCommands\n", path);
 		return false;
 	}
 

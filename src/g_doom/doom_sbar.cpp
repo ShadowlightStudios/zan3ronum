@@ -13,7 +13,7 @@
 #include "a_keys.h"
 #include "templates.h"
 #include "i_system.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "sbarinfo.h"
 #include "g_level.h"
 #include "v_palette.h"
@@ -60,8 +60,8 @@ public:
 
 		DBaseStatusBar::Images.Init (sharedLumpNames, NUM_BASESB_IMAGES);
 		tex = DBaseStatusBar::Images[imgBNumbers];
-		BigWidth = tex->GetWidth();
-		BigHeight = tex->GetHeight();
+		BigWidth = tex->GetScaledWidth();
+		BigHeight = tex->GetScaledHeight();
 
 		DoCommonInit ();
 	}
@@ -218,7 +218,7 @@ private:
 		DrawFace ();
 		DrawKeys ();
 
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		{
 			if ( OldPoints != CPlayer->lPointCount )
 			{
@@ -256,14 +256,16 @@ private:
 		{
 			HealthRefresh--;
 			// [RC] If we're spying someone and aren't allowed to see his stats, draw dashes instead of numbers.
-			if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+			if ( NETWORK_InClientMode() &&
 				( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ) ) == false ))
 			{
 				DrawUnknownDashs(90, 3);
 			}
 			else
 				DrawNumber (OldHealth, 90/*48*/, 3);
-
+			FTexture *pic = TexMan["STTPRCNT"];
+			if (pic != NULL)
+				DrawImage (pic, 90, 3);
 		}
 		AInventory *armor = /*[BC]*/ CPlayer->mo ? CPlayer->mo->FindInventory<ABasicArmor>() : NULL;
 		int armorpoints = armor != NULL ? armor->Amount : 0;
@@ -280,6 +282,9 @@ private:
 				DrawUnknownDashs(221, 3);
 			else
 				DrawNumber (OldArmor, 221/*179*/, 3);
+			FTexture *pic = TexMan["STTPRCNT"];
+			if (pic != NULL)
+				DrawImage (pic, 221, 3);
 		}
 		if (CPlayer->ReadyWeapon != NULL)
 		{
@@ -299,7 +304,7 @@ private:
 		{
 			ActiveAmmoRefresh--;
 			// [RC] If we're spying someone and aren't allowed to see his stats, draw dashes instead of numbers.
-			if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+			if ( NETWORK_InClientMode() &&
 				( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ) ) == false ))
 			{
 				DrawUnknownDashs(44, 3);
@@ -370,7 +375,7 @@ private:
 
 		if (pic != NULL)
 		{
-			w = pic->GetWidth();
+			w = pic->GetScaledWidth();
 			x -= pic->LeftOffset;
 			y -= pic->TopOffset;
 
@@ -385,7 +390,7 @@ private:
 	void DrawAmmoStats ()
 	{
 		// [RC] If we're spying someone and aren't allowed to see his stats, don't draw this at all.
-		if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+		if ( NETWORK_InClientMode() &&
 			( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ) ) == false ))
 		{
 			return;
@@ -445,7 +450,7 @@ private:
 			DrawPartialImage (&StatusBarTex, 276, 4*3);
 			for (i = 0; i < 4; i++)
 			{
-				if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
+				if (( NETWORK_InClientMode() == false ) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
 					DrSmallNumber (ammo[i], 276, 5 + 6*i);
 			}
 		}
@@ -455,7 +460,7 @@ private:
 			DrawPartialImage (&StatusBarTex, 302, 4*3);
 			for (i = 0; i < 4; i++)
 			{
-				if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
+				if (( NETWORK_InClientMode() == false ) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
 					DrSmallNumber (maxammo[i], 302, 5 + 6*i);
 			}
 		}
@@ -661,11 +666,9 @@ void DrawFullHUD_Ammo(AAmmo *pAmmo)
 void DrawFullHUD_Rune()
 {
 	if ( CPlayer->mo )
-		pInventory = CPlayer->mo->Inventory;
+		pInventory = CPlayer->mo->Rune;
 	else
 		pInventory = NULL;
-	while (( pInventory ) && ( pInventory->IsKindOf( PClass::FindClass( "Rune" )) == false ))
-		pInventory = pInventory->Inventory;
 
 	if (( pInventory ) && ( pInventory->Icon.isValid() ))
 	{
@@ -716,7 +719,7 @@ void DrawFullHUD_GameInformation()
 				szString );
 
 		// [BB] In cooperative games we want to see the kill count and the keys.
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE )
 		{
 			DrawFullScreenKeysST( ulCurXPos, ulCurYPos, 10 );
 		}
@@ -780,15 +783,15 @@ void DrawFullHUD_GameInformation()
 
 	// [RC] If the game is team-based but isn't an a team
 	// article game (ST/CTF), just show the scores / frags.
-	else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		LONG	lPoints[MAX_TEAMS]; // Frags or points
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		{
 			for ( ULONG i = 0; i < teams.Size( ); i++ )
 				lPoints[i] = TEAM_GetWinCount( i );
 		}			
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 		{
 			for ( ULONG i = 0; i < teams.Size( ); i++ )
 				lPoints[i] = TEAM_GetFragCount( i );;
@@ -1052,7 +1055,7 @@ void DrawFullHUD_GameInformation()
 			DTA_HUDRules, HUD_Normal,
 			DTA_CenterBottomOffset, true,
 			TAG_DONE);
-		if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
+		if (( NETWORK_InClientMode() == false ) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
 			DrBNumberOuter (CPlayer->health, 40, -BigHeight-4);
 
 		// [BC] Draw rune.
@@ -1084,7 +1087,7 @@ void DrawFullHUD_GameInformation()
 				DTA_HUDRules, HUD_Normal,
 				DTA_CenterBottomOffset, true,
 				TAG_DONE);
-			if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
+			if (( NETWORK_InClientMode() == false ) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
 				DrBNumberOuter (armor->Amount, 40, -39);
 		}
 
@@ -1112,14 +1115,14 @@ void DrawFullHUD_GameInformation()
 					DTA_HUDRules, HUD_Normal,
 					DTA_CenterBottomOffset, true,
 					TAG_DONE);
-				if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
+				if (( NETWORK_InClientMode() == false ) || ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ))))
 					DrBNumberOuter (ammo2->Amount, -67, y - BigHeight);
 				ammotop = y - BigHeight;
 			}
 		}
 
 		// Draw keys in cooperative modes.
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_COOPERATIVE )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE )
 		{
 			int maxw = 0;
 			int count = 0;
@@ -1250,7 +1253,7 @@ void DrawFullHUD_GameInformation()
 		ulCurYPos = screenHeight - 4;
 
 		// [RC] If we're spying and can't see health/armor/ammo, draw a nice little display to show this.
-		if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+		if ( NETWORK_InClientMode() &&
 			( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, ULONG( CPlayer - players ) ) == false ))
 		{
 			DrawFullHUD_Unknown();
@@ -1272,11 +1275,11 @@ void DrawFullHUD_GameInformation()
 			healthArmorTexWidth = MAX ( MAX ( TexMan["MEDIA0"]->GetWidth(), TexMan["ARM1A0"]->GetWidth() ) , armorTex->GetWidth() );
 
 			// Draw health.
-			if( !( instagib && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEATHMATCH ) )) // [RC] Hide in instagib (when playing instagib)
+			if( !( instagib && ( GAMEMODE_GetCurrentFlags() & GMF_DEATHMATCH ) )) // [RC] Hide in instagib (when playing instagib)
 				DrawFullHUD_Health();
 
 			// Next, draw the armor.
-			if( !( instagib && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEATHMATCH ) )) // [RC] Hide in instagib (when playing instagib)
+			if( !( instagib && ( GAMEMODE_GetCurrentFlags() & GMF_DEATHMATCH ) )) // [RC] Hide in instagib (when playing instagib)
 				DrawFullHUD_Armor();
 			
 			// Now draw the ammo.
@@ -1493,7 +1496,7 @@ void DDoomStatusBar::FDoomStatusBarTexture::MakeTexture ()
 	{
 		DrawToBar ("STARMS", 104, 0, NULL);
 	}
-	else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+	else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		DrawToBar( "STPTS", 104, 0, NULL );
 	DrawToBar("STTPRCNT", 90, 3, NULL);
 	DrawToBar("STTPRCNT", 221, 3, NULL);
@@ -1509,7 +1512,7 @@ int DDoomStatusBar::FDoomStatusBarTexture::CopyTrueColorPixels(FBitmap *bmp, int
 	if (!deathmatch)
 	{
 		// [BB] Possibly draw STPTS instead of STARMS.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			tex = TexMan["STPTS"];
 		else
 			tex = TexMan["STARMS"];
@@ -1519,12 +1522,6 @@ int DDoomStatusBar::FDoomStatusBarTexture::CopyTrueColorPixels(FBitmap *bmp, int
 		}
 	}
 
-	tex = TexMan["STTPRCNT"];
-	if (tex != NULL)
-	{
-		tex->CopyTrueColorPixels(bmp, x+90, y+3);
-		tex->CopyTrueColorPixels(bmp, x+221, y+3);
-	}
 	if ( NETWORK_GetState( ) != NETSTATE_SINGLE )
 	{
 		tex = TexMan["STFBANY"];

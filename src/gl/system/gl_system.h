@@ -5,8 +5,10 @@
 //#define __wtypes_h__
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINDOWS 0x410
+#ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501			// Support the mouse wheel and session notification.
 #define _WIN32_IE 0x0500
+#endif
 #define DIRECTINPUT_VERSION 0x800
 #define DIRECTDRAW_VERSION 0x0300
 
@@ -47,9 +49,9 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <signal.h>
-#ifndef __APPLE__ // [AL] OpenGL on OS X
+#if !defined(__APPLE__)
 #include <malloc.h>
-#endif // !__APPLE__ [AL]
+#endif
 #include <time.h>
 
 #ifdef _MSC_VER
@@ -64,17 +66,23 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#ifdef __APPLE__ // [AL] OpenGL on OS X
+//GL headers
+#if defined(__APPLE__)
 #include <GL/glew.h>
 #include <OpenGL/OpenGL.h>
-#else // !__APPLE__ [AL]
+#elif defined(__unix__)
+#include <GL/glew.h>
+#include "gl/api/glext.h"
+#else // !__APPLE__ && !__unix__
 #include <GL/gl.h>
 #include <GL/glu.h>
-#include <GL/glext.h>
-#endif // __APPLE__ [AL]
+#include "gl/api/glext.h"
+#endif
+#include "gl/api/gl_api.h"
+
 #ifdef _WIN32
 #define DWORD WINDOWS_DWORD	// I don't want to depend on this throughout the GL code!
-#include <GL/wglext.h>
+#include "gl/api/wglext.h"
 #ifndef __WINE__
 #undef DWORD
 #endif
@@ -87,12 +95,9 @@ inline T max( T a, T b) { return (((a)>(b)) ? (a) : (b)); }
 #define _access(a,b)	access(a,b)
 #endif
 #ifndef _WIN32
-#include "platform.h"
 #include <SDL.h>
 #endif
-#include "gl/system/gl_interface.h"
 
-extern RenderContext gl;
 
 #ifdef LoadMenu
 #undef LoadMenu

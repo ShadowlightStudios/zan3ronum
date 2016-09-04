@@ -46,7 +46,6 @@ enum
 	CLIENTFLAGS_UNLAGGED = 			0x01,
 	CLIENTFLAGS_RESPAWNONFIRE = 	0x02,
 	CLIENTFLAGS_CLIENTSIDEPUFFS = 	0x04,
-	CLIENTFLAGS_PING_UNLAGGED = 	0x08,
 
 	// This is the default flags used for cl_clientflags
 	CLIENTFLAGS_DEFAULT = CLIENTFLAGS_UNLAGGED | CLIENTFLAGS_RESPAWNONFIRE
@@ -81,8 +80,9 @@ int D_PickRandomTeam ();
 class player_t;
 int D_GetFragCount (player_t *player);
 
-// [TP]
+// [TP] Zandronum functions
 void D_UpdatePlayerColors( ULONG ulPlayer = MAXPLAYERS );
 bool D_ShouldOverridePlayerColors();
+void D_SendPendingUserinfoChanges();
 
 #endif //__D_CLIENTINFO_H__

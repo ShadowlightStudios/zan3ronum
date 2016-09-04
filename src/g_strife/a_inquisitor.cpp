@@ -28,8 +28,7 @@ bool InquisitorCheckDistance (AActor *self)
 DEFINE_ACTION_FUNCTION(AActor, A_InquisitorDecide)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -64,8 +63,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorAttack)
 	AActor *proj;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -75,7 +73,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorAttack)
 
 	A_FaceTarget (self);
 
-	self->z += 32*FRACBITS;
+	self->z += 32*FRACUNIT;
 	self->angle -= ANGLE_45/32;
 	proj = P_SpawnMissileZAimed (self, self->z, self->target, PClass::FindClass("InquisitorShot"));
 	if (proj != NULL)
@@ -96,7 +94,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorAttack)
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SpawnMissile( proj );
 	}
-	self->z -= 32*FRACBITS;
+	self->z -= 32*FRACUNIT;
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_InquisitorJump)
@@ -106,8 +104,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorJump)
 	angle_t an;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -135,7 +132,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorJump)
 	// [BC] If we're the server, update the thing's position.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
-		SERVERCOMMANDS_MoveThingExact( self, CM_Z|CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( self, CM_Z|CM_VELX|CM_VELY|CM_VELZ );
 
 		// [CW] Also, set the flags to ensure the actor can fly.
 		SERVERCOMMANDS_SetThingFlags( self, FLAGSET_FLAGS );
@@ -145,8 +142,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_InquisitorJump)
 DEFINE_ACTION_FUNCTION(AActor, A_InquisitorCheckLand)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

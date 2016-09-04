@@ -35,8 +35,7 @@ static void DragonSeek (AActor *actor, angle_t thresh, angle_t turnMax)
 	AActor *mo;
 
 	// [BB] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -82,11 +81,11 @@ static void DragonSeek (AActor *actor, angle_t thresh, angle_t turnMax)
 		dist = P_AproxDistance (target->x-actor->x, target->y-actor->y);
 		dist = dist/actor->Speed;
 	}
-	// [BB] If we're the server, update the thing's momentum and angle.
+	// [BB] If we're the server, update the thing's velocity and angle.
 	// Unfortunately there are sync issues, if we don't also update the actual position.
 	// Is there a way to fix this without sending the position?
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_VELX|CM_VELY|CM_VELZ );
 
 	if (target->flags&MF_SHOOTABLE && pr_dragonseek() < 64)
 	{ // attack the destination mobj if it's attackable
@@ -100,26 +99,14 @@ static void DragonSeek (AActor *actor, angle_t thresh, angle_t turnMax)
 			if (actor->CheckMeleeRange ())
 			{
 				int damage = pr_dragonseek.HitDice (10);
-				P_DamageMobj (actor->target, actor, actor, damage, NAME_Melee);
-				P_TraceBleed (damage, actor->target, actor);
-				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM);
-
-				// [BB] If we're the server, tell the clients to play the sound.
-				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_SoundActor( actor, CHAN_WEAPON, S_GetName(actor->AttackSound), 1, ATTN_NORM );
+				int newdam = P_DamageMobj (actor->target, actor, actor, damage, NAME_Melee);
+				P_TraceBleed (newdam > 0 ? newdam : damage, actor->target, actor);
+				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.;
 			}
 			else if (pr_dragonseek() < 128 && P_CheckMissileRange(actor))
 			{
-				AActor *missile = P_SpawnMissile(actor, target, PClass::FindClass ("DragonFireball"));						
-				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM);
-
-				// [BB] If we're the server, tell the clients to play the sound and spawn the missile.
-				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				{
-					SERVERCOMMANDS_SoundActor( actor, CHAN_WEAPON, S_GetName(actor->AttackSound), 1, ATTN_NORM );
-					if ( missile )
-						SERVERCOMMANDS_SpawnMissile( missile );
-				}
+				P_SpawnMissile(actor, target, PClass::FindClass ("DragonFireball"), NULL, true); // [BB] Inform clients
+				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.
 			}
 			actor->target = oldTarget;
 		}
@@ -190,8 +177,7 @@ static void DragonSeek (AActor *actor, angle_t thresh, angle_t turnMax)
 DEFINE_ACTION_FUNCTION(AActor, A_DragonInitFlight)
 {
 	// [BB] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -225,8 +211,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_DragonFlight)
 	angle_t angle;
 
 	// [BB] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -244,25 +229,20 @@ DEFINE_ACTION_FUNCTION(AActor, A_DragonFlight)
 		if (abs(self->angle-angle) < ANGLE_45/2 && self->CheckMeleeRange())
 		{
 			int damage = pr_dragonflight.HitDice (8);
-			P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-			P_TraceBleed (damage, self->target, self);
-			S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM);
-
-			// [BB] If we're the server, tell the clients to play the sound.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName(self->AttackSound), 1, ATTN_NORM );
+			int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+			P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
+			S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.
 		}
 		else if (abs(self->angle-angle) <= ANGLE_1*20)
 		{
-			// [BB] If we're the server, tell the clients to update the thing's state and play the sound.
+			// [BB] If we're the server, tell the clients to update the thing's state.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			{
 				SERVERCOMMANDS_SetThingState( self, STATE_MISSILE );
-				SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName(self->AttackSound), 1, ATTN_NORM );
 			}
 
 			self->SetState (self->MissileState);
-			S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM);
+			S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.
 		}
 	}
 	else
@@ -299,17 +279,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_DragonFlap)
 DEFINE_ACTION_FUNCTION(AActor, A_DragonAttack)
 {
 	// [BB] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
-	AActor *missile = P_SpawnMissile (self, self->target, PClass::FindClass ("DragonFireball"));						
-
-	// [BB] If we're the server, tell the clients to spawn the missile.
-	if ( (NETWORK_GetState( ) == NETSTATE_SERVER) && missile )
-		SERVERCOMMANDS_SpawnMissile( missile );
+	P_SpawnMissile (self, self->target, PClass::FindClass ("DragonFireball"), NULL, true); // [BB] Inform clients						
 }
 
 //============================================================================
@@ -351,8 +326,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_DragonPain)
 	CALL_ACTION(A_Pain, self);
 
 	// [BB] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

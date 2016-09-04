@@ -36,6 +36,7 @@
 #include "files.h"
 #include "i_system.h"
 #include "templates.h"
+#include "m_misc.h"
 
 //==========================================================================
 //
@@ -132,6 +133,8 @@ long FileReader::Seek (long offset, int origin)
 
 long FileReader::Read (void *buffer, long len)
 {
+	assert(len >= 0);
+	if (len <= 0) return 0;
 	if (FilePos + len > StartPos + Length)
 	{
 		len = Length - FilePos + StartPos;
@@ -143,11 +146,16 @@ long FileReader::Read (void *buffer, long len)
 
 char *FileReader::Gets(char *strbuf, int len)
 {
-	if (len <= 0) return 0;
+	if (len <= 0 || FilePos >= StartPos + Length) return NULL;
 	char *p = fgets(strbuf, len, File);
 	if (p != NULL)
 	{
-		FilePos = ftell(File) - StartPos;
+		int old = FilePos;
+		FilePos = ftell(File);
+		if (FilePos - StartPos > Length)
+		{
+			strbuf[Length - old + StartPos] = 0;
+		}
 	}
 	return p;
 }
@@ -216,7 +224,7 @@ FileReaderZ::FileReaderZ (FileReader &file, bool zip)
 
 	if (err != Z_OK)
 	{
-		I_Error ("FileReaderZ: inflateInit failed: %d\n", err);
+		I_Error ("FileReaderZ: inflateInit failed: %s\n", M_ZLibError(err).GetChars());
 	}
 }
 
@@ -362,8 +370,8 @@ extern "C" void bz_internal_error (int errcode)
 //
 //==========================================================================
 
-static void *SzAlloc(void *p, size_t size) { p = p; return malloc(size); }
-static void SzFree(void *p, void *address) { p = p; free(address); }
+static void *SzAlloc(void *, size_t size) { return malloc(size); }
+static void SzFree(void *, void *address) { free(address); }
 ISzAlloc g_Alloc = { SzAlloc, SzFree };
 
 FileReaderLZMA::FileReaderLZMA (FileReader &file, size_t uncompressed_size, bool zip)

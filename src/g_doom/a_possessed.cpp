@@ -25,8 +25,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_PosAttack)
 	int slope;
 		
 	// [BC] Server takes care of the rest of this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		S_Sound( self, CHAN_WEAPON, "grunt/attack", 1, ATTN_NORM );
 		return;
@@ -42,7 +41,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_PosAttack)
 	S_Sound (self, CHAN_WEAPON, "grunt/attack", 1, ATTN_NORM);
 	angle += pr_posattack.Random2() << 20;
 	damage = ((pr_posattack()%5)+1)*3;
-	P_LineAttack (self, angle, MISSILERANGE, slope, damage, NAME_None, NAME_BulletPuff);
+	P_LineAttack (self, angle, MISSILERANGE, slope, damage, NAME_Hitscan, NAME_BulletPuff);
 }
 
 static void A_SPosAttack2 (AActor *self)
@@ -59,15 +58,14 @@ static void A_SPosAttack2 (AActor *self)
     {
 		int angle = bangle + (pr_sposattack.Random2() << 20);
 		int damage = ((pr_sposattack()%5)+1)*3;
-		P_LineAttack(self, angle, MISSILERANGE, slope, damage, NAME_None, NAME_BulletPuff);
+		P_LineAttack(self, angle, MISSILERANGE, slope, damage, NAME_Hitscan, NAME_BulletPuff);
     }
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_SPosAttackUseAtkSound)
 {
 	// [BC] Server takes care of the rest of this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		S_Sound ( self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM );
 		return;
@@ -85,8 +83,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SPosAttackUseAtkSound)
 DEFINE_ACTION_FUNCTION(AActor, A_SPosAttack)
 {
 	// [BC] Server takes care of the rest of this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		S_Sound ( self, CHAN_WEAPON, "shotguy/attack", 1, ATTN_NORM );
 		return;
@@ -107,8 +104,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CPosAttack)
 	int slope;
 		
 	// [BC] Server takes care of the rest of this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// [RH] Andy Baker's stealth monsters
 		if (self->flags & MF_STEALTH)
@@ -136,7 +132,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CPosAttack)
 
 	angle = bangle + (pr_cposattack.Random2() << 20);
 	damage = ((pr_cposattack()%5)+1)*3;
-	P_LineAttack (self, angle, MISSILERANGE, slope, damage, NAME_None, NAME_BulletPuff);
+	P_LineAttack (self, angle, MISSILERANGE, slope, damage, NAME_Hitscan, NAME_BulletPuff);
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_CPosRefire)
@@ -145,8 +141,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_CPosRefire)
 	A_FaceTarget (self);
 
 	// [BC] Client chaingunners continue to fire until told by the server to stop.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

@@ -50,19 +50,23 @@
 #include "templates.h"
 #include "cmdlib.h"
 #include "g_level.h"
+// [BB] New #includes.
 #include "cl_commands.h"
 #include "cl_main.h"
 #include "network.h"
 
 extern void LoadActors ();
+extern void InitBotStuff();
+extern void ClearStrifeTypes();
 
+FRandom FState::pr_statetics("StateTics");
 
 //==========================================================================
 //
 //
 //==========================================================================
 
-int GetSpriteIndex(const char * spritename)
+int GetSpriteIndex(const char * spritename, bool add)
 {
 	static char lastsprite[5];
 	static int lastindex;
@@ -88,6 +92,10 @@ int GetSpriteIndex(const char * spritename)
 			return (lastindex = (int)i);
 		}
 	}
+	if (!add)
+	{
+		return (lastindex = -1);
+	}
 	spritedef_t temp;
 	strcpy (temp.name, upper);
 	temp.numframes = 0;
@@ -103,6 +111,7 @@ int GetSpriteIndex(const char * spritename)
 
 void FActorInfo::StaticInit ()
 {
+	sprites.Clear();
 	if (sprites.Size() == 0)
 	{
 		spritedef_t temp;
@@ -123,7 +132,10 @@ void FActorInfo::StaticInit ()
 	}
 
 	Printf ("LoadActors: Load actor definitions.\n");
+	ClearStrifeTypes();
 	LoadActors ();
+	// [BB] Zandronum uses different bot code.
+	//InitBotStuff();
 }
 
 //==========================================================================
@@ -134,7 +146,7 @@ void FActorInfo::StaticInit ()
 
 void FActorInfo::StaticSetActorNums ()
 {
-	memset (SpawnableThings, 0, sizeof(SpawnableThings));
+	SpawnableThings.Clear();
 	DoomEdMap.Empty ();
 
 	for (unsigned int i = 0; i < PClass::m_RuntimeActors.Size(); ++i)
@@ -155,7 +167,7 @@ void FActorInfo::RegisterIDs ()
 
 	if (GameFilter == GAME_Any || (GameFilter & gameinfo.gametype))
 	{
-		if (SpawnID != 0)
+		if (SpawnID > 0)
 		{
 			SpawnableThings[SpawnID] = cls;
 			if (cls != Class) 
@@ -311,6 +323,45 @@ void FActorInfo::SetPainChance(FName type, int chance)
 //
 //==========================================================================
 
+void FActorInfo::SetPainFlash(FName type, PalEntry color)
+{
+	if (PainFlashes == NULL)
+		PainFlashes = new PainFlashList;
+
+	PainFlashes->Insert(type, color);
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
+bool FActorInfo::GetPainFlash(FName type, PalEntry *color) const
+{
+	const FActorInfo *info = this;
+
+	while (info != NULL)
+	{
+		if (info->PainFlashes != NULL)
+		{
+			PalEntry *flash = info->PainFlashes->CheckKey(type);
+			if (flash != NULL)
+			{
+				*color = *flash;
+				return true;
+			}
+		}
+		// Try parent class
+		info = info->Class->ParentClass->ActorInfo;
+	}
+	return false;
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
 void FActorInfo::SetColorSet(int index, const FPlayerColorSet *set)
 {
 	if (set != NULL) 
@@ -323,6 +374,25 @@ void FActorInfo::SetColorSet(int index, const FPlayerColorSet *set)
 		if (ColorSets != NULL) 
 			ColorSets->Remove(index);
 	}
+}
+
+//==========================================================================
+//
+// DmgFactors :: CheckFactor
+//
+// Checks for the existance of a certain damage type. If that type does not
+// exist, the damage factor for type 'None' will be returned, if present.
+//
+//==========================================================================
+
+fixed_t *DmgFactors::CheckFactor(FName type)
+{
+	fixed_t *pdf = CheckKey(type);
+	if (pdf == NULL && type != NAME_None)
+	{
+		pdf = CheckKey(NAME_None);
+	}
+	return pdf;
 }
 
 //==========================================================================
@@ -476,18 +546,7 @@ static void SummonActor (int command, int command2, FCommandLine argv)
 		{
 			const bool bSetAngle = ( argv.argc() > 2 );
 			const SHORT sAngle = bSetAngle ? atoi (argv[2]) : 0;
-			switch(command)
-			{
-			case DEM_SUMMON:
-				CLIENTCOMMANDS_SummonCheat( type->TypeName.GetChars( ), CLC_SUMMONCHEAT, bSetAngle, sAngle );
-				break;
-			case DEM_SUMMONFRIEND:
-				CLIENTCOMMANDS_SummonCheat( type->TypeName.GetChars( ), CLC_SUMMONFRIENDCHEAT, bSetAngle, sAngle );
-				break;
-			case DEM_SUMMONFOE:
-				CLIENTCOMMANDS_SummonCheat( type->TypeName.GetChars( ), CLC_SUMMONFOECHEAT, bSetAngle, sAngle );
-				break;
-			}
+			CLIENTCOMMANDS_SummonCheat( type->TypeName, command, bSetAngle, sAngle );
 			return;
 		}
 
@@ -526,4 +585,87 @@ CCMD (summonmbf)
 CCMD (summonfoe)
 {
 	SummonActor (DEM_SUMMONFOE, DEM_SUMMONFOE2, argv);
+}
+
+
+// Damage type defaults / global settings
+
+TMap<FName, DamageTypeDefinition> GlobalDamageDefinitions;
+
+void DamageTypeDefinition::Apply(FName const type) 
+{ 
+	GlobalDamageDefinitions[type] = *this; 
+}
+
+DamageTypeDefinition *DamageTypeDefinition::Get(FName const type) 
+{ 
+	return GlobalDamageDefinitions.CheckKey(type); 
+}
+
+bool DamageTypeDefinition::IgnoreArmor(FName const type)
+{ 
+	DamageTypeDefinition *dtd = Get(type);
+	if (dtd) return dtd->NoArmor;
+	return false;
+}
+
+//==========================================================================
+//
+// DamageTypeDefinition :: ApplyMobjDamageFactor
+//
+// Calculates mobj damage based on original damage, defined damage factors
+// and damage type.
+//
+// If the specific damage type is not defined, the damage factor for
+// type 'None' will be used (with 1.0 as a default value).
+//
+// Globally declared damage types may override or multiply the damage
+// factor when 'None' is used as a fallback in this function.
+//
+//==========================================================================
+
+int DamageTypeDefinition::ApplyMobjDamageFactor(int damage, FName const type, DmgFactors const * const factors)
+{
+	if (factors)
+	{
+		// If the actor has named damage factors, look for a specific factor
+		fixed_t const *pdf = factors->CheckKey(type);
+		if (pdf) return FixedMul(damage, *pdf); // type specific damage type
+		
+		// If this was nonspecific damage, don't fall back to nonspecific search
+		if (type == NAME_None) return damage;
+	}
+	
+	// If this was nonspecific damage, don't fall back to nonspecific search
+	else if (type == NAME_None) 
+	{ 
+		return damage; 
+	}
+	else
+	{
+		// Normal is unsupplied / 1.0, so there's no difference between modifying and overriding
+		DamageTypeDefinition *dtd = Get(type);
+		return dtd ? FixedMul(damage, dtd->DefaultFactor) : damage;
+	}
+	
+	{
+		fixed_t const *pdf  = factors->CheckKey(NAME_None);
+		DamageTypeDefinition *dtd = Get(type);
+		// Here we are looking for modifications to untyped damage
+		// If the calling actor defines untyped damage factor, that is contained in "pdf".
+		if (pdf) // normal damage available
+		{
+			if (dtd)
+			{
+				if (dtd->ReplaceFactor) return FixedMul(damage, dtd->DefaultFactor); // use default instead of untyped factor
+				return FixedMul(damage, FixedMul(*pdf, dtd->DefaultFactor)); // use default as modification of untyped factor
+			}
+			return FixedMul(damage, *pdf); // there was no default, so actor default is used
+		}
+		else if (dtd)
+		{
+			return FixedMul(damage, dtd->DefaultFactor); // implicit untyped factor 1.0 does not need to be applied/replaced explicitly
+		}
+	}
+	return damage;
 }

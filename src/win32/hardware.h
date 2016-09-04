@@ -57,9 +57,13 @@ class IVideo
 
 void I_InitGraphics ();
 void I_ShutdownGraphics ();
+void I_CreateRenderer();
 
 void I_SaveWindowedPos ();
 void I_RestoreWindowedPos ();
+
+void I_SetFPSLimit(int limit);
+
 
 extern IVideo *Video;
 

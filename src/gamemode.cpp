@@ -378,7 +378,7 @@ bool GAMEMODE_IsGameWaitingForPlayers( void )
 	else if ( possession || teampossession )
 		return ( POSSESSION_GetState( ) == PSNS_WAITINGFORPLAYERS );
 	// [BB] Non-coop game modes need two or more players.
-	else if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( ) ) & GMF_COOPERATIVE ) == false )
+	else if ( ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) == false )
 		return ( GAME_CountActivePlayers( ) < 2 );
 	// [BB] For coop games one player is enough.
 	else
@@ -425,7 +425,7 @@ bool GAMEMODE_IsGameInProgress( void )
 	// [BB] In non-coop game modes without warmup phase, we just say the game is
 	// in progress when there are two or more players and the game is not frozen
 	// due to the end level delay.
-	else if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( ) ) & GMF_COOPERATIVE ) == false )
+	else if ( ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) == false )
 		return ( ( GAME_CountActivePlayers( ) >= 2 ) && ( GAME_GetEndLevelDelay () == 0 ) );
 	// [BB] For coop games one player is enough.
 	else
@@ -463,7 +463,7 @@ bool GAMEMODE_IsGameInProgressOrResultSequence( void )
 //
 bool GAMEMODE_IsLobbyMap( void )
 {
-	return level.flags2 & LEVEL2_ISLOBBY || stricmp(level.mapname, lobby) == 0;
+	return level.flagsZA & LEVEL_ZA_ISLOBBY || stricmp(level.mapname, lobby) == 0;
 }
 
 //*****************************************************************************
@@ -471,14 +471,14 @@ bool GAMEMODE_IsLobbyMap( void )
 bool GAMEMODE_IsLobbyMap( const char* mapname )
 {
 	// [BB] The level is not loaded yet, so we can't use level.flags2 directly.
-	const level_info_t *levelinfo = FindLevelInfo( mapname );
+	const level_info_t *levelinfo = FindLevelInfo( mapname, false );
 
 	if (levelinfo == NULL)
 	{
 		return false;
 	}
 
-	return levelinfo->flags2 & LEVEL2_ISLOBBY || stricmp( levelinfo->mapname, lobby ) == 0;
+	return levelinfo->flagsZA & LEVEL_ZA_ISLOBBY || stricmp( levelinfo->mapname, lobby ) == 0;
 }
 
 //*****************************************************************************
@@ -499,7 +499,7 @@ bool GAMEMODE_IsTimelimitActive( void )
 		return false;
 
 	// [BB] In gamemodes that reset the time during a map reset, the timelimit doesn't make sense when the game is not in progress.
-	if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESET_RESETS_MAPTIME ) && ( GAMEMODE_IsGameInProgress( ) == false ) )
+	if ( ( GAMEMODE_GetCurrentFlags() & GMF_MAPRESET_RESETS_MAPTIME ) && ( GAMEMODE_IsGameInProgress( ) == false ) )
 		return false;
 
 	// [BB] Teamlms doesn't support timelimit, so just turn it off in this mode.
@@ -539,8 +539,7 @@ void GAMEMODE_GetTimeLeftString( FString &TimeLeftString )
 void GAMEMODE_RespawnDeadSpectatorsAndPopQueue( BYTE Playerstate )
 {
 	// [BB] This is server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -562,9 +561,9 @@ void GAMEMODE_RespawnDeadSpectatorsAndPopQueue( BYTE Playerstate )
 		}
 
 		// We don't want to respawn players as soon as the map starts; we only
-		// want to respawn dead spectators.
-		if (( players[ulIdx].mo ) &&
-			( players[ulIdx].mo->health > 0 ) &&
+		// [BB] respawn all dead players and dead spectators.
+		if ((( players[ulIdx].mo == NULL ) ||
+			( players[ulIdx].mo->health > 0 )) &&
 			( players[ulIdx].bDeadSpectator == false ))
 		{
 			continue;
@@ -572,7 +571,7 @@ void GAMEMODE_RespawnDeadSpectatorsAndPopQueue( BYTE Playerstate )
 
 		players[ulIdx].bSpectating = false;
 		players[ulIdx].bDeadSpectator = false;
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEMAXLIVES )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USEMAXLIVES )
 		{
 			PLAYER_SetLivesLeft ( &players[ulIdx], GAMEMODE_GetMaxLives() - 1 );
 		}
@@ -609,8 +608,7 @@ void GAMEMODE_RespawnDeadSpectatorsAndPopQueue( BYTE Playerstate )
 void GAMEMODE_RespawnAllPlayers( BOTEVENT_e BotEvent, playerstate_t PlayerState )
 {
 	// [BB] This is server side.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		// Respawn the players.
 		for ( ULONG ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
@@ -649,7 +647,7 @@ void GAMEMODE_RespawnAllPlayers( BOTEVENT_e BotEvent, playerstate_t PlayerState 
 void GAMEMODE_SpawnPlayer( const ULONG ulPlayer, bool bClientUpdate )
 {
 	// Spawn the player at their appropriate team start.
-	if ( teamgame )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_TEAMGAME )
 	{
 		if ( players[ulPlayer].bOnTeam )
 			G_TeamgameSpawnPlayer( ulPlayer, players[ulPlayer].ulTeam, bClientUpdate );
@@ -657,7 +655,7 @@ void GAMEMODE_SpawnPlayer( const ULONG ulPlayer, bool bClientUpdate )
 			G_TemporaryTeamSpawnPlayer( ulPlayer, bClientUpdate );
 	}
 	// If deathmatch, just spawn at a random spot.
-	else if ( deathmatch )
+	else if ( GAMEMODE_GetCurrentFlags() & GMF_DEATHMATCH )
 		G_DeathMatchSpawnPlayer( ulPlayer, bClientUpdate );
 	// Otherwise, just spawn at their normal player start.
 	else
@@ -684,26 +682,6 @@ void GAMEMODE_ResetPlayersKillCount( const bool bInformClients )
 			SERVERCOMMANDS_SetPlayerPoints ( ulIdx );
 		}
 	}
-}
-//*****************************************************************************
-//
-bool GAMEMODE_IsActorVisibleToConsoleplayersCamera( const AActor* pActor )
-{
-	// [BB] Safety check. This should never be NULL. Nevertheless, we return true to leave the default ZDoom behavior unaltered.
-	if ( players[consoleplayer].camera == NULL )
-		return true;
-
-	if ( TEAM_IsActorVisibleToPlayer( pActor, players[consoleplayer].camera->player ) == false )
-		return false;
-
-	const player_t* pPlayer = players[consoleplayer].camera->player;
-
-	if ( ( pActor->VisibleToPlayerClass != NAME_None )
-		&& pPlayer && pPlayer->mo && ( pActor->VisibleToPlayerClass != pPlayer->mo->GetClass()->TypeName ) )
-		return false;
-
-	// [BB] Passed all checks.
-	return true;
 }
 
 //*****************************************************************************
@@ -769,7 +747,7 @@ bool GAMEMODE_PreventPlayersFromJoining( ULONG ulExcludePlayer )
 bool GAMEMODE_AreLivesLimited( void )
 {
 	// [BB] Invasion is a special case: If sv_maxlives == 0 in invasion, players have infinite lives.
-	return ( ( ( sv_maxlives > 0 ) || ( invasion == false ) ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEMAXLIVES ) );
+	return ( ( ( sv_maxlives > 0 ) || ( invasion == false ) ) && ( GAMEMODE_GetCurrentFlags() & GMF_USEMAXLIVES ) );
 }
 
 //*****************************************************************************
@@ -802,7 +780,7 @@ void GAMEMODE_AdjustActorSpawnFlags ( AActor *pActor )
 void GAMEMODE_SpawnSpecialGamemodeThings ( void )
 {
 	// [BB] The server will let the clients know of any necessary spawns.
-	if ( NETWORK_InClientMode( ) == false )
+	if ( NETWORK_InClientMode() == false )
 	{
 		// Spawn the terminator artifact in terminator mode.
 		if ( terminator )
@@ -936,7 +914,7 @@ void GAMEMODE_DisplayCNTRMessage( const char *pszMessage, const bool bInformClie
 	// If necessary, send it to clients.
 	else if ( bInformClients )
 	{
-		SERVERCOMMANDS_PrintHUDMessageFadeOut( pszMessage, 1.5f, TEAM_MESSAGE_Y_AXIS, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "BigFont", false, MAKE_ID('C','N','T','R'), ulPlayerExtra, ulFlags );
+		SERVERCOMMANDS_PrintHUDMessageFadeOut( pszMessage, 1.5f, TEAM_MESSAGE_Y_AXIS, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "BigFont", false, MAKE_ID('C','N','T','R'), ulPlayerExtra, ServerCommandFlags::FromInt( ulFlags ) );
 	}
 }
 
@@ -959,7 +937,7 @@ void GAMEMODE_DisplaySUBSMessage( const char *pszMessage, const bool bInformClie
 	// If necessary, send it to clients.
 	else if ( bInformClients )
 	{
-		SERVERCOMMANDS_PrintHUDMessageFadeOut( pszMessage, 1.5f, TEAM_MESSAGE_Y_AXIS_SUB, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "SmallFont", false, MAKE_ID( 'S','U','B','S' ), ulPlayerExtra, ulFlags );
+		SERVERCOMMANDS_PrintHUDMessageFadeOut( pszMessage, 1.5f, TEAM_MESSAGE_Y_AXIS_SUB, 0, 0, CR_UNTRANSLATED, 3.0f, 0.25f, "SmallFont", false, MAKE_ID( 'S','U','B','S' ), ulPlayerExtra, ServerCommandFlags::FromInt( ulFlags ) );
 	}
 }
 

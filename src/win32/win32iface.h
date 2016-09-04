@@ -52,8 +52,11 @@
 
 EXTERN_CVAR (Bool, vid_vsync)
 
+extern HANDLE FPSLimitEvent;
+
 class D3DTex;
 class D3DPal;
+struct FSoftwareRenderer;
 
 class Win32Video : public IVideo
 {
@@ -145,7 +148,6 @@ public:
 	~DDrawFB ();
 
 	bool IsValid ();
-	bool Lock ();
 	bool Lock (bool buffer);
 	void Unlock ();
 	void ForceBuffering (bool force);
@@ -162,6 +164,8 @@ public:
 	void SetVSync (bool vsync);
 	void NewRefreshRate();
 	HRESULT GetHR ();
+	virtual int GetTrueHeight() { return TrueHeight; }
+	bool Is8BitMode();
 
 	void Blank ();
 	bool PaintToWindow ();
@@ -206,6 +210,7 @@ private:
 	bool NeedGammaUpdate;
 	bool NeedPalUpdate;
 	bool NeedResRecreate;
+	bool PaletteChangeExpected;
 	bool MustBuffer;		// The screen is not 8-bit, or there is no backbuffer
 	bool BufferingNow;		// Most recent Lock was buffered
 	bool WasBuffering;		// Second most recent Lock was buffered
@@ -225,7 +230,6 @@ public:
 	~D3DFB ();
 
 	bool IsValid ();
-	bool Lock ();
 	bool Lock (bool buffered);
 	void Unlock ();
 	void Update ();
@@ -257,11 +261,16 @@ public:
 	void FlatFill (int left, int top, int right, int bottom, FTexture *src, bool local_origin);
 	void DrawLine(int x0, int y0, int x1, int y1, int palColor, uint32 realcolor);
 	void DrawPixel(int x, int y, int palcolor, uint32 rgbcolor);
+	void FillSimplePoly(FTexture *tex, FVector2 *points, int npoints,
+		double originx, double originy, double scalex, double scaley,
+		angle_t rotation, FDynamicColormap *colormap, int lightlevel);
 	bool WipeStartScreen(int type);
 	void WipeEndScreen();
 	bool WipeDo(int ticks);
 	void WipeCleanup();
 	HRESULT GetHR ();
+	virtual int GetTrueHeight() { return TrueHeight; }
+	bool Is8BitMode() { return false; }
 
 private:
 	friend class D3DTex;
@@ -278,7 +287,7 @@ private:
 	};
 #define D3DFVF_FBVERTEX (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1)
 
-	struct BufferedQuad
+	struct BufferedTris
 	{
 		union
 		{
@@ -291,12 +300,16 @@ private:
 			};
 			DWORD Group1;
 		};
+		BYTE Desat;
 		D3DPal *Palette;
 		IDirect3DTexture9 *Texture;
+		WORD NumVerts;		// Number of _unique_ vertices used by this set.
+		WORD NumTris;		// Number of triangles used by this set.
 	};
 
 	enum
 	{
+		PSCONST_Desaturation = 1,
 		PSCONST_PaletteMod = 2,
 		PSCONST_Weights = 6,
 		PSCONST_Gamma = 7,
@@ -355,18 +368,19 @@ private:
 	void DrawPackedTextures(int packnum);
 	void DrawLetterbox();
 	void Draw3DPart(bool copy3d);
-	bool SetStyle(D3DTex *tex, DCanvas::DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &color1, BufferedQuad &quad);
+	bool SetStyle(D3DTex *tex, DCanvas::DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &color1, BufferedTris &quad);
 	static D3DBLEND GetStyleAlpha(int type);
 	static void SetColorOverlay(DWORD color, float alpha, D3DCOLOR &color0, D3DCOLOR &color1);
 	void DoWindowedGamma();
 	void AddColorOnlyQuad(int left, int top, int width, int height, D3DCOLOR color);
-	void CheckQuadBatch();
+	void CheckQuadBatch(int numtris=2, int numverts=4);
 	void BeginQuadBatch();
 	void EndQuadBatch();
 	void BeginLineBatch();
 	void EndLineBatch();
 	void EndBatch();
 	void CopyNextFrontBuffer();
+	int GetPixelDoubling() const { return PixelDoubling; }
 
 	D3DCAPS9 DeviceCaps;
 
@@ -433,7 +447,7 @@ private:
 	FBVERTEX *VertexData;
 	IDirect3DIndexBuffer9 *IndexBuffer;
 	WORD *IndexData;
-	BufferedQuad *QuadExtra;
+	BufferedTris *QuadExtra;
 	int VertexPos;
 	int IndexPos;
 	int QuadBatchPos;

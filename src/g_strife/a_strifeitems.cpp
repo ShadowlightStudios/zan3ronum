@@ -41,8 +41,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_RemoveForceField)
 bool ADegninOre::Use (bool pickup)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( pickup == false );
 	}
@@ -89,7 +88,7 @@ bool AHealthTraining::TryPickup (AActor *&toucher)
 		AInventory *coin = Spawn<ACoin> (0,0,0, NO_REPLACE);
 		if (coin != NULL)
 		{
-			coin->Amount = toucher->player->accuracy*5 + 300;
+			coin->Amount = toucher->player->mo->accuracy*5 + 300;
 			if (!coin->CallTryPickup (toucher))
 			{
 				coin->Destroy ();
@@ -184,48 +183,54 @@ IMPLEMENT_CLASS (ARaiseAlarm)
 bool ARaiseAlarm::TryPickup (AActor *&toucher)
 {
 	P_NoiseAlert (toucher, toucher);
-	// A_WakeOracleSpectre (dword312F4);
+	CALL_ACTION(A_WakeOracleSpectre, toucher);
 	GoAwayAndDie ();
 	return true;
 }
 
 bool ARaiseAlarm::SpecialDropAction (AActor *dropper)
 {
-	P_NoiseAlert (dropper->target, dropper->target);
-
-	// [CW] Let the server sort out the messages.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER && dropper->target->player != NULL )
+	if (dropper->target != nullptr)
 	{
-		ULONG	ulIdx;
+		P_NoiseAlert(dropper->target, dropper->target);
 
-		// [CW] If we didn't activate the alarm, tell the other clients who did.
-		for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
+		// [CW] Let the server sort out the messages.
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER && dropper->target->player != NULL )
 		{
-			if ( SERVER_IsValidClient( ulIdx ) == false )
-				continue;
+			ULONG	ulIdx;
 
-			// [CW] Send this message to the activator.
-			if ( ulIdx == static_cast<unsigned> (dropper->target->player - players) )
+			// [CW] If we didn't activate the alarm, tell the other clients who did.
+			for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
 			{
-				SERVER_PrintfPlayer( PRINT_HIGH, ulIdx, "You Fool!  You've set off the alarm.\n" );
-				continue;
+				if ( SERVER_IsValidClient( ulIdx ) == false )
+					continue;
+
+				// [CW] Send this message to the activator.
+				if ( ulIdx == static_cast<unsigned> (dropper->target->player - players) )
+				{
+					SERVER_PrintfPlayer( ulIdx, "You Fool!  You've set off the alarm.\n" );
+					continue;
+				}
+
+				// [CW] Tell other clients who set the alarm off!
+				SERVER_PrintfPlayer( ulIdx, "%s\\c- set off the alarm!\n", dropper->target->player->userinfo.GetName() );
 			}
 
-			// [CW] Tell other clients who set the alarm off!
-			SERVER_PrintfPlayer( PRINT_HIGH, ulIdx, "%s\\c- set off the alarm!\n", dropper->target->player->userinfo.netname );
+			// [CW] Tell the server who set the alarm off!
+			Printf( PRINT_HIGH, "%s set off the alarm!\n", dropper->target->player->userinfo.GetName() );
 		}
-
-		// [CW] Tell the server who set the alarm off!
-		Printf( PRINT_HIGH, "%s set off the alarm!\n", dropper->target->player->userinfo.netname );
-
-		Destroy( );
-		return ( true );
+		else if (dropper->target->CheckLocalView(consoleplayer))
+		{
+			Printf("You Fool!  You've set off the alarm.\n");
+		}
 	}
 
-	if (dropper->target->CheckLocalView (consoleplayer))
+	// [EP] Inform the clients to destroy the item.
+	if ( NETWORK_GetState() == NETSTATE_SERVER )
 	{
-		Printf ("You Fool!  You've set off the alarm.\n");
+		SERVERCOMMANDS_DestroyThing( this );
 	}
+
 	Destroy ();
 	return true;
 }
@@ -270,11 +275,14 @@ bool ACloseDoor222::TryPickup (AActor *&toucher)
 bool ACloseDoor222::SpecialDropAction (AActor *dropper)
 {
 	EV_DoDoor (DDoor::doorClose, NULL, dropper, 222, 2*FRACUNIT, 0, 0, 0);
-	if (dropper->target->CheckLocalView (consoleplayer))
+	if (dropper->target != nullptr)
 	{
-		Printf ("You're dead!  You set off the alarm.\n");
+		if (dropper->target->CheckLocalView(consoleplayer))
+		{
+			Printf("You're dead!  You set off the alarm.\n");
+		}
+		P_NoiseAlert(dropper->target, dropper->target);
 	}
-	P_NoiseAlert (dropper->target, dropper->target);
 	Destroy ();
 	return true;
 }
@@ -376,9 +384,9 @@ bool AUpgradeStamina::TryPickup (AActor *&toucher)
 	if (toucher->player == NULL)
 		return false;
 		
-	toucher->player->stamina += Amount;
-	if (toucher->player->stamina >= MaxAmount)
-		toucher->player->stamina = MaxAmount;
+	toucher->player->mo->stamina += Amount;
+	if (toucher->player->mo->stamina >= MaxAmount)
+		toucher->player->mo->stamina = MaxAmount;
 		
 	P_GiveBody (toucher, -100);
 	GoAwayAndDie ();
@@ -391,9 +399,9 @@ IMPLEMENT_CLASS (AUpgradeAccuracy)
 
 bool AUpgradeAccuracy::TryPickup (AActor *&toucher)
 {
-	if (toucher->player == NULL || toucher->player->accuracy >= 100)
+	if (toucher->player == NULL || toucher->player->mo->accuracy >= 100)
 		return false;
-	toucher->player->accuracy += 10;
+	toucher->player->mo->accuracy += 10;
 	GoAwayAndDie ();
 	return true;
 }

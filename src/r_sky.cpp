@@ -28,11 +28,10 @@
 
 // Needed for FRACUNIT.
 #include "m_fixed.h"
-#include "r_data.h"
 #include "c_cvars.h"
 #include "g_level.h"
 #include "r_sky.h"
-#include "r_main.h"
+#include "r_utility.h"
 #include "v_text.h"
 #include "gi.h"
 
@@ -55,7 +54,7 @@ CUSTOM_CVAR (Bool, r_stretchsky, true, CVAR_ARCHIVE)
 	R_InitSkyMap ();
 }
 
-extern fixed_t freelookviewheight;
+fixed_t			freelookviewheight;
 
 //==========================================================================
 //
@@ -70,8 +69,8 @@ void R_InitSkyMap ()
 	int skyheight;
 	FTexture *skytex1, *skytex2;
 
-	skytex1 = TexMan[sky1texture];
-	skytex2 = TexMan[sky2texture];
+	skytex1 = TexMan(sky1texture, true);
+	skytex2 = TexMan(sky2texture, true);
 
 	if (skytex1 == NULL)
 		return;
@@ -108,9 +107,8 @@ void R_InitSkyMap ()
 	}
 	else if (skyheight > 200)
 	{
-		skytexturemid = (200 - skyheight) << FRACBITS;
+		skytexturemid = FixedMul((200 - skyheight) << FRACBITS, skytex1->yScale);
 	}
-	skytexturemid = FixedMul(skytexturemid, skytex1->yScale);
 
 	if (viewwidth != 0 && viewheight != 0)
 	{
@@ -135,5 +133,22 @@ void R_InitSkyMap ()
 	// the texture as the cylinder's circumfrence.
 	sky1cyl = MAX(skytex1->GetWidth(), skytex1->xScale >> (16 - 10));
 	sky2cyl = MAX(skytex2->GetWidth(), skytex2->xScale >> (16 - 10));
+}
+
+
+//==========================================================================
+//
+// R_UpdateSky
+//
+// Performs sky scrolling
+//
+//==========================================================================
+
+void R_UpdateSky (DWORD mstime)
+{
+	// Scroll the sky
+	double ms = (double)mstime * FRACUNIT;
+	sky1pos = ms * level.skyspeed1;
+	sky2pos = ms * level.skyspeed2;
 }
 

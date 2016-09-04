@@ -34,13 +34,15 @@
 */
 
 #include "r_defs.h"
-#include "r_main.h"
 #include "m_random.h"
 #include "d_player.h"
 #include "d_event.h"
 #include "sbar.h"
 #include "sbarinfo.h"
 #include "templates.h"
+#include "r_utility.h"
+// [BB] New #includes.
+#include "sv_main.h"
 
 #define ST_RAMPAGEDELAY 		(2*TICRATE)
 #define ST_MUCHPAIN 			20
@@ -98,7 +100,7 @@ FTexture *FMugShotFrame::GetTexture(const char *default_face, const char *skin_f
 		}
 		sprite.UnlockBuffer();
 	}
-	return TexMan[TexMan.CheckForTexture(sprite, 0, true)];
+	return TexMan[TexMan.CheckForTexture(sprite, 0, FTextureManager::TEXMAN_TryAny|FTextureManager::TEXMAN_AllowSkins)];
 }
 
 //===========================================================================
@@ -263,7 +265,7 @@ void FMugShot::Tick(player_t *player)
 			CurrentState = NULL;
 		}
 	}
-	if ((player->cmd.ucmd.buttons & (BT_ATTACK|BT_ALTATTACK)) && !(player->cheats & (CF_FROZEN | CF_TOTALLYFROZEN)) && player->ReadyWeapon)
+	if (player->attackdown && !(player->cheats & (CF_FROZEN | CF_TOTALLYFROZEN)) && player->ReadyWeapon)
 	{
 		if (RampageTimer != ST_RAMPAGEDELAY)
 		{
@@ -335,6 +337,7 @@ bool FMugShot::SetState(const char *state_name, bool wait_till_done, bool reset)
 //
 //===========================================================================
 
+CVAR(Bool,st_oldouch,false,CVAR_ARCHIVE)
 int FMugShot::UpdateState(player_t *player, StateFlags stateflags)
 {
 	int 		i;
@@ -351,15 +354,13 @@ int FMugShot::UpdateState(player_t *player, StateFlags stateflags)
 				SetState("grin", false);
 				return 0;
 			}
-			else if (CurrentState == NULL)
-			{
-				bEvilGrin = false;
-			}
 		}
+		bEvilGrin = false;
 
+		bool ouch = (!st_oldouch && FaceHealth - player->health > ST_MUCHPAIN) || (st_oldouch && player->health - FaceHealth > ST_MUCHPAIN);
 		if (player->damagecount && 
 			// Now go in if pain is disabled but we think ouch will be shown (and ouch is not disabled!)
-			(!(stateflags & DISABLEPAIN) || (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))))
+			(!(stateflags & DISABLEPAIN) || (((FaceHealth != -1 && ouch) || bOuchActive) && !(stateflags & DISABLEOUCH))))
 		{
 			int damage_angle = 1;
 			if (player->attacker && player->attacker != player->mo)
@@ -391,7 +392,7 @@ int FMugShot::UpdateState(player_t *player, StateFlags stateflags)
 				}
 			}
 			bool use_ouch = false;
-			if (((FaceHealth != -1 && FaceHealth - player->health > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))
+			if (((FaceHealth != -1 && ouch) || bOuchActive) && !(stateflags & DISABLEOUCH))
 			{
 				use_ouch = true;
 				full_state_name = "ouch.";
@@ -418,7 +419,7 @@ int FMugShot::UpdateState(player_t *player, StateFlags stateflags)
 			else
 			{
 				bool use_ouch = false;
-				if (((FaceHealth != -1 && player->health - FaceHealth > ST_MUCHPAIN) || bOuchActive) && !(stateflags & DISABLEOUCH))
+				if (((FaceHealth != -1 && ouch) || bOuchActive) && !(stateflags & DISABLEOUCH))
 				{
 					use_ouch = true;
 					full_state_name = "ouch.";
@@ -509,7 +510,7 @@ FTexture *FMugShot::GetFace(player_t *player, const char *default_face, int accu
 	}
 	if (CurrentState != NULL)
 	{
-		const char *skin_face = player->morphTics ? player->MorphedPlayerClass->Meta.GetMetaString(APMETA_Face) : skins[player->userinfo.skin].face;
+		const char *skin_face = player->morphTics ? player->MorphedPlayerClass->Meta.GetMetaString(APMETA_Face) : skins[player->userinfo.GetSkin()].face;
 		return CurrentState->GetCurrentFrameTexture(default_face, skin_face, level, angle);
 	}
 	return NULL;

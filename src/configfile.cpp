@@ -56,6 +56,8 @@ FConfigFile::FConfigFile ()
 	LastSectionPtr = &Sections;
 	CurrentEntry = NULL;
 	PathName = "";
+	OkayToWrite = true;
+	FileExisted = true;
 }
 
 //====================================================================
@@ -73,6 +75,8 @@ FConfigFile::FConfigFile (const char *pathname,
 	CurrentEntry = NULL;
 	ChangePathName (pathname);
 	LoadConfigFile (nosechandler, userdata);
+	OkayToWrite = true;
+	FileExisted = true;
 }
 
 //====================================================================
@@ -88,6 +92,8 @@ FConfigFile::FConfigFile (const FConfigFile &other)
 	CurrentEntry = NULL;
 	ChangePathName (other.PathName);
 	*this = other;
+	OkayToWrite = other.OkayToWrite;
+	FileExisted = other.FileExisted;
 }
 
 //====================================================================
@@ -590,11 +596,15 @@ void FConfigFile::LoadConfigFile (void (*nosechandler)(const char *pathname, FCo
 	FILE *file = fopen (PathName, "r");
 	bool succ;
 
+	FileExisted = false;
 	if (file == NULL)
+	{
 		return;
+	}
 
 	succ = ReadConfig (file);
 	fclose (file);
+	FileExisted = succ;
 
 	if (!succ)
 	{ // First valid line did not define a section
@@ -753,6 +763,13 @@ char *FConfigFile::ReadLine (char *string, int n, void *file) const
 
 bool FConfigFile::WriteConfigFile () const
 {
+	if (!OkayToWrite && FileExisted)
+	{ // Pretend it was written anyway so that the user doesn't get
+	  // any "config not written" notifications, but only if the file
+	  // already existed. Otherwise, let it write out a default one.
+		return true;
+	}
+
 	FILE *file = fopen (PathName, "w");
 	FConfigSection *section;
 	FConfigEntry *entry;

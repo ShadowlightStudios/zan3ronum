@@ -34,7 +34,6 @@
 
 #include "doomtype.h"
 #include "p_local.h"
-#include "r_data.h"
 #include "cmdlib.h"
 #include "p_lnspec.h"
 
@@ -179,6 +178,12 @@ void P_SetSlope (secplane_t *plane, bool setCeil, int xyangi, int zangi,
 	}
 	zang >>= ANGLETOFINESHIFT;
 
+	// Sanitize xyangi to [0,360) range
+	xyangi = xyangi % 360;
+	if (xyangi < 0)
+	{
+		xyangi = 360 + xyangi;
+	}
 	xyang = (angle_t)Scale (xyangi, ANGLE_90, 90 << ANGLETOFINESHIFT);
 
 	FVector3 norm;
@@ -281,7 +286,7 @@ enum
 //
 //==========================================================================
 
-static void P_SetSlopesFromVertexHeights(FMapThing *firstmt, FMapThing *lastmt)
+static void P_SetSlopesFromVertexHeights(FMapThing *firstmt, FMapThing *lastmt, const int *oldvertextable)
 {
 	TMap<int, fixed_t> vt_heights[2];
 	FMapThing *mt;
@@ -309,6 +314,29 @@ static void P_SetSlopesFromVertexHeights(FMapThing *firstmt, FMapThing *lastmt)
 			mt->type = 0;
 		}
 	}
+
+	for(int i = 0; i < numvertexdatas; i++)
+	{
+		int ii = oldvertextable == NULL ? i : oldvertextable[i];
+
+		if (vertexdatas[i].flags & VERTEXFLAG_ZCeilingEnabled)
+		{
+			vt_heights[1][ii] = vertexdatas[i].zCeiling;
+			vt_found = true;
+		}
+
+		if (vertexdatas[i].flags & VERTEXFLAG_ZFloorEnabled)
+		{
+			vt_heights[0][ii] = vertexdatas[i].zFloor;
+			vt_found = true;
+		}
+	}
+
+	// If vertexdata_t is ever extended for non-slope usage, this will obviously have to be deferred or removed.
+	delete[] vertexdatas;
+	vertexdatas = NULL;
+	numvertexdatas = 0;
+
 	if (vt_found)
 	{
 		for (int i = 0; i < numsectors; i++)
@@ -393,7 +421,7 @@ static void P_SetSlopesFromVertexHeights(FMapThing *firstmt, FMapThing *lastmt)
 //
 //===========================================================================
 
-void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt)
+void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt, const int *oldvertextable)
 {
 	FMapThing *mt;
 
@@ -401,7 +429,7 @@ void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt)
 	{
 		if ((mt->type >= THING_SlopeFloorPointLine &&
 			 mt->type <= THING_SetCeilingSlope) ||
-			mt->type==THING_VavoomFloor || mt->type==THING_VavoomCeiling)
+			mt->type == THING_VavoomFloor || mt->type == THING_VavoomCeiling)
 		{
 			fixed_t x, y, z;
 			secplane_t *refplane;
@@ -419,16 +447,16 @@ void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt)
 				refplane = &sec->floorplane;
 			}
 			z = refplane->ZatPoint (x, y) + (mt->z);
-			if (mt->type==THING_VavoomFloor || mt->type==THING_VavoomCeiling)
+			if (mt->type == THING_VavoomFloor || mt->type == THING_VavoomCeiling)
 			{
 				P_VavoomSlope(sec, mt->thingid, x, y, mt->z, mt->type & 1); 
 			}
 			else if (mt->type <= THING_SlopeCeilingPointLine)
-			{
+			{ // THING_SlopeFloorPointLine and THING_SlopCeilingPointLine
 				P_SlopeLineToPoint (mt->args[0], x, y, z, mt->type & 1);
 			}
 			else
-			{
+			{ // THING_SetFloorSlope and THING_SetCeilingSlope
 				P_SetSlope (refplane, mt->type & 1, mt->angle, mt->args[0], x, y, z);
 			}
 			mt->type = 0;
@@ -445,7 +473,7 @@ void P_SpawnSlopeMakers (FMapThing *firstmt, FMapThing *lastmt)
 		}
 	}
 
-	P_SetSlopesFromVertexHeights(firstmt, lastmt);
+	P_SetSlopesFromVertexHeights(firstmt, lastmt, oldvertextable);
 }
 
 

@@ -43,15 +43,13 @@
 #include "m_random.h"
 #include "d_player.h"
 #include "st_stuff.h"
-#include "r_local.h"
 #include "m_swap.h"
 #include "a_keys.h"
 #include "templates.h"
 #include "i_system.h"
 #include "sbarinfo.h"
 #include "gi.h"
-#include "r_translate.h"
-#include "r_main.h"
+#include "r_data/r_translate.h"
 #include "a_weaponpiece.h"
 #include "a_strifeglobal.h"
 #include "g_level.h"
@@ -155,6 +153,8 @@ class SBarInfoCommand
 		virtual void	Parse(FScanner &sc, bool fullScreenOffsets)=0;
 		virtual void	Reset() {}
 		virtual void	Tick(const SBarInfoMainBlock *block, const DSBarInfo *statusBar, bool hudChanged) {}
+
+		SBarInfo *GetScript() { return script; }
 
 	protected:
 		void		GetCoordinates(FScanner &sc, bool fullScreenOffsets, SBarInfoCoordinate &x, SBarInfoCoordinate &y)
@@ -306,6 +306,10 @@ class SBarInfoMainBlock : public SBarInfoCommandFlowControl
 		}
 
 		int		Alpha() const { return currentAlpha; }
+		// Same as Draw but takes into account ForceScaled and temporarily sets the scaling if needed.
+		void	DrawAux(const SBarInfoMainBlock *block, DSBarInfo *statusBar, int xOffset, int yOffset, int alpha);
+		// Silence hidden overload warning since this is a special use class.
+		using SBarInfoCommandFlowControl::Draw;
 		void	Draw(const SBarInfoMainBlock *block, const DSBarInfo *statusBar, int xOffset, int yOffset, int alpha)
 		{
 			this->xOffset = xOffset;
@@ -428,6 +432,8 @@ static void FreeSBarInfoScript()
 
 void SBarInfo::Load()
 {
+	FreeSBarInfoScript();
+	MugShotStates.Clear();
 	if(gameinfo.statusbar.IsNotEmpty())
 	{
 		int lump = Wads.CheckNumForFullName(gameinfo.statusbar, true);
@@ -801,6 +807,8 @@ void SBarInfo::Init()
 	spacingAlignment = ALIGN_CENTER;
 	resW = 320;
 	resH = 200;
+	cleanX = -1;
+	cleanY = -1;
 
 	for(unsigned int i = 0;i < NUMHUDS;i++)
 		huds[i] = new SBarInfoMainBlock(this);
@@ -953,11 +961,12 @@ inline void adjustRelCenter(bool relX, bool relY, const double &x, const double 
 class DSBarInfo : public DBaseStatusBar
 {
 	DECLARE_CLASS(DSBarInfo, DBaseStatusBar)
+	HAS_OBJECT_POINTERS
 public:
 	DSBarInfo (SBarInfo *script=NULL) : DBaseStatusBar(script->height, script->resW, script->resH),
 		ammo1(NULL), ammo2(NULL), ammocount1(0), ammocount2(0), armor(NULL),
 		pendingPopup(POP_None), currentPopup(POP_None), lastHud(-1),
-		lastInventoryBar(NULL), lastPopup(NULL)
+		scalingWasForced(false), lastInventoryBar(NULL), lastPopup(NULL)
 	{
 		this->script = script;
 
@@ -980,11 +989,19 @@ public:
 		}
 		invBarOffset = script->Images.Size();
 		Images.Init(&patchnames[0], patchnames.Size());
+
+		CompleteBorder = script->completeBorder;
 	}
 
 	~DSBarInfo ()
 	{
 		Images.Uninit();
+	}
+
+	void ScreenSizeChanged()
+	{
+		Super::ScreenSizeChanged();
+		V_CalcCleanFacs(script->resW, script->resH, SCREENWIDTH, SCREENHEIGHT, &script->cleanX, &script->cleanY);
 	}
 
 	void Draw (EHudState state)
@@ -994,16 +1011,13 @@ public:
 			return;
 
 		DBaseStatusBar::Draw(state);
+		if (script->cleanX <= 0)
+		{ // Calculate cleanX and cleanY
+			ScreenSizeChanged();
+		}
 		int hud = STBAR_NORMAL;
 		if(state == HUD_StatusBar)
 		{
-			if(script->completeBorder) //Fill the statusbar with the border before we draw.
-			{
-				FTexture *b = TexMan[gameinfo.border->b];
-				R_DrawBorder(viewwindowx, viewwindowy + viewheight + b->GetHeight(), viewwindowx + viewwidth, SCREENHEIGHT);
-				if(screenblocks == 10)
-					screen->FlatFill(viewwindowx, viewwindowy + viewheight, viewwindowx + viewwidth, viewwindowy + viewheight + b->GetHeight(), b, true);
-			}
 			if(script->automapbar && automapactive)
 			{
 				hud = STBAR_AUTOMAP;
@@ -1024,36 +1038,57 @@ public:
 		bool oldhud_scale = hud_scale;
 		if(script->huds[hud]->ForceScaled()) //scale the statusbar
 		{
-			SetScaled(true, true);
-			setsizeneeded = true;
 			if(script->huds[hud]->FullScreenOffsets())
 				hud_scale = true;
+			else if(!Scaled)
+			{
+				scalingWasForced = true;
+				SetScaled(true, true);
+				setsizeneeded = true;
+			}
 		}
 
 		//prepare ammo counts
 		GetCurrentAmmo(ammo1, ammo2, ammocount1, ammocount2);
 		armor = CPlayer->mo->FindInventory<ABasicArmor>();
-		if(hud != lastHud)
-			script->huds[hud]->Tick(NULL, this, true);
 
-		if(currentPopup != POP_None && !script->huds[hud]->FullScreenOffsets())
-			script->huds[hud]->Draw(NULL, this, script->popups[currentPopup-1].getXDisplacement(), script->popups[currentPopup-1].getYDisplacement(), FRACUNIT);
-		else
-			script->huds[hud]->Draw(NULL, this, 0, 0, FRACUNIT);
-		lastHud = hud;
-
-		if(CPlayer->inventorytics > 0 && !(level.flags & LEVEL_NOINVENTORYBAR) && (state == HUD_StatusBar || state == HUD_Fullscreen))
+		if(state != HUD_AltHud)
 		{
-			SBarInfoMainBlock *inventoryBar = state == HUD_StatusBar ? script->huds[STBAR_INVENTORY] : script->huds[STBAR_INVENTORYFULLSCREEN];
-			if(inventoryBar != lastInventoryBar)
-				inventoryBar->Tick(NULL, this, true);
-	
-			// No overlay?  Lets cancel it.
-			if(inventoryBar->NumCommands() == 0)
-				CPlayer->inventorytics = 0;
+			if(hud != lastHud)
+			{
+				script->huds[hud]->Tick(NULL, this, true);
+
+				// Restore scaling if need be.
+				if(scalingWasForced)
+				{
+					scalingWasForced = false;
+					SetScaled(false);
+					setsizeneeded = true;
+				}
+			}
+
+			if(currentPopup != POP_None && !script->huds[hud]->FullScreenOffsets())
+				script->huds[hud]->Draw(NULL, this, script->popups[currentPopup-1].getXDisplacement(), script->popups[currentPopup-1].getYDisplacement(), FRACUNIT);
 			else
-				inventoryBar->Draw(NULL, this, 0, 0, FRACUNIT);
+				script->huds[hud]->Draw(NULL, this, 0, 0, FRACUNIT);
+			lastHud = hud;
+
+			// Handle inventory bar drawing
+			if(CPlayer->inventorytics > 0 && !(level.flags & LEVEL_NOINVENTORYBAR) && (state == HUD_StatusBar || state == HUD_Fullscreen))
+			{
+				SBarInfoMainBlock *inventoryBar = state == HUD_StatusBar ? script->huds[STBAR_INVENTORY] : script->huds[STBAR_INVENTORYFULLSCREEN];
+				if(inventoryBar != lastInventoryBar)
+					inventoryBar->Tick(NULL, this, true);
+		
+				// No overlay?  Lets cancel it.
+				if(inventoryBar->NumCommands() == 0)
+					CPlayer->inventorytics = 0;
+				else
+					inventoryBar->DrawAux(NULL, this, 0, 0, FRACUNIT);
+			}
 		}
+
+		// Handle popups
 		if(currentPopup != POP_None)
 		{
 			int popbar = 0;
@@ -1069,12 +1104,13 @@ public:
 				lastPopup->Tick(NULL, this, true);
 			}
 
-			script->huds[popbar]->Draw(NULL, this, script->popups[currentPopup-1].getXOffset(), script->popups[currentPopup-1].getYOffset(), script->popups[currentPopup-1].getAlpha());
+			script->huds[popbar]->DrawAux(NULL, this, script->popups[currentPopup-1].getXOffset(), script->popups[currentPopup-1].getYOffset(), script->popups[currentPopup-1].getAlpha());
 		}
 		else
 			lastPopup = NULL;
-		if(script->huds[hud]->ForceScaled() && script->huds[hud]->FullScreenOffsets())
-			hud_scale = oldhud_scale;
+
+		// Reset hud_scale
+		hud_scale = oldhud_scale;
 	}
 
 	void NewGame ()
@@ -1087,6 +1123,11 @@ public:
 			script->ResetHuds();
 			lastHud = -1; // Reset
 		}
+	}
+
+	bool MustDrawLog (EHudState state)
+	{
+		return script->huds[STBAR_POPUPLOG]->NumCommands() == 0;
 	}
 
 	void SetMugShotState (const char *state_name, bool wait_till_done, bool reset)
@@ -1157,8 +1198,12 @@ public:
 
 		if((offsetflags & SBarInfoCommand::CENTER) == SBarInfoCommand::CENTER)
 		{
-			dx -= (texture->GetScaledWidthDouble()/2.0)-texture->LeftOffset;
-			dy -= (texture->GetScaledHeightDouble()/2.0)-texture->TopOffset;
+			if (forceWidth < 0)	dx -= (texture->GetScaledWidthDouble()/2.0)-texture->GetScaledLeftOffsetDouble();
+			else	dx -= forceWidth*(0.5-(texture->GetScaledLeftOffsetDouble()/texture->GetScaledWidthDouble()));
+			//Unoptimalized formula is dx -= forceWidth/2.0-(texture->GetScaledLeftOffsetDouble()*forceWidth/texture->GetScaledWidthDouble());
+			
+			if (forceHeight < 0)	dy -= (texture->GetScaledHeightDouble()/2.0)-texture->GetScaledTopOffsetDouble();
+			else	dy -= forceHeight*(0.5-(texture->GetScaledTopOffsetDouble()/texture->GetScaledHeightDouble()));
 		}
 
 		dx += xOffset;
@@ -1173,8 +1218,8 @@ public:
 			h = forceHeight < 0 ? texture->GetScaledHeightDouble() : forceHeight;
 			double dcx = cx == 0 ? 0 : dx + ((double) cx / FRACUNIT) - texture->GetScaledLeftOffsetDouble();
 			double dcy = cy == 0 ? 0 : dy + ((double) cy / FRACUNIT) - texture->GetScaledTopOffsetDouble();
-			double dcr = cr == 0 ? INT_MAX : dx + w - ((double) cr / FRACUNIT);
-			double dcb = cb == 0 ? INT_MAX : dy + h - ((double) cb / FRACUNIT);
+			double dcr = cr == 0 ? INT_MAX : dx + w - ((double) cr / FRACUNIT) - texture->GetScaledLeftOffsetDouble();
+			double dcb = cb == 0 ? INT_MAX : dy + h - ((double) cb / FRACUNIT) - texture->GetScaledTopOffsetDouble();
 
 			if(Scaled)
 			{
@@ -1233,8 +1278,8 @@ public:
 		{
 			double rx, ry, rcx=0, rcy=0, rcr=INT_MAX, rcb=INT_MAX;
 
-			double xScale = !hud_scale ? 1.0 : (double) CleanXfac*320.0/(double) script->resW;//(double) SCREENWIDTH/(double) script->resW;
-			double yScale = !hud_scale ? 1.0 : (double) CleanYfac*200.0/(double) script->resH;//(double) SCREENHEIGHT/(double) script->resH;
+			double xScale = !hud_scale ? 1 : script->cleanX;
+			double yScale = !hud_scale ? 1 : script->cleanY;
 
 			adjustRelCenter(x.RelCenter(), y.RelCenter(), dx, dy, rx, ry, xScale, yScale);
 
@@ -1262,42 +1307,14 @@ public:
 			// Check for clipping
 			if(cx != 0 || cy != 0 || cr != 0 || cb != 0)
 			{
-				rcx = cx == 0 ? 0 : rx+(((double) cx/FRACUNIT)*xScale);
-				rcy = cy == 0 ? 0 : ry+(((double) cy/FRACUNIT)*yScale);
-				rcr = cr == 0 ? INT_MAX : rx+w-(((double) cr/FRACUNIT)*xScale);
-				rcb = cb == 0 ? INT_MAX : ry+h-(((double) cb/FRACUNIT)*yScale);
-
-				// Fix the clipping for fullscreenoffsets.
-				/*if(ry < 0)
-				{
-					if(rcy != 0)
-						rcy = hud_scale ? SCREENHEIGHT + (int) (rcy*CleanYfac*200.0/script->resH) : SCREENHEIGHT + rcy;
-					if(rcb != INT_MAX)
-						rcb = hud_scale ? SCREENHEIGHT + (int) (rcb*CleanYfac*200.0/script->resH) : SCREENHEIGHT + rcb;
-				}
-				else if(hud_scale)
-				{
-					rcy *= (int) (CleanYfac*200.0/script->resH);
-					if(rcb != INT_MAX)
-						rcb *= (int) (CleanYfac*200.0/script->resH);
-				}
-				if(rx < 0)
-				{
-					if(rcx != 0)
-						rcx = hud_scale ? SCREENWIDTH + (int) (rcx*CleanXfac*320.0/script->resW) : SCREENWIDTH + rcx;
-					if(rcr != INT_MAX)
-						rcr = hud_scale ? SCREENWIDTH + (int) (rcr*CleanXfac*320.0/script->resW) : SCREENWIDTH + rcr;
-				}
-				else if(hud_scale)
-				{
-					rcx *= (int) (CleanXfac*320.0/script->resW);
-					if(rcr != INT_MAX)
-						rcr *= (int) (CleanXfac*320.0/script->resW);
-				}*/
+				rcx = cx == 0 ? 0 : rx+((((double) cx/FRACUNIT) - texture->GetScaledLeftOffsetDouble())*xScale);
+				rcy = cy == 0 ? 0 : ry+((((double) cy/FRACUNIT) - texture->GetScaledTopOffsetDouble())*yScale);
+				rcr = cr == 0 ? INT_MAX : rx+w-((((double) cr/FRACUNIT) + texture->GetScaledLeftOffsetDouble())*xScale);
+				rcb = cb == 0 ? INT_MAX : ry+h-((((double) cb/FRACUNIT) + texture->GetScaledTopOffsetDouble())*yScale);
 			}
 
 			if(clearDontDraw)
-				screen->Clear(static_cast<int>(rcx), static_cast<int>(rcy), static_cast<int>(MIN<double>(rcr, w)), static_cast<int>(MIN<double>(rcb, h)), GPalette.BlackIndex, 0);
+				screen->Clear(static_cast<int>(rcx), static_cast<int>(rcy), static_cast<int>(MIN<double>(rcr, rcx+w)), static_cast<int>(MIN<double>(rcb, rcy+h)), GPalette.BlackIndex, 0);
 			else
 			{
 				if(alphaMap)
@@ -1336,7 +1353,7 @@ public:
 		}
 	}
 
-	void DrawString(FFont *font, const char* str, SBarInfoCoordinate x, SBarInfoCoordinate y, int xOffset, int yOffset, int alpha, bool fullScreenOffsets, EColorRange translation, int spacing=0, bool drawshadow=false, int shadowX=2, int shadowY=2) const
+	void DrawString(FFont *font, const char* cstring, SBarInfoCoordinate x, SBarInfoCoordinate y, int xOffset, int yOffset, int alpha, bool fullScreenOffsets, EColorRange translation, int spacing=0, bool drawshadow=false, int shadowX=2, int shadowY=2) const
 	{
 		x += spacing;
 		double ax = *x;
@@ -1345,12 +1362,16 @@ public:
 		double xScale = 1.0;
 		double yScale = 1.0;
 
+		const BYTE* str = (const BYTE*) cstring;
+		const EColorRange boldTranslation = EColorRange(translation ? translation - 1 : NumTextColors - 1);
+		FRemapTable *remap = font->GetColorTranslation(translation);
+
 		if(fullScreenOffsets)
 		{
 			if(hud_scale)
 			{
-				xScale = (double) CleanXfac*320.0/(double) script->resW;//(double) SCREENWIDTH/(double) script->resW;
-				yScale = (double) CleanYfac*200.0/(double) script->resH;//(double) SCREENWIDTH/(double) script->resW;
+				xScale = script->cleanX;
+				yScale = script->cleanY;
 			}
 			adjustRelCenter(x.RelCenter(), y.RelCenter(), *x, *y, ax, ay, xScale, yScale);
 		}
@@ -1358,16 +1379,27 @@ public:
 		{
 			if(*str == ' ')
 			{
-				ax += font->GetSpaceWidth();
+				if(script->spacingCharacter == '\0')
+					ax += font->GetSpaceWidth();
+				else
+					ax += font->GetCharWidth((unsigned char) script->spacingCharacter);
 				str++;
 				continue;
 			}
+			else if(*str == TEXTCOLOR_ESCAPE)
+			{
+				EColorRange newColor = V_ParseFontColor(++str, translation, boldTranslation);
+				if(newColor != CR_UNDEFINED)
+					remap = font->GetColorTranslation(newColor);
+				continue;
+			}
+
 			int width;
 			if(script->spacingCharacter == '\0') //No monospace?
-				width = font->GetCharWidth((int) *str);
+				width = font->GetCharWidth((unsigned char) *str);
 			else
-				width = font->GetCharWidth((int) script->spacingCharacter);
-			FTexture* character = font->GetChar((int) *str, &width);
+				width = font->GetCharWidth((unsigned char) script->spacingCharacter);
+			FTexture* character = font->GetChar((unsigned char) *str, &width);
 			if(character == NULL) //missing character.
 			{
 				str++;
@@ -1384,7 +1416,7 @@ public:
 
 			if(script->spacingCharacter != '\0')
 			{
-				double spacingSize = font->GetCharWidth((int) script->spacingCharacter);
+				double spacingSize = font->GetCharWidth((unsigned char) script->spacingCharacter);
 				switch(script->spacingAlignment)
 				{
 					default:
@@ -1444,13 +1476,13 @@ public:
 			screen->DrawTexture(character, rx, ry,
 				DTA_DestWidthF, rw,
 				DTA_DestHeightF, rh,
-				DTA_Translation, font->GetColorTranslation(translation),
+				DTA_Translation, remap,
 				DTA_Alpha, alpha,
 				TAG_DONE);
 			if(script->spacingCharacter == '\0')
 				ax += width + spacing - (character->LeftOffset+1);
 			else //width gets changed at the call to GetChar()
-				ax += font->GetCharWidth((int) script->spacingCharacter) + spacing;
+				ax += font->GetCharWidth((unsigned char) script->spacingCharacter) + spacing;
 			str++;
 		}
 	}
@@ -1473,17 +1505,54 @@ private:
 	int pendingPopup;
 	int currentPopup;
 	int lastHud;
+	bool scalingWasForced;
 	SBarInfoMainBlock *lastInventoryBar;
 	SBarInfoMainBlock *lastPopup;
 };
 
-IMPLEMENT_CLASS(DSBarInfo);
+IMPLEMENT_POINTY_CLASS(DSBarInfo)
+ DECLARE_POINTER(ammo1)
+ DECLARE_POINTER(ammo2)
+ DECLARE_POINTER(armor)
+END_POINTERS
 
 DBaseStatusBar *CreateCustomStatusBar (int script)
 {
 	if(SBarInfoScript[script] == NULL)
 		I_FatalError("Tried to create a status bar with no script!");
 	return new DSBarInfo(SBarInfoScript[script]);
+}
+
+void SBarInfoMainBlock::DrawAux(const SBarInfoMainBlock *block, DSBarInfo *statusBar, int xOffset, int yOffset, int alpha)
+{
+	// Popups can also be forced to scale
+	bool rescale = false;
+	if(ForceScaled())
+	{
+		if(FullScreenOffsets())
+		{
+			if(!hud_scale)
+			{
+				rescale = true;
+				hud_scale = true;
+			}
+		}
+		else if(!statusBar->Scaled)
+		{
+			rescale = true;
+			statusBar->SetScaled(true, true);
+		}
+	}
+
+	Draw(block, statusBar, xOffset, yOffset, alpha);
+
+	if(rescale)
+	{
+		if(FullScreenOffsets())
+			hud_scale = false;
+		else
+			statusBar->SetScaled(false);
+	}
 }
 
 // [BB] For the time being, Skulltag still needs CreateDoomStatusBar from doom_sbar.cpp.
