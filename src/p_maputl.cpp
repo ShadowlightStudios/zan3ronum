@@ -40,7 +40,6 @@
 #include "r_state.h"
 #include "templates.h"
 #include "po_man.h"
-#include "gl/gl_functions.h"
 
 static AActor *RoughBlockCheck (AActor *mo, int index, void *);
 
@@ -136,123 +135,105 @@ fixed_t P_InterceptVector (const divline_t *v2, const divline_t *v1)
 //
 // Sets opentop and openbottom to the window
 // through a two sided line.
-// OPTIMIZE: keep this precalculated
 //
 //==========================================================================
 
 void P_LineOpening (FLineOpening &open, AActor *actor, const line_t *linedef, 
-					fixed_t x, fixed_t y, fixed_t refx, fixed_t refy)
+					fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, int flags)
 {
-	sector_t *front, *back;
-	fixed_t fc, ff, bc, bf;
-
-	if (linedef->sidedef[1] == NULL)
+	if (!(flags & FFCF_ONLY3DFLOORS))
 	{
-		// single sided line
-		open.range = 0;
-		return;
-	}
+		sector_t *front, *back;
+		fixed_t fc, ff, bc, bf;
 
-	front = linedef->frontsector;
-	back = linedef->backsector;
+		if (linedef->sidedef[1] == NULL)
+		{
+			// single sided line
+			open.range = 0;
+			return;
+		}
 
-	fc = front->ceilingplane.ZatPoint (x, y);
-	ff = front->floorplane.ZatPoint (x, y);
-	bc = back->ceilingplane.ZatPoint (x, y);
-	bf = back->floorplane.ZatPoint (x, y);
+		front = linedef->frontsector;
+		back = linedef->backsector;
 
-	/*Printf ("]]]]]] %d %d\n", ff, bf);*/
+		fc = front->ceilingplane.ZatPoint (x, y);
+		ff = front->floorplane.ZatPoint (x, y);
+		bc = back->ceilingplane.ZatPoint (x, y);
+		bf = back->floorplane.ZatPoint (x, y);
 
-	open.topsec = fc < bc? front : back;
-	open.ceilingpic = open.topsec->GetTexture(sector_t::ceiling);
-	open.top = fc < bc ? fc : bc;
+		/*Printf ("]]]]]] %d %d\n", ff, bf);*/
 
-	bool usefront;
+		open.topsec = fc < bc? front : back;
+		open.ceilingpic = open.topsec->GetTexture(sector_t::ceiling);
+		open.top = fc < bc ? fc : bc;
 
-	// [RH] fudge a bit for actors that are moving across lines
-	// bordering a slope/non-slope that meet on the floor. Note
-	// that imprecisions in the plane equation mean there is a
-	// good chance that even if a slope and non-slope look like
-	// they line up, they won't be perfectly aligned.
-	if (refx == FIXED_MIN ||
-		abs (ff-bf) > 256)
-	{
-		usefront = (ff > bf);
-	}
-	else
-	{
-		if ((front->floorplane.a | front->floorplane.b) == 0)
-			usefront = true;
-		else if ((back->floorplane.a | front->floorplane.b) == 0)
-			usefront = false;
+		bool usefront;
+
+		// [RH] fudge a bit for actors that are moving across lines
+		// bordering a slope/non-slope that meet on the floor. Note
+		// that imprecisions in the plane equation mean there is a
+		// good chance that even if a slope and non-slope look like
+		// they line up, they won't be perfectly aligned.
+		if (refx == FIXED_MIN ||
+			abs (ff-bf) > 256)
+		{
+			usefront = (ff > bf);
+		}
 		else
-			usefront = !P_PointOnLineSide (refx, refy, linedef);
-	}
+		{
+			if ((front->floorplane.a | front->floorplane.b) == 0)
+				usefront = true;
+			else if ((back->floorplane.a | front->floorplane.b) == 0)
+				usefront = false;
+			else
+				usefront = !P_PointOnLineSide (refx, refy, linedef);
+		}
 
-	if (usefront)
-	{
-		open.bottom = ff;
-		open.bottomsec = front;
-		open.floorpic = front->GetTexture(sector_t::floor);
-		open.lowfloor = bf;
+		if (usefront)
+		{
+			open.bottom = ff;
+			open.bottomsec = front;
+			open.floorpic = front->GetTexture(sector_t::floor);
+			open.lowfloor = bf;
+		}
+		else
+		{
+			open.bottom = bf;
+			open.bottomsec = back;
+			open.floorpic = back->GetTexture(sector_t::floor);
+			open.lowfloor = ff;
+		}
 	}
 	else
-	{
-		open.bottom = bf;
-		open.bottomsec = back;
-		open.floorpic = back->GetTexture(sector_t::floor);
-		open.lowfloor = ff;
+	{ // Dummy stuff to have some sort of opening for the 3D checks to modify
+		open.topsec = NULL;
+		open.ceilingpic.SetInvalid();
+		open.top = FIXED_MAX;
+		open.bottomsec = NULL;
+		open.floorpic.SetInvalid();
+		open.bottom = FIXED_MIN;
+		open.lowfloor = FIXED_MAX;
 	}
 
 	// Check 3D floors
 	if (actor != NULL)
 	{
-		P_LineOpening_XFloors(open, actor, linedef, x, y, refx, refy);
+		P_LineOpening_XFloors(open, actor, linedef, x, y, refx, refy, !!(flags & FFCF_3DRESTRICT));
 	}
 
 	if (actor != NULL && linedef->frontsector != NULL && linedef->backsector != NULL && 
 		linedef->flags & ML_3DMIDTEX)
 	{
-		open.touchmidtex = P_LineOpening_3dMidtex(actor, linedef, open.top, open.bottom);
+		open.touchmidtex = P_LineOpening_3dMidtex(actor, linedef, open, !!(flags & FFCF_3DRESTRICT));
 	}
-	else open.touchmidtex = false;
+	else
+	{
+		open.abovemidtex = open.touchmidtex = false;
+	}
 
 	open.range = open.top - open.bottom;
 }
 
-/* [BB] Not compatible with latest ZDoom changes and wasn't used.
-// [BC] ugh old code for people who just have to have doom2.exe style movement.
-void P_OldLineOpening(const line_t *linedef, fixed_t x, fixed_t y)
-{
-	sector_t *front, *back;
-
-	if (linedef->sidenum[1] == -1)      // single sided line
-	{
-		openrange = 0;
-		return;
-	}
-
-	front = linedef->frontsector;
-	back = linedef->backsector;
-  
-	if (front->ceilingplane.ZatPoint( x, y ) < back->ceilingplane.ZatPoint( x, y ))
-		opentop = front->ceilingplane.ZatPoint( x, y );
-	else
-		opentop = back->ceilingplane.ZatPoint( x, y );
-
-	if (front->floorplane.ZatPoint( x, y ) < back->floorplane.ZatPoint( x, y ))
-	{
-		openbottom = front->floorplane.ZatPoint( x, y );
-		lowfloor = back->floorplane.ZatPoint( x, y );
-	}
-	else
-	{
-		openbottom = back->floorplane.ZatPoint( x, y );
-		lowfloor = front->floorplane.ZatPoint( x, y );
-	}
-	openrange = opentop - openbottom;
-}
-*/
 
 //
 // THING POSITION SETTING
@@ -280,38 +261,40 @@ void AActor::UnlinkFromWorld ()
 		// pointers, allows head node pointers to be treated like everything else
 		AActor **prev = sprev;
 		AActor  *next = snext;
-		// [BB] If this condition is not fulfilled, UnlinkFromWorld erroneously has
-		// been called twice. Definitely this has to be caused by a bug in the code,
-		// nevertheless I don't want this to crash Skulltag. A warning should be
-		// sufficient to track down this bug.
-		if ( prev != (AActor **)(size_t)0xBeefCafe )
+
+		if (prev != NULL)	// prev will be NULL if this actor gets deleted due to cleaning up from a broken savegame
 		{
-			// [BB] The additional check for (prev != NULL) fixes the client crash when
-			// switching from map02 to map03 in terdelux_final.wad online in survival.
-			// But should this check be necessary at all?
-			if (prev && (*prev = next))  // unlink from sector list
-				next->sprev = prev;
+			// [BB] If this condition is not fulfilled, UnlinkFromWorld erroneously has
+			// been called twice. Definitely this has to be caused by a bug in the code,
+			// nevertheless I don't want this to crash Skulltag. A warning should be
+			// sufficient to track down this bug.
+			if ( prev != (AActor **)(size_t)0xBeefCafe )
+			{
+				if ((*prev = next))  // unlink from sector list
+					next->sprev = prev;
+			}
+			else
+				Printf ( "\\cgWarning: 0xBeefCafe encountered!\n" );
+
+			snext = NULL;
+			sprev = (AActor **)(size_t)0xBeefCafe;	// Woo! Bug-catching value!
+
+			// phares 3/14/98
+			//
+			// Save the sector list pointed to by touching_sectorlist.
+			// In P_SetThingPosition, we'll keep any nodes that represent
+			// sectors the Thing still touches. We'll add new ones then, and
+			// delete any nodes for sectors the Thing has vacated. Then we'll
+			// put it back into touching_sectorlist. It's done this way to
+			// avoid a lot of deleting/creating for nodes, when most of the
+			// time you just get back what you deleted anyway.
+			//
+			// If this Thing is being removed entirely, then the calling
+			// routine will clear out the nodes in sector_list.
+
+			sector_list = touching_sectorlist;
+			touching_sectorlist = NULL; //to be restored by P_SetThingPosition
 		}
-		else
-			Printf ( "\\cgWarning: 0xBeefCafe encountered!\n" );
-		snext = NULL;
-		sprev = (AActor **)(size_t)0xBeefCafe;	// Woo! Bug-catching value!
-
-		// phares 3/14/98
-		//
-		// Save the sector list pointed to by touching_sectorlist.
-		// In P_SetThingPosition, we'll keep any nodes that represent
-		// sectors the Thing still touches. We'll add new ones then, and
-		// delete any nodes for sectors the Thing has vacated. Then we'll
-		// put it back into touching_sectorlist. It's done this way to
-		// avoid a lot of deleting/creating for nodes, when most of the
-		// time you just get back what you deleted anyway.
-		//
-		// If this Thing is being removed entirely, then the calling
-		// routine will clear out the nodes in sector_list.
-
-		sector_list = touching_sectorlist;
-		touching_sectorlist = NULL; //to be restored by P_SetThingPosition
 	}
 		
 	if (!(flags & MF_NOBLOCKMAP))
@@ -348,7 +331,7 @@ void AActor::LinkToWorld (bool buggy)
 	// link into subsector
 	sector_t *sec;
 
-	if (!buggy || numnodes == 0)
+	if (!buggy || numgamenodes == 0)
 	{
 		sec = P_PointInSector (x, y);
 	}
@@ -461,8 +444,8 @@ static int R_PointOnSideSlow (fixed_t x, fixed_t y, node_t *node)
 	// add on a 386/486, but it certainly isn't on anything newer than that.
 	fixed_t	dx;
 	fixed_t	dy;
-	fixed_t	left;
-	fixed_t	right;
+	double	left;
+	double	right;
 
 	if (!node->dx)
 	{
@@ -493,8 +476,9 @@ static int R_PointOnSideSlow (fixed_t x, fixed_t y, node_t *node)
 		return 0;
 	}
 
-	left = FixedMul ( node->dy>>FRACBITS , dx );
-	right = FixedMul ( dy , node->dx>>FRACBITS );
+	// we must use doubles here because the fixed point code will produce errors due to loss of precision for extremely short linedefs.
+	left = (double)node->dy * (double)dx;
+	right = (double)dy * (double)node->dx;
 
 	if (right < left)
 	{
@@ -617,7 +601,7 @@ void AActor::SetOrigin (fixed_t ix, fixed_t iy, fixed_t iz)
 	LinkToWorld ();
 	floorz = Sector->floorplane.ZatPoint (ix, iy);
 	ceilingz = Sector->ceilingplane.ZatPoint (ix, iy);
-	P_FindFloorCeiling(this, true);
+	P_FindFloorCeiling(this, FFCF_ONLYSPAWNPOS);
 
 	// [BC] Flag this actor as having moved.
 	ulSTFlags |= STFL_POSITIONCHANGED;
@@ -770,14 +754,11 @@ line_t *FBlockLinesIterator::Next()
 			{
 				line_t *ld = &lines[*list];
 
+				list++;
 				if (ld->validcount != validcount)
 				{
 					ld->validcount = validcount;
 					return ld;
-				}
-				else
-				{
-					list++;
 				}
 			}
 		}
@@ -1213,10 +1194,9 @@ intercept_t *FPathTraverse::Next()
 
 FPathTraverse::FPathTraverse (fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2, int flags)
 {
-	fixed_t 	xt1;
-	fixed_t 	yt1;
-	fixed_t 	xt2;
-	fixed_t 	yt2;
+	fixed_t 	xt1, xt2;
+	fixed_t 	yt1, yt2;
+	long long	_x1, _x2, _y1, _y2;
 	
 	fixed_t 	xstep;
 	fixed_t 	ystep;
@@ -1245,18 +1225,42 @@ FPathTraverse::FPathTraverse (fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2, in
 
 	trace.x = x1;
 	trace.y = y1;
-	trace.dx = x2 - x1;
-	trace.dy = y2 - y1;
+	if (flags & PT_DELTA)
+	{
+		trace.dx = x2;
+		trace.dy = y2;
+	}
+	else
+	{
+		trace.dx = x2 - x1;
+		trace.dy = y2 - y1;
+	}
 
+	_x1 = (long long)x1 - bmaporgx;
+	_y1 = (long long)y1 - bmaporgy;
 	x1 -= bmaporgx;
 	y1 -= bmaporgy;
-	xt1 = GetSafeBlockX(x1);
-	yt1 = GetSafeBlockY(y1);
+	xt1 = int(_x1 >> MAPBLOCKSHIFT);
+	yt1 = int(_y1 >> MAPBLOCKSHIFT);
 
-	x2 -= bmaporgx;
-	y2 -= bmaporgy;
-	xt2 = GetSafeBlockX(x2);
-	yt2 = GetSafeBlockY(y2);
+	if (flags & PT_DELTA)
+	{
+		_x2 = _x1 + x2;
+		_y2 = _y1 + y2;
+		xt2 = int(_x2 >> MAPBLOCKSHIFT);
+		yt2 = int(_y2 >> MAPBLOCKSHIFT);
+		x2 = (int)_x2;
+		y2 = (int)_y2;
+	}
+	else
+	{
+		_x2 = (long long)x2 - bmaporgx;
+		_y2 = (long long)y2 - bmaporgy;
+		x2 -= bmaporgx;
+		y2 -= bmaporgy;
+		xt2 = int(_x2 >> MAPBLOCKSHIFT);
+		yt2 = int(_y2 >> MAPBLOCKSHIFT);
+	}
 
 	if (xt2 > xt1)
 	{
@@ -1276,7 +1280,7 @@ FPathTraverse::FPathTraverse (fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2, in
 		partialx = FRACUNIT;
 		ystep = 256*FRACUNIT;
 	}	
-	yintercept = (y1>>MAPBTOFRAC) + FixedMul (partialx, ystep);
+	yintercept = int(_y1>>MAPBTOFRAC) + FixedMul (partialx, ystep);
 
 		
 	if (yt2 > yt1)
@@ -1297,7 +1301,7 @@ FPathTraverse::FPathTraverse (fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2, in
 		partialy = FRACUNIT;
 		xstep = 256*FRACUNIT;
 	}	
-	xintercept = (x1>>MAPBTOFRAC) + FixedMul (partialy, xstep);
+	xintercept = int(_x1>>MAPBTOFRAC) + FixedMul (partialy, xstep);
 
 	// [RH] Fix for traces that pass only through blockmap corners. In that case,
 	// xintercept and yintercept can both be set ahead of mapx and mapy, so the
@@ -1411,9 +1415,9 @@ FPathTraverse::~FPathTraverse()
 //		distance is in MAPBLOCKUNITS
 //===========================================================================
 
-AActor *P_RoughMonsterSearch (AActor *mo, int distance)
+AActor *P_RoughMonsterSearch (AActor *mo, int distance, bool onlyseekable)
 {
-	return P_BlockmapSearch (mo, distance, RoughBlockCheck);
+	return P_BlockmapSearch (mo, distance, RoughBlockCheck, (void *)onlyseekable);
 }
 
 AActor *P_BlockmapSearch (AActor *mo, int distance, AActor *(*check)(AActor*, int, void *), void *params)
@@ -1511,14 +1515,19 @@ AActor *P_BlockmapSearch (AActor *mo, int distance, AActor *(*check)(AActor*, in
 //
 //===========================================================================
 
-static AActor *RoughBlockCheck (AActor *mo, int index, void *)
+static AActor *RoughBlockCheck (AActor *mo, int index, void *param)
 {
+	bool onlyseekable = param != NULL;
 	FBlockNode *link;
 
 	for (link = blocklinks[index]; link != NULL; link = link->NextActor)
 	{
 		if (link->Me != mo)
 		{
+			if (onlyseekable && !mo->CanSeek(link->Me))
+			{
+				continue;
+			}
 			if (mo->IsOkayToAttack (link->Me))
 			{
 				return link->Me;

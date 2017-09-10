@@ -46,7 +46,6 @@
 #include "w_wad.h"
 #include "templates.h"
 #include "r_defs.h"
-#include "r_draw.h"
 #include "a_pickups.h"
 #include "s_sound.h"
 #include "cmdlib.h"
@@ -147,6 +146,11 @@ FActorInfo *CreateNewActor(const FScriptPosition &sc, FName typeName, FName pare
 		info = ti->ActorInfo;
 	}
 
+	// Copy class lists from parent
+	info->ForbiddenToPlayerClass = parent->ActorInfo->ForbiddenToPlayerClass;
+	info->RestrictedToPlayerClass = parent->ActorInfo->RestrictedToPlayerClass;
+	info->VisibleToPlayerClass = parent->ActorInfo->VisibleToPlayerClass;
+
 	if (parent->ActorInfo->DamageFactors != NULL)
 	{
 		// copy damage factors from parent
@@ -176,7 +180,7 @@ FActorInfo *CreateNewActor(const FScriptPosition &sc, FName typeName, FName pare
 //
 //==========================================================================
 
-void SetReplacement(FActorInfo *info, FName replaceName)
+void SetReplacement(FScanner &sc, FActorInfo *info, FName replaceName)
 {
 	// Check for "replaces"
 	if (replaceName != NAME_None)
@@ -186,11 +190,13 @@ void SetReplacement(FActorInfo *info, FName replaceName)
 
 		if (replacee == NULL)
 		{
-			I_Error ("Replaced type '%s' not found in %s", replaceName.GetChars(), info->Class->TypeName.GetChars());
+			sc.ScriptMessage("Replaced type '%s' not found for %s", replaceName.GetChars(), info->Class->TypeName.GetChars());
+			return;
 		}
 		else if (replacee->ActorInfo == NULL)
 		{
-			I_Error ("Replaced type '%s' is not an actor in %s", replaceName.GetChars(), info->Class->TypeName.GetChars());
+			sc.ScriptMessage("Replaced type '%s' for %s is not an actor", replaceName.GetChars(), info->Class->TypeName.GetChars());
+			return;
 		}
 		if (replacee != NULL)
 		{
@@ -337,6 +343,9 @@ void LoadActors ()
 {
 	int lastlump, lump;
 
+	StateParams.Clear();
+	GlobalSymbols.ReleaseSymbols();
+	DropItemList.Clear();
 	FScriptPosition::ResetErrorCounter();
 	InitThingdef();
 	lastlump = 0;

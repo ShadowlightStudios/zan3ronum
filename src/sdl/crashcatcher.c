@@ -8,6 +8,7 @@
 #include <sys/ucontext.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 // [EP] Header for the timestamp appending to crash log filename.
 #include <time.h>
@@ -210,7 +211,7 @@ static size_t safe_write(int fd, const void *buf, size_t len)
 
 static void crash_catcher(int signum, siginfo_t *siginfo, void *context)
 {
-	ucontext_t *ucontext = (ucontext_t*)context;
+	//ucontext_t *ucontext = (ucontext_t*)context;
 	pid_t dbg_pid;
 	int fd[2];
 

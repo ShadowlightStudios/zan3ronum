@@ -40,11 +40,12 @@
 #include "a_keys.h"
 #include "templates.h"
 #include "c_console.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "g_level.h"
 #include "d_net.h"
 #include "d_dehacked.h"
 #include "gi.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "deathmatch.h"
 #include "announcer.h"
@@ -90,22 +91,11 @@ void cht_DoCheat (player_t *player, int cheat)
 		// fall through to CHT_GOD
 	case CHT_GOD:
 		player->cheats ^= CF_GODMODE;
-		if (gameinfo.gametype != GAME_Chex)
-		{
-			if (player->cheats & CF_GODMODE)
-				msg = GStrings("STSTR_DQDON");
-			else
-				msg = GStrings("STSTR_DQDOFF");
-		}
+		if (player->cheats & CF_GODMODE)
+			msg = GStrings("STSTR_DQDON");
 		else
-		{
-			if (player->cheats & CF_GODMODE)
-				msg = GStrings("STSTR_CDQDON");
-			else
-				msg = GStrings("STSTR_CDQDOFF");
-		}
-		if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-			SB_state = screen->GetPageCount ();
+			msg = GStrings("STSTR_DQDOFF");
+		ST_SetNeedRefresh();
 		break;
 
 	case CHT_BUDDHA:
@@ -122,6 +112,20 @@ void cht_DoCheat (player_t *player, int cheat)
 			msg = GStrings("STSTR_NCON");
 		else
 			msg = GStrings("STSTR_NCOFF");
+		break;
+
+	case CHT_NOCLIP2:
+		player->cheats ^= CF_NOCLIP2;
+		if (player->cheats & CF_NOCLIP2)
+		{
+			player->cheats |= CF_NOCLIP;
+			msg = GStrings("STSTR_NC2ON");
+		}
+		else
+		{
+			player->cheats &= ~CF_NOCLIP;
+			msg = GStrings("STSTR_NCOFF");
+		}
 		break;
 
 	case CHT_NOVELOCITY:
@@ -188,10 +192,7 @@ void cht_DoCheat (player_t *player, int cheat)
 			{
 				player->mo->GiveInventoryType (type);
 			}
-			if(gameinfo.gametype != GAME_Chex)
-				msg = GStrings("STSTR_CHOPPERS");
-			else
-				msg = GStrings("STSTR_CCHOPPERS");
+			msg = GStrings("STSTR_CHOPPERS");
 		}
 		// [RH] The original cheat also set powers[pw_invulnerability] to true.
 		// Since this is a timer and not a boolean, it effectively turned off
@@ -202,7 +203,7 @@ void cht_DoCheat (player_t *player, int cheat)
 	case CHT_POWER:
 		if (player->mo != NULL && player->health >= 0)
 		{
-			item = player->mo->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2));
+			item = player->mo->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2), true);
 			if (item != NULL)
 			{
 				item->Destroy ();
@@ -222,10 +223,7 @@ void cht_DoCheat (player_t *player, int cheat)
 		cht_Give (player, "ammo");
 		cht_Give (player, "keys");
 		cht_Give (player, "armor");
-		if(gameinfo.gametype != GAME_Chex)
-			msg = GStrings("STSTR_KFAADDED");
-		else
-			msg = GStrings("STSTR_CKFAADDED");
+		msg = GStrings("STSTR_KFAADDED");
 		break;
 
 	case CHT_IDFA:
@@ -233,10 +231,7 @@ void cht_DoCheat (player_t *player, int cheat)
 		cht_Give (player, "weapons");
 		cht_Give (player, "ammo");
 		cht_Give (player, "armor");
-		if(gameinfo.gametype != GAME_Chex)
-			msg = GStrings("STSTR_FAADDED");
-		else
-			msg = GStrings("STSTR_CFAADDED");
+		msg = GStrings("STSTR_FAADDED");
 		break;
 
 	case CHT_BEHOLDV:
@@ -322,8 +317,11 @@ void cht_DoCheat (player_t *player, int cheat)
 				player->mo->flags3 = player->mo->GetDefault()->flags3;
 				player->mo->flags4 = player->mo->GetDefault()->flags4;
 				player->mo->flags5 = player->mo->GetDefault()->flags5;
+				player->mo->flags6 = player->mo->GetDefault()->flags6;
+				player->mo->flags7 = player->mo->GetDefault()->flags7;
 				player->mo->renderflags &= ~RF_INVISIBLE;
 				player->mo->height = player->mo->GetDefault()->height;
+				player->mo->radius = player->mo->GetDefault()->radius;
 				player->mo->special1 = 0;	// required for the Hexen fighter's fist attack. 
 											// This gets set by AActor::Die as flag for the wimpy death and must be reset here.
 				player->mo->SetState (player->mo->SpawnState);
@@ -533,15 +531,15 @@ void cht_DoCheat (player_t *player, int cheat)
 		return;
 
 	if( ( cheat != CHT_CHASECAM )
-		|| ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE )
+		|| ( !( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE )
 			&& ( player->bSpectating == false ) && !(dmflags2 & DF2_CHASECAM))){
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_Printf( PRINT_HIGH, "%s is a cheater: %s\n", player->userinfo.netname, msg );
+			SERVER_Printf( "%s is a cheater: %s\n", player->userinfo.GetName(), msg );
 		else if ( player == &players[consoleplayer] || CLIENTDEMO_IsFreeSpectatorPlayer( player ) )
 			Printf ("%s\n", msg);
 		// [BB] The server already ensures that all clients see the cheater message.
 		else if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
-			Printf ("%s is a cheater: %s\n", player->userinfo.netname, msg);
+			Printf ("%s is a cheater: %s\n", player->userinfo.GetName(), msg);
 	}
 }
 
@@ -611,11 +609,7 @@ void GiveSpawner (player_t *player, const PClass *type, int amount)
 				item->Amount = MIN (amount, item->MaxAmount);
 			}
 		}
-		if(item->flags & MF_COUNTITEM) // Given items shouldn't count against the map's total,
-		{								// since they aren't added to the player's total.
-			level.total_items--;
-			item->flags &= ~MF_COUNTITEM;
-		} 
+		item->ClearCounters();
 		if (!item->CallTryPickup (player->mo))
 		{
 			item->Destroy ();
@@ -638,9 +632,9 @@ void cht_Give (player_t *player, const char *name, int amount)
 	const PClass *type;
 
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVER_Printf( PRINT_HIGH, "%s is a cheater: give %s\n", player->userinfo.netname, name );
+		SERVER_Printf( "%s is a cheater: give %s\n", player->userinfo.GetName(), name );
 	else if (player != &players[consoleplayer])
-		Printf ("%s is a cheater: give %s\n", player->userinfo.netname, name);
+		Printf ("%s is a cheater: give %s\n", player->userinfo.GetName(), name);
 
 	if (player->mo == NULL || player->health <= 0)
 	{
@@ -816,8 +810,8 @@ void cht_Give (player_t *player, const char *name, int amount)
 			// Don't give replaced weapons unless the replacement was done by Dehacked.
 			if (type != RUNTIME_CLASS(AWeapon) &&
 				type->IsDescendantOf (RUNTIME_CLASS(AWeapon)) &&
-				(type->ActorInfo->GetReplacement() == type->ActorInfo ||
-				 type->ActorInfo->GetReplacement()->Class->IsDescendantOf(RUNTIME_CLASS(ADehackedPickup))))
+				(type->GetReplacement() == type ||
+				 type->GetReplacement()->IsDescendantOf(RUNTIME_CLASS(ADehackedPickup))))
 
 			{
 				// Give the weapon only if it belongs to the current game or
@@ -884,7 +878,11 @@ void cht_Give (player_t *player, const char *name, int amount)
 					!type->IsDescendantOf (RUNTIME_CLASS(APowerup)) &&
 					!type->IsDescendantOf (RUNTIME_CLASS(AArmor)))
 				{
-					GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					// Do not give replaced items unless using "give everything"
+					if (giveall == ALL_YESYES || type->GetReplacement() == type)
+					{
+						GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					}
 				}
 			}
 		}
@@ -902,7 +900,11 @@ void cht_Give (player_t *player, const char *name, int amount)
 				AInventory *def = (AInventory*)GetDefaultByType (type);
 				if (def->Icon.isValid())
 				{
-					GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					// Do not give replaced items unless using "give everything"
+					if (giveall == ALL_YESYES || type->GetReplacement() == type)
+					{
+						GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					}
 				}
 			}
 		}
@@ -964,6 +966,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 			{
 				player->health -= amount;
 			}
+
+			// [TP]
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				SERVERCOMMANDS_SetPlayerHealth( player - players );
 		}
 
 		if (!takeall)
@@ -980,6 +986,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 			if (type->IsDescendantOf(RUNTIME_CLASS (ABackpackItem)))
 			{
 				AInventory *pack = player->mo->FindInventory (type);
+
+				// [TP]
+				if ( pack && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+					SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
 
 				if (pack) pack->Destroy();
 			}
@@ -998,6 +1008,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 			if (type->ParentClass == RUNTIME_CLASS (AAmmo))
 			{
 				AInventory *ammo = player->mo->FindInventory (type);
+
+				// [TP]
+				if ( ammo && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+					SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
 
 				if (ammo)
 					ammo->Amount = 0;
@@ -1023,6 +1037,13 @@ void cht_Take (player_t *player, const char *name, int amount)
 			}
 		}
 
+		// [TP]
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		{
+			SERVERCOMMANDS_SetPlayerArmor( player - players );
+			SERVERCOMMANDS_SyncHexenArmorSlots( player - players );
+		}
+
 		if (!takeall)
 			return;
 	}
@@ -1036,6 +1057,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 			if (type->IsDescendantOf (RUNTIME_CLASS (AKey)))
 			{
 				AActor *key = player->mo->FindInventory (type);
+
+				// [TP]
+				if ( key && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+					SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
 
 				if (key)
 					key->Destroy ();
@@ -1056,6 +1081,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 				type->IsDescendantOf (RUNTIME_CLASS (AWeapon)))
 			{
 				AActor *weapon = player->mo->FindInventory (type);
+
+				// [TP]
+				if ( weapon && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+					SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
 
 				if (weapon)
 					weapon->Destroy ();
@@ -1087,6 +1116,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 				{
 					AActor *artifact = player->mo->FindInventory (type);
 
+					// [TP]
+					if ( artifact && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+						SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
+
 					if (artifact)
 						artifact->Destroy ();
 				}
@@ -1106,6 +1139,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 			if (type->IsDescendantOf (RUNTIME_CLASS (APuzzleItem)))
 			{
 				AActor *puzzlepiece = player->mo->FindInventory (type);
+
+				// [TP]
+				if ( puzzlepiece && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+					SERVERCOMMANDS_TakeInventory( player - players, type, 0 );
 
 				if (puzzlepiece)
 					puzzlepiece->Destroy ();
@@ -1133,6 +1170,10 @@ void cht_Take (player_t *player, const char *name, int amount)
 		{
 			inventory->Amount -= amount ? amount : 1;
 
+			// [TP]
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				SERVERCOMMANDS_TakeInventory( player - players, type, inventory->Amount );
+
 			if (inventory->Amount <= 0)
 			{
 				if (inventory->ItemFlags & IF_KEEPDEPLETED)
@@ -1149,14 +1190,57 @@ void cht_Take (player_t *player, const char *name, int amount)
 	return;
 }
 
+class DSuicider : public DThinker
+{
+	DECLARE_CLASS(DSuicider, DThinker)
+	HAS_OBJECT_POINTERS;
+public:
+	TObjPtr<APlayerPawn> Pawn;
+
+	void Tick()
+	{
+		// [BB] Added safety check.
+		if ( Pawn )
+		{
+			Pawn->flags |= MF_SHOOTABLE;
+			Pawn->flags2 &= ~MF2_INVULNERABLE;
+			// Store the player's current damage factor, to restore it later.
+			fixed_t plyrdmgfact = Pawn->DamageFactor;
+			Pawn->DamageFactor = 65536;
+			P_DamageMobj (Pawn, Pawn, Pawn, TELEFRAG_DAMAGE, NAME_Suicide);
+			Pawn->DamageFactor = plyrdmgfact;
+			if (Pawn->health <= 0)
+			{
+				Pawn->flags &= ~MF_SHOOTABLE;
+			}
+		}
+		Destroy();
+	}
+	// You'll probably never be able to catch this in a save game, but
+	// just in case, add a proper serializer.
+	void Serialize(FArchive &arc)
+	{ 
+		Super::Serialize(arc);
+		arc << Pawn;
+	}
+};
+
+IMPLEMENT_POINTY_CLASS(DSuicider)
+ DECLARE_POINTER(Pawn)
+END_POINTERS
+
 void cht_Suicide (player_t *plyr)
 {
+	// If this cheat was initiated by the suicide ccmd, and this is a single
+	// player game, the CHT_SUICIDE will be processed before the tic is run,
+	// so the console has not gone up yet. Use a temporary thinker to delay
+	// the suicide until the game ticks so that death noises can be heard on
+	// the initial tick.
 	if (plyr->mo != NULL)
 	{
-		plyr->mo->flags |= MF_SHOOTABLE;
-		plyr->mo->flags2 &= ~MF2_INVULNERABLE;
-		P_DamageMobj (plyr->mo, plyr->mo, plyr->mo, TELEFRAG_DAMAGE, NAME_Suicide);
-		if (plyr->mo->health <= 0) plyr->mo->flags &= ~MF_SHOOTABLE;
+		DSuicider *suicide = new DSuicider;
+		suicide->Pawn = plyr->mo;
+		GC::WriteBarrier(suicide, suicide->Pawn);
 	}
 }
 

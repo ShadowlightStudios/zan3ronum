@@ -57,7 +57,6 @@
 #include "network.h"
 #include "callvote.h"
 #include "v_text.h"
-#include "m_menu.h"
 #include "c_dispatch.h"
 #include "cmdlib.h"
 #include "cooperative.h"
@@ -89,10 +88,47 @@
 extern	HINSTANCE		g_hInst;
 
 // References to the names defined in m_options.cpp (to reduce code duplication).
-extern	value_t			GameModeVals[15];
-extern	value_t			GameskillVals[5];
-extern	value_t			BotskillVals[5];
-extern	value_t			ModifierVals[3];
+// [BB] FIXME
+value_t GameModeVals[16] = {
+	{ 0.0, "Cooperative" },
+	{ 1.0, "Survival Cooperative" },
+	{ 2.0, "Invasion" },
+	{ 3.0, "Deathmatch" },
+	{ 4.0, "Team Deathmatch" },
+	{ 5.0, "Duel" },
+	{ 6.0, "Terminator" },
+	{ 7.0, "Last Man Standing" },
+	{ 8.0, "Team Last Man Standing" },
+	{ 9.0, "Possession" },
+	{ 10.0, "Team Possession" },
+	{ 11.0, "Teamgame (ACS)" },
+	{ 12.0, "Capture the Flag" },
+	{ 13.0, "One flag CTF" },
+	{ 14.0, "Skulltag" },
+	{ 15.0, "Domination" },
+};
+
+value_t GameskillVals[5] = {
+	{ 0.0, "I'm too young to die." },
+	{ 1.0, "Hey, not too rough." },
+	{ 2.0, "Hurt me plenty." },
+	{ 3.0, "Ultra-Violence." },
+	{ 4.0, "Nightmare!" }
+};
+
+value_t BotskillVals[5] = {
+	{ 0.0, "I want my mommy!" },
+	{ 1.0, "I'm allergic to pain." },
+	{ 2.0, "Bring it on." },
+	{ 3.0, "I thrive off pain." },
+	{ 4.0, "Nightmare!" }
+};
+
+value_t ModifierVals[3] = {
+	{ 0.0, "None" },
+	{ 1.0, "Instagib" },
+	{ 2.0, "Buckshot" },
+};
 
 // Logging.
 extern	FILE			*Logfile;
@@ -252,7 +288,7 @@ void settings_Dialog_SaveSettings( )
 	GetDlgItemText( hDlg, IDC_TIMELIMIT, szBuffer, 1024 );
 	// [BB] We shouldn't compare two floats with "!=".
 	if ( abs( timelimit - atof( szBuffer ) ) > 1e-8 )
-		timelimit = atof( szBuffer );
+		timelimit = static_cast<float> ( atof( szBuffer ) );
 
 	// Save game mode.
 	if ( (LONG) GAMEMODE_GetCurrentMode( ) != SendDlgItemMessage( hDlg, IDC_GAMEPLAYMODE, CB_GETCURSEL, 0, 0 ))
@@ -469,36 +505,9 @@ BOOL CALLBACK settings_ServerTab_MOTDCallback( HWND hDlg, UINT Message, WPARAM w
 
 			// Initialize the MOTD. We have to turn "\n" into carriage returns.
 			{
-				char	szBuffer[512];
-				char	szInputString[512];
-				char	*psz;
-				char	*pszString;
-				char	c;
-
-				strncpy( szInputString, g_fsMOTD.GetChars( ), 512 );
-				szInputString[512-1] = 0;
-
-				// Nifty little trick to turn "\n" into '\n', while maintaining the "\c" color codes.
-				V_ColorizeString( szInputString );
-				V_UnColorizeString( szInputString, 256 );
-
-				pszString = szInputString;
-				psz = szBuffer;
-
-				while ( 1 )
-				{
-					c = *pszString++;
-					if ( c == '\0' )
-					{
-						*psz = c;
-						break;
-					}
-					if ( c == '\n' )
-						*psz++ = '\r';
-					*psz++ = c;
-				}
-
-				SetDlgItemText( hDlg, IDC_MOTD, szBuffer );
+				FString motd = g_fsMOTD;
+				motd.Substitute( "\\n", "\r\n" );
+				SetDlgItemText( hDlg, IDC_MOTD, motd.GetChars() );
 				SendDlgItemMessage( hDlg, IDC_MOTD, EM_SETSEL, -1, 0 ); // [RC] Why doesn't this work?
 			}			
 		}

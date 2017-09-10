@@ -25,6 +25,7 @@
 
 #include "doomdef.h"
 #include "templates.h"
+#include "memarena.h"
 
 // Some more or less basic data types
 // we depend on.
@@ -39,16 +40,12 @@ struct FGLSection;
 struct seg_t;
 
 #include "dthinker.h"
-#include "farchive.h"
 
-#define MAXWIDTH 2560
-#define MAXHEIGHT 1600
+#define MAXWIDTH 5760
+#define MAXHEIGHT 3600
 
 const WORD NO_INDEX = 0xffffu;
 const DWORD NO_SIDE = 0xffffffffu;
-
-// [BC] This is the maximum length a skin name can be.
-#define	MAX_SKIN_NAME					24
 
 // Silhouette, needed for clipping Segs (mainly)
 // and sprites representing things.
@@ -73,6 +70,16 @@ extern size_t MaxDrawSegs;
 // Note: transformed values not buffered locally,
 //	like some DOOM-alikes ("wt", "WebView") did.
 //
+enum
+{
+	VERTEXFLAG_ZCeilingEnabled = 0x01,
+	VERTEXFLAG_ZFloorEnabled   = 0x02
+};
+struct vertexdata_t
+{
+	fixed_t zCeiling, zFloor;
+	DWORD flags;
+};
 struct vertex_t
 {
 	fixed_t x, y;
@@ -86,9 +93,26 @@ struct vertex_t
 	sector_t ** sectors;
 	float * heightlist;
 
+	vertex_t()
+	{
+		x = y = 0;
+		fx = fy = 0;
+		angletime = 0;
+		viewangle = 0;
+		dirty = true;
+		numheights = numsectors = 0;
+		sectors = NULL;
+		heightlist = NULL;
+	}
+
 	bool operator== (const vertex_t &other)
 	{
 		return x == other.x && y == other.y;
+	}
+
+	bool operator!= (const vertex_t &other)
+	{
+		return x != other.x || y != other.y;
 	}
 
 	void clear()
@@ -107,6 +131,7 @@ class FScanner;
 class FBitmap;
 struct FCopyInfo;
 class DInterpolation;
+class FArchive;
 
 enum
 {
@@ -226,10 +251,16 @@ struct secplane_t
 	fixed_t		unlaggedD[UNLAGGEDTICS];
 	fixed_t		restoreD;
 
+	// Returns < 0 : behind; == 0 : on; > 0 : in front
+	int PointOnSide (fixed_t x, fixed_t y, fixed_t z) const
+	{
+		return TMulScale16(a,x, b,y, c,z) + d;
+	}
+
 	// Returns the value of z at (0,0) This is used by the 3D floor code which does not handle slopes
 	fixed_t Zat0 () const
 	{
-		return ic < 0? d:-d;
+		return ic < 0 ? d : -d;
 	}
 
 	// Returns the value of z at (x,y)
@@ -318,31 +349,28 @@ struct secplane_t
 	{
 		return -TMulScale16 (a, v->x, b, v->y, z, c);
 	}
+
+	bool CopyPlaneIfValid (secplane_t *dest, const secplane_t *opp) const;
+
 };
 
-inline FArchive &operator<< (FArchive &arc, secplane_t &plane)
-{
-	arc << plane.a << plane.b << plane.c << plane.d;
-	//if (plane.c != 0)
-	{	// plane.c should always be non-0. Otherwise, the plane
-		// would be perfectly vertical.
-		plane.ic = DivScale32 (1, plane.c);
-	}
-	return arc;
-}
+FArchive &operator<< (FArchive &arc, secplane_t &plane);
+
 
 #include "p_3dfloors.h"
 struct subsector_t;
 struct sector_t;
 struct side_t;
 extern bool gl_plane_reflection_i;
+struct FPortal;
 
 // Ceiling/floor flags
 enum
 {
 	PLANEF_ABSLIGHTING	= 1,	// floor/ceiling light is absolute, not relative
-	PLANEF_BLOCKED		= 2,		// can not be moved anymore.
-	PLANEF_SPRINGPAD		= 4,	// [BC] Floor bounces actors up at the same velocity they landed on it with.	
+	PLANEF_BLOCKED		= 2,	// can not be moved anymore.
+	PLANEF_ADDITIVE		= 4,	// rendered additive
+	PLANEF_SPRINGPAD		= 8,	// [BC] Floor bounces actors up at the same velocity they landed on it with.	
 };
 
 // Internal sector flags
@@ -356,7 +384,10 @@ enum
 	SECF_FORCEDUNDERWATER= 64,	// sector is forced to be underwater
 	SECF_UNDERWATERMASK	= 32+64,
 	SECF_DRAWN			= 128,	// sector has been drawn at least once
-	SECF_RETURNZONE		= 256,	// [BC] Flags should be immediately returned if they're dropped within this sector (lava sectors, unreachable sectors, etc.).
+	SECF_HIDDEN			= 256,	// Do not draw on textured automap
+	SECF_NOFLOORSKYBOX	= 512,	// force use of regular sky 
+	SECF_NOCEILINGSKYBOX	= 1024,	// force use of regular sky 
+	SECF_RETURNZONE		= 2048,	// [BC] Flags should be immediately returned if they're dropped within this sector (lava sectors, unreachable sectors, etc.).
 };
 
 enum
@@ -374,24 +405,6 @@ enum
 
 struct FDynamicColormap;
 
-struct FLightStack
-{
-	secplane_t Plane;		// Plane above this light (points up)
-	sector_t *Master;		// Sector to get light from (NULL for owner)
-	BITFIELD bBottom:1;		// Light is from the bottom of a block?
-	BITFIELD bFlooder:1;	// Light floods lower lights until another flooder is reached?
-	BITFIELD bOverlaps:1;	// Plane overlaps the next one
-};
-
-struct FExtraLight
-{
-	short Tag;
-	WORD NumLights;
-	WORD NumUsedLights;
-	FLightStack *Lights;	// Lights arranged from top to bottom
-
-	void InsertLight (const secplane_t &plane, line_t *line, int type);
-};
 
 struct FLinkedSector
 {
@@ -437,11 +450,6 @@ struct extsector_t
 		TArray<lightlist_t>				lightlist;		// 3D light list
 		TArray<sector_t*>				attached;		// 3D floors attached to this sector
 	} XFloor;
-
-	// Links to other objects that get invalidated when this sector changes
-	TArray<sector_t *> SectorDependencies;
-	TArray<side_t *> SideDependencies;
-	TArray<vertex_t *> VertexDependencies;
 	
 	void Serialize(FArchive &arc);
 };
@@ -487,11 +495,14 @@ struct sector_t
 	// [BB] Added bInformClients and bExecuteOnClient.
 	void SetFade(int r, int g, int b, bool bInformClients = true, bool bExecuteOnClient = false);
 	void ClosestPoint(fixed_t x, fixed_t y, fixed_t &ox, fixed_t &oy) const;
-	// [BB] Backported from ZDoom revision 3600.
+	int GetFloorLight () const;
+	int GetCeilingLight () const;
 	sector_t *GetHeightSec() const;
 
 	DInterpolation *SetInterpolation(int position, bool attach);
 	void StopInterpolation(int position);
+
+	ASkyViewpoint *GetSkyBox(int which);
 
 	enum
 	{
@@ -504,6 +515,7 @@ struct sector_t
 		FTransform xform;
 		int Flags;
 		int Light;
+		fixed_t alpha;
 		FTextureID Texture;
 		fixed_t TexZ;
 	};
@@ -511,18 +523,14 @@ struct sector_t
 
 	splane planes[2];
 
-	void SetDirty(bool dolines, bool dovertices);
-
 	void SetXOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.xoffs = o;
-		//SetDirty(false, false);
 	}
 
 	void AddXOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.xoffs += o;
-		//SetDirty(false, false);
 	}
 
 	fixed_t GetXOffset(int pos) const
@@ -533,13 +541,11 @@ struct sector_t
 	void SetYOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.yoffs = o;
-		//SetDirty(false, false);
 	}
 
 	void AddYOffset(int pos, fixed_t o)
 	{
 		planes[pos].xform.yoffs += o;
-		//SetDirty(false, false);
 	}
 
 	fixed_t GetYOffset(int pos, bool addbase = true) const
@@ -557,7 +563,6 @@ struct sector_t
 	void SetXScale(int pos, fixed_t o)
 	{
 		planes[pos].xform.xscale = o;
-		//SetDirty(false, false);
 	}
 
 	fixed_t GetXScale(int pos) const
@@ -568,7 +573,6 @@ struct sector_t
 	void SetYScale(int pos, fixed_t o)
 	{
 		planes[pos].xform.yscale = o;
-		//SetDirty(false, false);
 	}
 
 	fixed_t GetYScale(int pos) const
@@ -579,7 +583,6 @@ struct sector_t
 	void SetAngle(int pos, angle_t o)
 	{
 		planes[pos].xform.angle = o;
-		//SetDirty(false, false);
 	}
 
 	angle_t GetAngle(int pos, bool addbase = true) const
@@ -598,7 +601,16 @@ struct sector_t
 	{
 		planes[pos].xform.base_yoffs = y;
 		planes[pos].xform.base_angle = o;
-		//SetDirty(false, false);
+	}
+
+	void SetAlpha(int pos, fixed_t o)
+	{
+		planes[pos].alpha = o;
+	}
+
+	fixed_t GetAlpha(int pos) const
+	{
+		return planes[pos].alpha;
 	}
 
 	int GetFlags(int pos) const 
@@ -620,7 +632,6 @@ struct sector_t
 	void SetPlaneLight(int pos, int level)
 	{
 		planes[pos].Light = level;
-		//dirty = true;
 	}
 
 	FTextureID GetTexture(int pos) const
@@ -633,7 +644,6 @@ struct sector_t
 		FTextureID old = planes[pos].Texture;
 		planes[pos].Texture = tex;
 		if (floorclip && pos == floor && tex != old) AdjustFloorClip();
-		SetDirty(true, false);
 	}
 
 	fixed_t GetPlaneTexZ(int pos) const
@@ -644,25 +654,26 @@ struct sector_t
 	void SetPlaneTexZ(int pos, fixed_t val)
 	{
 		planes[pos].TexZ = val;
-		SetDirty(true, true);
 	}
 
 	void ChangePlaneTexZ(int pos, fixed_t val)
 	{
 		planes[pos].TexZ += val;
-		SetDirty(true, true);
+	}
+
+	static inline short ClampLight(int level)
+	{
+		return (short)clamp(level, SHRT_MIN, SHRT_MAX);
 	}
 
 	void ChangeLightLevel(int newval)
 	{
-		lightlevel = (BYTE)clamp(lightlevel + newval, 0, 255);
-		//SetDirty(true, false);
+		lightlevel = ClampLight(lightlevel + newval);
 	}
 
 	void SetLightLevel(int newval)
 	{
-		lightlevel = (BYTE)clamp(newval, 0, 255);
-		//SetDirty(true, false);
+		lightlevel = ClampLight(newval);
 	}
 
 	int GetLightLevel() const
@@ -688,17 +699,17 @@ struct sector_t
 	// [RH] give floor and ceiling even more properties
 	FDynamicColormap *ColorMap;	// [RH] Per-sector colormap
 
-	BYTE		lightlevel;
 
 	TObjPtr<AActor> SoundTarget;
-	BYTE 		soundtraversed;	// 0 = untraversed, 1,2 = sndlines -1
 
 	short		special;
 	short		tag;
+	short		lightlevel;
+	short		seqType;		// this sector's sound sequence
+
 	int			nexttag,firsttag;	// killough 1/30/98: improves searches for tags.
 
 	int			sky;
-	short		seqType;		// this sector's sound sequence
 	FNameNoInit	SeqName;		// Sound sequence name. Setting seqType non-negative will override this.
 
 	fixed_t		soundorg[2];	// origin for any sounds played by the sector
@@ -724,6 +735,7 @@ struct sector_t
 	};
 	TObjPtr<DInterpolation> interpolations[4];
 
+	BYTE 		soundtraversed;	// 0 = untraversed, 1,2 = sndlines -1
 	// jff 2/26/98 lockout machinery for stairbuilding
 	SBYTE stairlock;	// -2 on first locked -1 after thinker done 0 normally
 	SWORD prevsec;		// -1 or number of sector for previous step
@@ -761,17 +773,13 @@ struct sector_t
 	// regular sky.
 	TObjPtr<ASkyViewpoint> FloorSkyBox, CeilingSkyBox;
 
-	// Planes that partition this sector into different light zones.
-	FExtraLight *ExtraLights;
-
-	vertex_t *Triangle[3];	// Three points that can define a plane
 	short						secretsector;		//jff 2/16/98 remembers if sector WAS secret (automap)
 	int							sectornum;			// for comparing sector copies
 
 	extsector_t	*				e;		// This stores data that requires construction/destruction. Such data must not be copied by R_FakeFlat.
 
 	// GL only stuff starts here
-	float						ceiling_reflect, floor_reflect;
+	float						reflect[2];
 
 	int							dirtyframe[3];		// last frame this sector was marked dirty
 	bool						dirty;				// marked for recalculation
@@ -779,6 +787,7 @@ struct sector_t
 	fixed_t						transdoorheight;	// for transparent door hacks
 	int							subsectorcount;		// list of subsectors
 	subsector_t **				subsectors;
+	FPortal *					portals[2];			// floor and ceiling portals
 
 	enum
 	{
@@ -789,13 +798,8 @@ struct sector_t
 	int				vboindex[4];	// VBO indices of the 4 planes this sector uses during rendering
 	fixed_t			vboheight[2];	// Last calculated height for the 2 planes of this actual sector
 	int				vbocount[2];	// Total count of vertices belonging to this sector's planes
-#ifdef IBO_TEST
-	int				iboindex[4];	// VBO indices of the 4 planes this sector uses during rendering
-	int				ibocount;
-#endif
 
-	float GetFloorReflect() { return gl_plane_reflection_i? floor_reflect : 0; }
-	float GetCeilingReflect() { return gl_plane_reflection_i? ceiling_reflect : 0; }
+	float GetReflect(int pos) { return gl_plane_reflection_i? reflect[pos] : 0; }
 	bool VBOHeightcheck(int pos) const { return vboheight[pos] == GetPlaneTexZ(pos); }
 
 	enum
@@ -822,7 +826,7 @@ struct sector_t
 
 	// [BC] Has the light level changed?
 	bool	bLightChange;
-	BYTE	SavedLightLevel;
+	short	SavedLightLevel;
 
 	// [BC] Backup other numberous elements for resetting the map.
 	FDynamicColormap	*SavedColorMap;
@@ -876,6 +880,7 @@ enum
 	WALLF_CLIP_MIDTEX	 = 16,	// Like the line counterpart, but only for this side.
 	WALLF_WRAP_MIDTEX	 = 32,	// Like the line counterpart, but only for this side.
 	WALLF_POLYOBJ		 = 64,	// This wall belongs to a polyobject.
+	WALLF_LIGHT_FOG      = 128,	// This wall's Light is used even in fog.
 };
 
 struct side_t
@@ -920,7 +925,6 @@ struct side_t
 	void SetLight(SWORD l)
 	{
 		Light = l;
-		//dirty = true;
 	}
 
 	FTextureID GetTexture(int which) const
@@ -930,20 +934,17 @@ struct side_t
 	void SetTexture(int which, FTextureID tex)
 	{
 		textures[which].texture = tex;
-		dirty = true;
 	}
 
 	void SetTextureXOffset(int which, fixed_t offset)
 	{
 		textures[which].xoffset = offset;
-		//dirty = true;
 	}
 	void SetTextureXOffset(fixed_t offset)
 	{
 		textures[top].xoffset =
 		textures[mid].xoffset =
 		textures[bottom].xoffset = offset;
-		//dirty = true;
 	}
 	fixed_t GetTextureXOffset(int which) const
 	{
@@ -952,20 +953,17 @@ struct side_t
 	void AddTextureXOffset(int which, fixed_t delta)
 	{
 		textures[which].xoffset += delta;
-		//dirty = true;
 	}
 
 	void SetTextureYOffset(int which, fixed_t offset)
 	{
 		textures[which].yoffset = offset;
-		//dirty = true;
 	}
 	void SetTextureYOffset(fixed_t offset)
 	{
 		textures[top].yoffset =
 		textures[mid].yoffset =
 		textures[bottom].yoffset = offset;
-		//dirty = true;
 	}
 	fixed_t GetTextureYOffset(int which) const
 	{
@@ -974,18 +972,15 @@ struct side_t
 	void AddTextureYOffset(int which, fixed_t delta)
 	{
 		textures[which].yoffset += delta;
-		//dirty = true;
 	}
 
 	void SetTextureXScale(int which, fixed_t scale)
 	{
-		textures[which].xscale = scale <= 0? FRACUNIT : scale;
-		//dirty = true;
+		textures[which].xscale = scale == 0 ? FRACUNIT : scale;
 	}
 	void SetTextureXScale(fixed_t scale)
 	{
-		textures[top].xscale = textures[mid].xscale = textures[bottom].xscale = scale <= 0? FRACUNIT : scale;
-		//dirty = true;
+		textures[top].xscale = textures[mid].xscale = textures[bottom].xscale = scale == 0 ? FRACUNIT : scale;
 	}
 	fixed_t GetTextureXScale(int which) const
 	{
@@ -994,19 +989,16 @@ struct side_t
 	void MultiplyTextureXScale(int which, fixed_t delta)
 	{
 		textures[which].xscale = FixedMul(textures[which].xscale, delta);
-		//dirty = true;
 	}
 
 
 	void SetTextureYScale(int which, fixed_t scale)
 	{
-		textures[which].yscale = scale <= 0? FRACUNIT : scale;
-		//dirty = true;
+		textures[which].yscale = scale == 0 ? FRACUNIT : scale;
 	}
 	void SetTextureYScale(fixed_t scale)
 	{
-		textures[top].yscale = textures[mid].yscale = textures[bottom].yscale = scale <= 0? FRACUNIT : scale;
-		//dirty = true;
+		textures[top].yscale = textures[mid].yscale = textures[bottom].yscale = scale == 0 ? FRACUNIT : scale;
 	}
 	fixed_t GetTextureYScale(int which) const
 	{
@@ -1015,7 +1007,6 @@ struct side_t
 	void MultiplyTextureYScale(int which, fixed_t delta)
 	{
 		textures[which].yscale = FixedMul(textures[which].yscale, delta);
-		//dirty = true;
 	}
 
 	DInterpolation *SetInterpolation(int position);
@@ -1026,7 +1017,6 @@ struct side_t
 
 	//For GL
 	FLightNode * lighthead[2];				// all blended lights that may affect this wall
-	bool dirty;								// GL info needs to be recalculated
 
 	seg_t **segs;	// all segs belonging to this sidedef in ascending order. Used for precise rendering
 	int numsegs;
@@ -1069,6 +1059,7 @@ struct line_t
 	slopetype_t	slopetype;	// To aid move clipping.
 	sector_t	*frontsector, *backsector;
 	int 		validcount;	// if == validcount, already checked
+	int			locknumber;	// [Dusk] lock number for special
 	// [BC] Have any of this line's textures been changed during the course of the level?
 	// [EP] TODO: remove the 'ul' prefix from this variable, it isn't ULONG anymore
 	unsigned int ulTexChangeFlags;
@@ -1128,12 +1119,19 @@ struct seg_t
 	sector_t*		backsector;		// NULL for one-sided lines
 
 	seg_t*			PartnerSeg;
-
-	BITFIELD		bPolySeg:1;
-
 	subsector_t*	Subsector;
+
 	float			sidefrac;		// relative position of seg's ending vertex on owning sidedef
 };
+
+struct glsegextra_t
+{
+	DWORD		 PartnerSeg;
+	subsector_t *Subsector;
+};
+
+extern seg_t *segs;
+
 
 //
 // A SubSector.
@@ -1141,27 +1139,42 @@ struct seg_t
 // Basically, this is a list of LineSegs indicating the visible walls that
 // define (all or some) sides of a convex BSP leaf.
 //
+
+enum
+{
+	SSECF_DEGENERATE = 1,
+	SSECF_DRAWN = 2,
+	SSECF_POLYORG = 4,
+};
+
+struct FPortalCoverage
+{
+	DWORD *		subsectors;
+	int			sscount;
+};
+
 struct subsector_t
 {
 	sector_t	*sector;
 	FPolyNode	*polys;
 	FMiniBSP	*BSP;
 	seg_t		*firstline;
+	sector_t	*render_sector;
 	DWORD		numlines;
+	int			flags;
 
+	void BuildPolyBSP();
 	// subsector related GL data
 	FLightNode *	lighthead[2];	// Light nodes (blended and additive)
-	sector_t *		render_sector;	// The sector this belongs to for rendering
-	fixed_t			bbox[4];		// Bounding box
 	int				validcount;
-	bool			degenerate;
+	short			mapsection;
 	char			hacked;			// 1: is part of a render hack
 									// 2: has one-sided walls
+	FPortalCoverage	portalcoverage[2];
 
 	// [BL] Constructor to init GZDoom data
-	subsector_t() : render_sector(NULL), degenerate(0), hacked(0)
+	subsector_t() : render_sector(NULL), hacked(0)
 	{
-		bbox[0] = bbox[1] = bbox[2] = bbox[3] = 0;
 		lighthead[0] = lighthead[1] = NULL;
 	}
 };
@@ -1193,8 +1206,6 @@ struct node_t
 
 struct FMiniBSP
 {
-	FMiniBSP();
-
 	bool bDirty;
 
 	TArray<node_t> Nodes;
@@ -1205,128 +1216,23 @@ struct FMiniBSP
 
 
 
-// posts are runs of non masked source pixels
-struct column_t
-{
-	BYTE		topdelta;		// -1 is the last post in a column
-	BYTE		length; 		// length data bytes follows
-};
-
-
-
 //
 // OTHER TYPES
 //
 
 typedef BYTE lighttable_t;	// This could be wider for >8 bit display.
 
-
-// A vissprite_t is a thing
-//	that will be drawn during a refresh.
-// I.e. a sprite object that is partly visible.
-struct vissprite_t
+// This encapsulates the fields of vissprite_t that can be altered by AlterWeaponSprite
+struct visstyle_t
 {
 	// [BB] Dummy variable to stop wallhacks.
 	BYTE			dummy;
-	short			x1, x2;
-	fixed_t			cx;				// for line side calculation
-	fixed_t			gx, gy;			// for fake floor clipping
-	fixed_t			gz, gzt;		// global bottom / top for silhouette clipping
-	fixed_t			startfrac;		// horizontal position of x1
-	fixed_t			xscale, yscale;
-	fixed_t			xiscale;		// negative if flipped
-	fixed_t			depth;
-	fixed_t			idepth;			// 1/z
-	fixed_t			texturemid;
-	DWORD			FillColor;
 	lighttable_t	*colormap;
-	sector_t		*heightsec;		// killough 3/27/98: height sector for underwater/fake ceiling
-	sector_t		*sector;		// [RH] sector this sprite is in
 	fixed_t			alpha;
-	fixed_t			floorclip;
-	FTexture		*pic;
-	short 			renderflags;
-	DWORD			Translation;	// [RH] for color translation
 	FRenderStyle	RenderStyle;
-	BYTE			FakeFlatStat;	// [RH] which side of fake/floor ceiling sprite is on
-	BYTE			bSplitSprite;	// [RH] Sprite was split by a drawseg
-
-	F3DFloor	*fakefloor;
-	F3DFloor	*fakeceiling;
+	// [BB]
+	bool bFixedColormap;
 };
 
-enum
-{
-	FAKED_Center,
-	FAKED_BelowFloor,
-	FAKED_AboveCeiling
-};
-
-//
-// Sprites are patches with a special naming convention so they can be
-// recognized by R_InitSprites. The base name is NNNNFx or NNNNFxFx, with
-// x indicating the rotation, x = 0, 1-7. The sprite and frame specified
-// by a thing_t is range checked at run time.
-// A sprite is a patch_t that is assumed to represent a three dimensional
-// object and may have multiple rotations pre drawn. Horizontal flipping
-// is used to save space, thus NNNNF2F5 defines a mirrored patch.
-// Some sprites will only have one picture used for all views: NNNNF0
-//
-struct spriteframe_t
-{
-	FTextureID Texture[16];	// texture to use for view angles 0-15
-	WORD Flip;			// flip (1 = flip) to use for view angles 0-15.
-};
-
-//
-// A sprite definition:
-//	a number of animation frames.
-//
-struct spritedef_t
-{
-	union
-	{
-		char name[5];
-		DWORD dwName;
-	};
-	BYTE numframes;
-	WORD spriteframes;
-};
-
-extern TArray<spriteframe_t> SpriteFrames;
-
-//
-// [RH] Internal "skin" definition.
-//
-class FPlayerSkin
-{
-public:
-	// [BC] Changed to MAX_SKIN_NAME.
-	char		name[MAX_SKIN_NAME+1];	// MAX_SKIN_NAME chars + NULL
-	char		face[4];	// 3 chars ([MH] + NULL so can use as a C string)
-	BYTE		gender;		// This skin's gender (not really used)
-	BYTE		range0start;
-	BYTE		range0end;
-	bool		othergame;	// [GRB]
-	fixed_t		ScaleX;
-	fixed_t		ScaleY;
-	int			sprite;
-	int			crouchsprite;
-	int			namespc;	// namespace for this skin
-
-	// [BC] New skin properties for Skulltag.
-	// Default color used for this skin.
-	char		szColor[16];
-
-	// Can this skin be selected from the menu?
-	bool		bRevealed;
-
-	// Is this skin hidden by default?
-	bool		bRevealedByDefault;
-
-	// Is this skin a cheat skin?
-	bool		bCheat;
-	// [BC] End of new skin properties.
-};
 
 #endif

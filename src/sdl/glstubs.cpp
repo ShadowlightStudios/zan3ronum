@@ -1,5 +1,7 @@
 #include "r_defs.h"
-#include "r_data.h"
+#include "r_state.h"
+#include "v_video.h"
+
 #include "gl/textures/gl_texture.h"
 
 #ifdef NO_GL
@@ -53,11 +55,11 @@ void gl_ParseDefs()
 {
 }
 
-void StartGLMenu (void)
+void gl_InitModels()
 {
 }
 
-void FCanvasTexture::RenderGLView (AActor *viewpoint, int fov)
+void StartGLMenu (void)
 {
 }
 
@@ -80,10 +82,6 @@ void AddStateLight(FState *, const char *)
 size_t AActor::PropagateMark()
 {
 	return Super::PropagateMark();
-}
-
-void sector_t::SetDirty(bool, bool)
-{
 }
 
 #endif

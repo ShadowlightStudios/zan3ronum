@@ -85,8 +85,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_IceGuyAttack)
 	fixed_t an;
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -96,26 +95,16 @@ DEFINE_ACTION_FUNCTION(AActor, A_IceGuyAttack)
 		return;
 	}
 	an = (self->angle+ANG90)>>ANGLETOFINESHIFT;
-	AActor *missile1 = P_SpawnMissileXYZ(self->x+FixedMul(self->radius>>1,
+	P_SpawnMissileXYZ(self->x+FixedMul(self->radius>>1,
 		finecosine[an]), self->y+FixedMul(self->radius>>1,
 		finesine[an]), self->z+40*FRACUNIT, self, self->target,
-		PClass::FindClass ("IceGuyFX"));
+		PClass::FindClass ("IceGuyFX"), true, NULL, true);	// [BB] Inform the clients.
 	an = (self->angle-ANG90)>>ANGLETOFINESHIFT;
-	AActor *missile2 = P_SpawnMissileXYZ(self->x+FixedMul(self->radius>>1,
+	P_SpawnMissileXYZ(self->x+FixedMul(self->radius>>1,
 		finecosine[an]), self->y+FixedMul(self->radius>>1,
 		finesine[an]), self->z+40*FRACUNIT, self, self->target,
-		PClass::FindClass ("IceGuyFX"));
-	S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM);
-
-	// [BB] If we're the server, tell the clients to spawn the missiles and play the sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-	{
-		SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, S_GetName(self->AttackSound), 1, ATTN_NORM );
-		if ( missile1 )
-			SERVERCOMMANDS_SpawnMissile( missile1 );
-		if ( missile2 )
-			SERVERCOMMANDS_SpawnMissile( missile2 );
-	}
+		PClass::FindClass ("IceGuyFX"), true, NULL, true);	// [BB] Inform the clients.
+	S_Sound (self, CHAN_WEAPON, self->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.
 }
 
 //============================================================================
@@ -142,7 +131,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_IceGuyDie)
 DEFINE_ACTION_FUNCTION(AActor, A_IceGuyMissileExplode)
 {
 	AActor *mo;
-	int i;
+	unsigned int i;
 
 	for (i = 0; i < 8; i++)
 	{

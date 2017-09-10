@@ -61,11 +61,8 @@
 #define	CONNECTION_RESEND_TIME		( 3 * TICRATE )
 #define	GAMESTATE_RESEND_TIME		( 3 * TICRATE )
 
-// Display "couldn't find thing" messages.
-//#define	CLIENT_WARNING_MESSAGES
-
 //*****************************************************************************
-typedef enum 
+enum CONNECTIONSTATE_e
 {
 	// Full screen console with no connection.
 	CTS_DISCONNECTED,
@@ -87,7 +84,7 @@ typedef enum
     // Snapshot is finished! Everything is done, fully in the level.
 	CTS_ACTIVE,
 
-} CONNECTIONSTATE_e;
+};
 
 //[BB] Client connect flags.
 enum
@@ -100,7 +97,7 @@ enum
 //*****************************************************************************
 //	STRUCTURES
 
-typedef struct
+struct PACKETBUFFER_s
 {
 	// This array of bytes is the storage for the packet data.
 	BYTE	abData[MAX_UDP_PACKET * PACKET_BUFFER_SIZE];
@@ -108,7 +105,7 @@ typedef struct
 	// This is the number of bytes in paData.
 	LONG	lMaxSize;
 
-} PACKETBUFFER_s;
+};
 
 //*****************************************************************************
 //	PROTOTYPES
@@ -137,7 +134,10 @@ void				CLIENT_SetServerAddress( NETADDRESS_s Address );
 bool				CLIENT_GetAllowSendingOfUserInfo( void );
 void				CLIENT_SetAllowSendingOfUserInfo( bool bAllow );
 int					CLIENT_GetLatestServerGametic( void );
-void				CLIENT_SetLatestServerGametic( LONG latestServerGametic );
+void				CLIENT_SetLatestServerGametic( int latestServerGametic );
+bool				CLIENT_GetFullUpdateIncomplete ( void );
+unsigned int		CLIENT_GetEndFullUpdateTic( void );
+const FString		&CLIENT_GetPlayerAccountName( int player );
 
 // Functions necessary to carry out client-side operations.
 void				CLIENT_SendServerPacket( void );
@@ -150,17 +150,15 @@ void				CLIENT_CheckForMissingPackets( void );
 bool				CLIENT_ReadPacketHeader( BYTESTREAM_s *pByteStream );
 void				CLIENT_ParsePacket( BYTESTREAM_s *pByteStream, bool bSequencedPacket );
 void				CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream );
-#ifdef _DEBUG
 void				CLIENT_PrintCommand( LONG lCommand );
-#endif
 void				CLIENT_QuitNetworkGame( const char *pszError );
 void				CLIENT_SendCmd( void );
 void				CLIENT_WaitForServer( void );
 
 // Support functions to make things work more smoothly.
 void				CLIENT_AuthenticateLevel( const char *pszMapName );
-AActor				*CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, LONG lNetID );
-void				CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, fixed_t MomX, fixed_t MomY, fixed_t MomZ, LONG lNetID, LONG lTargetNetID );
+AActor				*CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, LONG lNetID, BYTE spawnFlags = 0 );
+void				CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, fixed_t VelX, fixed_t VelY, fixed_t VelZ, LONG lNetID, LONG lTargetNetID );
 void				CLIENT_MoveThing( AActor *pActor, fixed_t X, fixed_t Y, fixed_t Z );
 AActor				*CLIENT_FindThingByNetID( LONG lID );
 void				CLIENT_DisplayMOTD( void );
@@ -170,17 +168,24 @@ AInventory			*CLIENT_FindPlayerInventory( ULONG ulPlayer, const PClass *pType );
 AInventory			*CLIENT_FindPlayerInventory( ULONG ulPlayer, const char *pszName );
 //void				CLIENT_RemoveMonsterCorpses( void );
 sector_t			*CLIENT_FindSectorByID( ULONG ulID );
+line_t				*CLIENT_FindLineByID( ULONG lineID );
+side_t				*CLIENT_FindSideByID( ULONG sideID );
 bool				CLIENT_IsParsingPacket( void );
 void				CLIENT_ResetConsolePlayerCamera( void );
 LONG				CLIENT_AdjustDoorDirection( LONG lDirection );
 LONG				CLIENT_AdjustFloorDirection( LONG lDirection );
 LONG				CLIENT_AdjustCeilingDirection( LONG lDirection );
 LONG				CLIENT_AdjustElevatorDirection( LONG lDirection );
-void				CLIENT_LogHUDMessage( char *pszString, LONG lColor );
+void				CLIENT_LogHUDMessage( const char *pszString, LONG lColor );
 void				CLIENT_UpdatePendingWeapon( const player_t *pPlayer );
+void				CLIENT_SetActorToLastDeathStateFrame ( AActor *pActor );
 void				CLIENT_ClearAllPlayers( void );
 void				CLIENT_LimitProtectedCVARs( void );
 bool				CLIENT_CanClipMovement( AActor *pActor );
+void STACK_ARGS		CLIENT_PrintWarning( const char* format, ... ) GCCPRINTF( 1, 2 );
+bool				CLIENT_ReadActorFromNetID( int netid, const PClass *subclass, bool allowNull, AActor *&actor,
+											   const char *commandName = "CLIENT_ReadActorFromNetID",
+											   const char *parameterName = "actor" );
 
 void				CLIENT_PREDICT_Construct( void );
 void				CLIENT_PREDICT_PlayerPredict( void );

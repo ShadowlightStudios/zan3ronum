@@ -38,6 +38,7 @@ int 	ParseNum (const char *str);
 bool	IsNum (const char *str);		// [RH] added
 
 char	*copystring(const char *s);
+char	*ncopystring(const char *s);
 void	ReplaceString (char **ptr, const char *str);
 
 bool CheckWildcards (const char *pattern, const char *text);
@@ -48,11 +49,19 @@ const char *myasctime ();
 
 int strbin (char *str);
 FString strbin1 (const char *start);
-void CleanseString (char *str);
+char *CleanseString (char *str);
 
 void CreatePath(const char * fn);
 
 FString ExpandEnvVars(const char *searchpathstring);
 FString NicePath(const char *path);
+
+struct FFileList
+{
+	FString Filename;
+	bool isDirectory;
+};
+
+void ScanDirectory(TArray<FFileList> &list, const char *dirpath);
 
 #endif

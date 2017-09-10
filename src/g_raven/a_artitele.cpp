@@ -7,6 +7,7 @@
 #include "s_sound.h"
 #include "m_random.h"
 #include "doomstat.h"
+#include "g_game.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "deathmatch.h"
@@ -38,8 +39,7 @@ bool AArtiTeleport::Use (bool pickup)
 	angle_t destAngle;
 
 	// [BC] Let the server decide where we go.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( true );
 	}
@@ -47,7 +47,7 @@ bool AArtiTeleport::Use (bool pickup)
 	// [BB] If this is a team game and there are valid team starts for the team
 	// the owner is on, teleport to one of the team starts.
 	const ULONG ownerTeam = Owner->player ? Owner->player->ulTeam : teams.Size( );
-	if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	     && TEAM_CheckIfValid ( ownerTeam )
 	     && ( teams[ownerTeam].TeamStarts.Size( ) > 0 ) )
 	{
@@ -67,7 +67,7 @@ bool AArtiTeleport::Use (bool pickup)
 	}
 	else
 	{
-		FMapThing *pSpot = NULL;
+		FPlayerStart *pSpot = NULL;
 		// [BB] If there is a designated start for this player use it.
 		if ( playerstarts[Owner->player - players].type != 0 )
 			pSpot = &playerstarts[Owner->player - players];
@@ -82,7 +82,11 @@ bool AArtiTeleport::Use (bool pickup)
 			destAngle = ANG45 * (pSpot->angle/45);
 		}
 		else
+		{
+			// [BB] Silence uninitialized warnings.
+			destX = destY = destAngle = 0;
 			I_Error( "ArtiTeleport: No player start found!" );
+		}
 	}
 	P_Teleport (Owner, destX, destY, ONFLOORZ, destAngle, true, true, false);
 	bool canlaugh = true;
@@ -96,11 +100,7 @@ bool AArtiTeleport::Use (bool pickup)
  	}
 	if (canlaugh)
  	{ // Full volume laugh
- 		S_Sound (Owner, CHAN_VOICE, "*evillaugh", 1, ATTN_NONE);
-
-		// [BC] Play the laugh for clients.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SoundActor( Owner, CHAN_VOICE, "*evillaugh", 1, ATTN_NONE );
+ 		S_Sound (Owner, CHAN_VOICE, "*evillaugh", 1, ATTN_NONE, true);	// [BC] Inform the clients.
  	}
 	return true;
 }

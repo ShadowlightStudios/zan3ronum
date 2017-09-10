@@ -84,7 +84,7 @@ static	angle_t		g_SavedAngle[CLIENT_PREDICTION_TICS];
 static	fixed_t		g_SavedPitch[CLIENT_PREDICTION_TICS];
 static	fixed_t		g_SavedCrouchfactor[CLIENT_PREDICTION_TICS];
 static	LONG		g_lSavedJumpTicks[CLIENT_PREDICTION_TICS];
-static	LONG		g_lSavedTurnTicks[CLIENT_PREDICTION_TICS];
+static	BYTE		g_SavedTurnTicks[CLIENT_PREDICTION_TICS];
 static	LONG		g_lSavedReactionTime[CLIENT_PREDICTION_TICS];
 static	LONG		g_lSavedWaterLevel[CLIENT_PREDICTION_TICS];
 static	bool		g_bSavedOnFloor[CLIENT_PREDICTION_TICS];
@@ -186,14 +186,14 @@ void CLIENT_PREDICT_PlayerPredict( void )
 			Printf( "     Z: %d, %d\n", pPlayer->ServerXYZ[2], pPlayer->mo->z );
 		}
 
-		if (( pPlayer->ServerXYZMom[0] != pPlayer->mo->velx ) ||
-			( pPlayer->ServerXYZMom[1] != pPlayer->mo->vely ) ||
-			( pPlayer->ServerXYZMom[2] != pPlayer->mo->velz ))
+		if (( pPlayer->ServerXYZVel[0] != pPlayer->mo->velx ) ||
+			( pPlayer->ServerXYZVel[1] != pPlayer->mo->vely ) ||
+			( pPlayer->ServerXYZVel[2] != pPlayer->mo->velz ))
 		{
-			Printf( "(%d) WARNING! ServerXYZMom does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
-			Printf( "     X: %d, %d\n", pPlayer->ServerXYZMom[0], pPlayer->mo->velx );
-			Printf( "     Y: %d, %d\n", pPlayer->ServerXYZMom[1], pPlayer->mo->vely );
-			Printf( "     Z: %d, %d\n", pPlayer->ServerXYZMom[2], pPlayer->mo->velz );
+			Printf( "(%d) WARNING! ServerXYZVel does not match local origin after 1 tick!\n", static_cast<unsigned int> (g_ulGameTick) );
+			Printf( "     X: %d, %d\n", pPlayer->ServerXYZVel[0], pPlayer->mo->velx );
+			Printf( "     Y: %d, %d\n", pPlayer->ServerXYZVel[1], pPlayer->mo->vely );
+			Printf( "     Z: %d, %d\n", pPlayer->ServerXYZVel[2], pPlayer->mo->velz );
 		}
 	}
 #endif
@@ -209,9 +209,9 @@ void CLIENT_PREDICT_PlayerPredict( void )
 		pPlayer->ServerXYZ[2] );
 
 	// Set the player's velocity as told to him by the server.
-	pPlayer->mo->velx = pPlayer->ServerXYZMom[0];
-	pPlayer->mo->vely = pPlayer->ServerXYZMom[1];
-	pPlayer->mo->velz = pPlayer->ServerXYZMom[2];
+	pPlayer->mo->velx = pPlayer->ServerXYZVel[0];
+	pPlayer->mo->vely = pPlayer->ServerXYZVel[1];
+	pPlayer->mo->velz = pPlayer->ServerXYZVel[2];
 
 	// If we don't want to do any prediction, just tick the player and get out.
 	if ( cl_predict_players == false )
@@ -314,7 +314,7 @@ static void client_predict_SaveOnGroundStatus( const player_t *pPlayer, const UL
 	}
 
 	// [BB] Remember whether the player was standing on another actor.
-	g_bSavedOnMobj[Tick % CLIENT_PREDICTION_TICS] = (pPlayer->mo->flags2 & MF2_ONMOBJ);
+	g_bSavedOnMobj[Tick % CLIENT_PREDICTION_TICS] = !!(pPlayer->mo->flags2 & MF2_ONMOBJ);
 }
 
 //*****************************************************************************
@@ -325,7 +325,7 @@ static void client_predict_BeginPrediction( player_t *pPlayer )
 	g_SavedPitch[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->pitch;
 	g_SavedCrouchfactor[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->crouchfactor;
 	g_lSavedJumpTicks[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->jumpTics;
-	g_lSavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->turnticks;
+	g_SavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->turnticks;
 	g_lSavedReactionTime[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->reactiontime;
 	g_lSavedWaterLevel[g_ulGameTick % CLIENT_PREDICTION_TICS] = pPlayer->mo->waterlevel;
 	memcpy( &g_SavedTiccmd[g_ulGameTick % CLIENT_PREDICTION_TICS], &pPlayer->cmd, sizeof( ticcmd_t ));
@@ -346,7 +346,7 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		&& pPlayer->mo->Sector && !pPlayer->mo->Sector->floordata )
 		g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS] = false;
 
-	// [BB] The server gave us z-momentum, so don't glue us to a floor or an actor for this tic.
+	// [BB] The server gave us z-velocity, so don't glue us to a floor or an actor for this tic.
 	if ( pPlayer->mo->velz > 0 )
 	{
 		g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS] = false;
@@ -358,6 +358,7 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		pPlayer->mo->flags2 |= MF2_ONMOBJ;
 	else
 		pPlayer->mo->flags2 &= ~MF2_ONMOBJ;
+	pPlayer->onground = g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS];
 	if ( g_bSavedOnFloor[lTick % CLIENT_PREDICTION_TICS] )
 		pPlayer->mo->z = client_predict_GetPredictedFloorZ ( pPlayer, lTick );
 
@@ -373,7 +374,7 @@ static void client_predict_DoPrediction( player_t *pPlayer, ULONG ulTicks )
 		// crouchfactor, but just use the value we already calculated before.
 		pPlayer->crouchfactor = g_SavedCrouchfactor[( lTick + 1 )% CLIENT_PREDICTION_TICS];
 		pPlayer->jumpTics = g_lSavedJumpTicks[lTick % CLIENT_PREDICTION_TICS];
-		pPlayer->turnticks = g_lSavedTurnTicks[lTick % CLIENT_PREDICTION_TICS];
+		pPlayer->turnticks = g_SavedTurnTicks[lTick % CLIENT_PREDICTION_TICS];
 		pPlayer->mo->reactiontime = g_lSavedReactionTime[lTick % CLIENT_PREDICTION_TICS];
 		pPlayer->mo->waterlevel = g_lSavedWaterLevel[lTick % CLIENT_PREDICTION_TICS];
 
@@ -404,7 +405,7 @@ static void client_predict_EndPrediction( player_t *pPlayer )
 	pPlayer->mo->pitch = g_SavedPitch[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->crouchfactor = g_SavedCrouchfactor[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->jumpTics = g_lSavedJumpTicks[g_ulGameTick % CLIENT_PREDICTION_TICS];
-	pPlayer->turnticks = g_lSavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS];
+	pPlayer->turnticks = g_SavedTurnTicks[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->mo->reactiontime = g_lSavedReactionTime[g_ulGameTick % CLIENT_PREDICTION_TICS];
 	pPlayer->mo->waterlevel = g_lSavedWaterLevel[g_ulGameTick % CLIENT_PREDICTION_TICS];
 }

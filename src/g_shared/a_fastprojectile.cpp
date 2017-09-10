@@ -4,6 +4,8 @@
 #include "g_level.h"
 #include "r_sky.h"
 #include "p_lnspec.h"
+// [BB] New #includes.
+#include "network.h"
 
 
 IMPLEMENT_CLASS(AFastProjectile)
@@ -28,6 +30,7 @@ void AFastProjectile::Tick ()
 	PrevX = x;
 	PrevY = y;
 	PrevZ = z;
+	fixed_t oldz = z;
 	PrevAngle = angle;
 
 	if (!(flags5 & MF5_NOTIMEFREEZE))
@@ -72,7 +75,7 @@ void AFastProjectile::Tick ()
 					tm.LastRipped = NULL;	// [RH] Do rip damage each step, like Hexen
 				}
 				
-				if (!P_TryMove (this, x + xfrac,y + yfrac, true, false, tm))
+				if (!P_TryMove (this, x + xfrac,y + yfrac, true, NULL, tm))
 				{ // Blocked move
 					if (!(flags3 & MF3_SKYEXPLODE))
 					{
@@ -99,6 +102,8 @@ void AFastProjectile::Tick ()
 				}
 			}
 			z += zfrac;
+			UpdateWaterLevel (oldz);
+			oldz = z;
 			if (z <= floorz)
 			{ // Hit the floor
 
@@ -158,13 +163,17 @@ void AFastProjectile::Effect()
 		if (name != NAME_None)
 		{
 			fixed_t hitz = z-8*FRACUNIT;
+
 			if (hitz < floorz)
 			{
 				hitz = floorz;
 			}
+			// Do not clip this offset to the floor.
+			hitz += GetClass()->Meta.GetMetaFixed (ACMETA_MissileHeight);
 		
 			const PClass *trail = PClass::FindClass(name);
-			if (trail != NULL)
+			// [BB] Check whether to spawn, but have the client always spawn it.
+			if ( (trail != NULL) && ( NETWORK_ShouldActorNotBeSpawned ( this, trail, NETWORK_InClientMode() ) == false ) )
 			{
 				AActor *act = Spawn (trail, x, y, hitz, ALLOW_REPLACE);
 				if (act != NULL)
@@ -173,8 +182,15 @@ void AFastProjectile::Effect()
 
 					// [BB] Assume that the trail is just for decorative purposes and let the
 					// client spawn it on its own.
-					if ( NETWORK_InClientMode( ) )
+					if ( NETWORK_InClientMode() )
 						act->ulNetworkFlags |= NETFL_CLIENTSIDEONLY;
+					// [BB] Since clients spawn these on their own, prevent the 
+					// server from printing warnings by marking this as SERVERSIDEONLY.
+					else if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+					{
+						act->ulNetworkFlags |= NETFL_SERVERSIDEONLY;
+						act->FreeNetID ();
+					}
 				}
 			}
 		}

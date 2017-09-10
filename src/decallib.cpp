@@ -42,12 +42,14 @@
 #include "weightedlist.h"
 #include "statnums.h"
 #include "templates.h"
-#include "r_draw.h"
 #include "a_sharedglobal.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "gi.h"
 #include "g_level.h"
 #include "colormatcher.h"
+// [BB]
+//#include "b_bot.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "g_game.h"
 
@@ -349,6 +351,16 @@ void FDecalLib::ReadAllDecals ()
 	int lump, lastlump = 0;
 	unsigned int i;
 
+	for(unsigned i=0;i<Animators.Size(); i++)
+	{
+		delete Animators[i];
+	}
+	Animators.Clear();
+	FDecalCombinerAnim::AnimatorList.Clear();
+	DecalTranslations.Clear();
+
+	DecalLibrary.Clear();
+
 	while ((lump = Wads.FindLump ("DECALDEF", &lastlump)) != -1)
 	{
 		FScanner sc(lump);
@@ -443,7 +455,7 @@ void FDecalLib::ParseDecal (FScanner &sc)
 	decalNum = GetDecalID (sc);
 	sc.MustGetStringName ("{");
 
-	memset (&newdecal, 0, sizeof(newdecal));
+	memset ((void *)&newdecal, 0, sizeof(newdecal));
 	newdecal.PicNum.SetInvalid();
 	newdecal.ScaleX = newdecal.ScaleY = FRACUNIT;
 	newdecal.RenderFlags = RF_WALLSPRITE;
@@ -622,7 +634,10 @@ void FDecalLib::ParseGenerator (FScanner &sc)
 	}
 
 	actor->DecalGenerator = decal;
-	decal->Users.Push (type);
+	if (decal != NULL)
+	{
+		decal->Users.Push (type);
+	}
 }
 
 void FDecalLib::ParseFader (FScanner &sc)
@@ -1112,16 +1127,19 @@ FDecalLib::FTranslation *FDecalLib::FTranslation::LocateTranslation (DWORD start
 const FDecalTemplate *FDecalGroup::GetDecal () const
 {
 	const FDecalBase *decal = Choices.PickEntry ();
-	const FDecalBase *remember;
+	const FDecalBase *remember = decal;
 
 	// Repeatedly GetDecal() until the result is constant, since
 	// the choice might be another FDecalGroup.
-	do
+	if (decal != NULL)
 	{
-		remember = decal;
-		decal = decal->GetDecal ();
-	} while (decal != remember);
-	return static_cast<const FDecalTemplate *>(decal);
+		do
+		{
+			remember = decal;
+			decal = decal->GetDecal ();
+		} while (decal != NULL && decal != remember);
+	}
+	return static_cast<const FDecalTemplate *>(remember);
 }
 
 FDecalAnimator::FDecalAnimator (const char *name)

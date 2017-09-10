@@ -56,6 +56,7 @@ enum
 	APMETA_ColorRange,		// skin color range
 	APMETA_InvulMode,
 	APMETA_HealingRadius,
+	APMETA_Portrait,
 	APMETA_Hexenarmor0,
 	APMETA_Hexenarmor1,
 	APMETA_Hexenarmor2,
@@ -79,6 +80,7 @@ enum
 
 FPlayerColorSet *P_GetPlayerColorSet(FName classname, int setnum);
 void P_EnumPlayerColorSets(FName classname, TArray<int> *out);
+const char *GetPrintableDisplayName(const PClass *cls);
 
 class player_t;
 class	CSkullBot;
@@ -96,6 +98,7 @@ public:
 	virtual void AddInventory (AInventory *item);
 	virtual void RemoveInventory (AInventory *item);
 	virtual bool UseInventory (AInventory *item);
+	virtual void MarkPrecacheSounds () const;
 
 	virtual void PlayIdle ();
 	virtual void PlayRunning ();
@@ -122,10 +125,10 @@ public:
 	void GiveDefaultInventory ();
 	void PlayAttacking ();
 	void PlayAttacking2 ();
-	const char *GetSoundClass ();
+	const char *GetSoundClass () const;
 
 	// [Dusk]
-	fixed_t CalcJumpMomz( );
+	fixed_t CalcJumpVelz();
 	fixed_t CalcJumpHeight( bool bAddStep = true );
 
 	enum EInvulState
@@ -137,7 +140,7 @@ public:
 	};
 
 	void BeginPlay ();
-	void Die (AActor *source, AActor *inflictor);
+	void Die (AActor *source, AActor *inflictor, int dmgflags);
 
 	int			crouchsprite;
 	int			MaxHealth;
@@ -149,6 +152,8 @@ public:
 
 	// [GRB] Player class properties
 	fixed_t		JumpZ;
+	fixed_t		GruntSpeed;
+	fixed_t		FallingScreamMinSpeed, FallingScreamMaxSpeed;
 	fixed_t		ViewHeight;
 	fixed_t		ForwardMove1, ForwardMove2;
 	fixed_t		SideMove1, SideMove2;
@@ -156,6 +161,9 @@ public:
 	int			SpawnMask;
 	FNameNoInit	MorphWeapon;
 	fixed_t		AttackZOffset;			// attack height, relative to player center
+	fixed_t		UseRange;				// [NS] Distance at which player can +use
+	fixed_t		AirCapacity;			// Multiplier for air supply underwater.
+	const PClass *FlechetteType;
 
 	// [CW] Fades for when you are being damaged.
 	PalEntry DamageFade;
@@ -177,6 +185,8 @@ class APlayerChunk : public APlayerPawn
 enum
 {
 	PPF_NOTHRUSTWHENINVUL = 1,	// Attacks do not thrust the player if they are invulnerable.
+	PPF_CANSUPERMORPH = 2,		// Being remorphed into this class can give you a Tome of Power
+	PPF_CROUCHABLEMORPH = 4,	// This morphed player can crouch
 };
 
 //
@@ -222,10 +232,8 @@ typedef enum
 	CF_TOTALLYFROZEN	= 1 << 12,		// [RH] All players can do is press +use
 	// [BC] We don't use CF_PREDICTING in ST.
 	//CF_PREDICTING		= 1 << 13,		// [RH] Player movement is being predicted
-	CF_WEAPONREADY		= 1 << 14,		// [RH] Weapon is in the ready state and can fire its primary attack
-	CF_TIMEFREEZE		= 1 << 15,		// Player has an active time freezer
+	CF_INTERPVIEW		= 1 << 14,		// [RH] view was changed outside of input, so interpolate one frame
 	CF_DRAIN			= 1 << 16,		// Player owns a drain powerup
-	CF_REGENERATION		= 1 << 17,		// Player owns a regeneration artifact
 	CF_HIGHJUMP			= 1 << 18,		// more Skulltag flags. Implementation not guaranteed though. ;)
 	CF_REFLECTION		= 1 << 19,
 	CF_PROSPERITY		= 1 << 20,
@@ -233,14 +241,11 @@ typedef enum
 	CF_EXTREMELYDEAD	= 1 << 22,		// [RH] Reliably let the status bar know about extreme deaths.
 	CF_INFINITEAMMO		= 1 << 23,		// Player owns an infinite ammo artifact
 
-	CF_WEAPONBOBBING	= 1 << 24,		// [HW] Bob weapon while the player is moving
-	CF_WEAPONREADYALT	= 1 << 25,		// Weapon can fire its secondary attack
-	CF_WEAPONSWITCHOK	= 1 << 26,		// It is okay to switch away from this weapon
 	CF_BUDDHA			= 1 << 27,		// [SP] Buddha mode - take damage, but don't die
+	CF_NOCLIP2			= 1 << 30,		// [RH] More Quake-like noclip
 
 	// [BC] Rune effects.
-	CF_SPREAD			= 1 << 29,
-	CF_SPEED25			= 1 << 30,
+	CF_SPEED25			= 1 << 31,
 
 } cheat_t;
 
@@ -252,7 +257,21 @@ typedef enum
 	// [BC] Powerups added by Skulltag.
 	CF2_POSSESSIONARTIFACT	= 1 << 0,
 	CF2_TERMINATORARTIFACT	= 1 << 1,
+	CF2_SPREAD			= 1 << 2,
 } cheat2_t;
+
+enum
+{
+	WF_WEAPONREADY		= 1 << 0,		// [RH] Weapon is in the ready state and can fire its primary attack
+	WF_WEAPONBOBBING	= 1 << 1,		// [HW] Bob weapon while the player is moving
+	WF_WEAPONREADYALT	= 1 << 2,		// Weapon can fire its secondary attack
+	WF_WEAPONSWITCHOK	= 1 << 3,		// It is okay to switch away from this weapon
+	WF_DISABLESWITCH	= 1 << 4,		// Disable weapon switching completely
+	WF_WEAPONRELOADOK	= 1 << 5,		// [XA] Okay to reload this weapon.
+	WF_WEAPONZOOMOK		= 1 << 6,		// [XA] Okay to use weapon zoom function.
+	WF_REFIRESWITCHOK	= 1 << 7,		// Mirror WF_WEAPONSWITCHOK for A_ReFire
+};	
+
 
 #define WPIECE1		1
 #define WPIECE2		2
@@ -265,6 +284,29 @@ typedef enum
 // [BB] "+3" so that playernames can always be terminated by "\\c-"
 #define MAXPLAYERNAME	31+3
 
+// [GRB] Custom player classes
+enum
+{
+	PCF_NOMENU			= 1,	// Hide in new game menu
+};
+
+class FPlayerClass
+{
+public:
+	FPlayerClass ();
+	FPlayerClass (const FPlayerClass &other);
+	~FPlayerClass ();
+
+	bool CheckSkin (int skin);
+
+	const PClass *Type;
+	DWORD Flags;
+	TArray<int> Skins;
+};
+
+extern TArray<FPlayerClass> PlayerClasses;
+
+// User info (per-player copies of each CVAR_USERINFO cvar)
 enum
 {
 	GENDER_MALE,
@@ -272,38 +314,150 @@ enum
 	GENDER_NEUTER
 };
 
-struct userinfo_t
+struct userinfo_t : TMap<FName,FBaseCVar *>
 {
-	char		netname[MAXPLAYERNAME+1];
-	BYTE		team;
-	int			aimdist;
-	int			color;
-	int			colorset;
-	int			skin;
-	int			gender;
-	int			switchonpickup;
-	fixed_t		MoveBob, StillBob;
-	int			PlayerClass;
+	~userinfo_t();
 
-	int GetAimDist() const { return (dmflags2 & DF2_NOAUTOAIM)? 0 : aimdist; }
+	int GetAimDist() const
+	{
+		if (dmflags2 & DF2_NOAUTOAIM)
+		{
+			return 0;
+		}
 
-	// [BC] New Skulltag userinfo settings.
-	LONG		lRailgunTrailColor;
-	LONG		lHandicap;
+		float aim = *static_cast<FFloatCVar *>(*CheckKey(NAME_Autoaim));
+		if (aim > 35 || aim < 0)
+		{
+			return ANGLE_1*35;
+		}
+		else
+		{
+			return xs_RoundToInt(fabs(aim * ANGLE_1));
+		}
+	}
+	const char *GetName() const
+	{
+		return *static_cast<FStringCVar *>(*CheckKey(NAME_Name));
+	}
+	int GetTeam() const
+	{
+		return *static_cast<FIntCVar *>(*CheckKey(NAME_Team));
+	}
+	int GetColorSet() const
+	{
+		// [BB] For now Zandronum doesn't let the player use the color sets.
+		//return *static_cast<FIntCVar *>(*CheckKey(NAME_ColorSet));
+		return -1;
+	}
+	uint32 GetColor() const
+	{
+		return *static_cast<FColorCVar *>(*CheckKey(NAME_Color));
+	}
+	// [BB] Changed to GetSwitchOnPickup
+	int GetSwitchOnPickup() const
+	{
+		// [TP] switchonpickup is int in Zandronum so we need to cast to FIntCVar* instead.
+		return *static_cast<FIntCVar *>(*CheckKey(NAME_SwitchOnPickup));
+	}
+	fixed_t GetMoveBob() const
+	{
+		return FLOAT2FIXED(*static_cast<FFloatCVar *>(*CheckKey(NAME_MoveBob)));
+	}
+	fixed_t GetStillBob() const
+	{
+		return FLOAT2FIXED(*static_cast<FFloatCVar *>(*CheckKey(NAME_StillBob)));
+	}
+	int GetPlayerClassNum() const
+	{
+		return *static_cast<FIntCVar *>(*CheckKey(NAME_PlayerClass));
+	}
+	const PClass *GetPlayerClassType() const
+	{
+		return PlayerClasses[GetPlayerClassNum()].Type;
+	}
+	int GetSkin() const
+	{
+		return *static_cast<FIntCVar *>(*CheckKey(NAME_Skin));
+	}
+	int GetGender() const
+	{
+		return *static_cast<FIntCVar *>(*CheckKey(NAME_Gender));
+	}
+	bool GetNoAutostartMap() const
+	{
+		return *static_cast<FBoolCVar *>(*CheckKey(NAME_Wi_NoAutostartMap));
+	}
 
-	// [BB] Let the user decide how often he wants the player positions to be updated.
-	ULONG		ulTicsPerUpdate;
+	void Reset();
+	// [BB] Zandronum still uses its own team code.
+	//int TeamChanged(int team);
+	int SkinChanged(const char *skinname, int playerclass);
+	int SkinNumChanged(int skinnum);
+	int GenderChanged(const char *gendername);
+	int PlayerClassChanged(const char *classname);
+	int PlayerClassNumChanged(int classnum);
+	uint32 ColorChanged(const char *colorname);
+	uint32 ColorChanged(uint32 colorval);
+	int ColorSetChanged(int setnum);
 
-	// [BB] Let the user specify his connection type. This way we can try to save
-	// bandwidth on slow connections (possibly causing visual inaccuracies).
-	ULONG		ulConnectionType;
-
-	// [CK] Client flags for various booleans masked in a bitfield.
-	BYTE		clientFlags;
+	// [BB]
+	void NameChanged(const char *name);
+	int SwitchOnPickupChanged(int switchonpickup);
+	int GenderNumChanged(int gendernum);
+	int RailColorChanged(int railcolor);
+	int HandicapChanged(int handicap);
+	int TicsPerUpdateChanged(int ticsperupdate);
+	int ConnectionTypeChanged(int connectiontype);
+	int ClientFlagsChanged(int flags);
+	int GetRailColor() const 
+	{
+		if ( CheckKey(NAME_RailColor) != NULL )
+			return *static_cast<FIntCVar *>(*CheckKey(NAME_RailColor));
+		else {
+			Printf ( "Error: No RailColor key found!\n" );
+			return 0;
+		}
+	}
+	int GetHandicap() const
+	{
+		if ( CheckKey(NAME_Handicap) != NULL )
+			return *static_cast<FIntCVar *>(*CheckKey(NAME_Handicap));
+		else {
+			Printf ( "Error: No Handicap key found!\n" );
+			return 0;
+		}
+	}
+	int GetTicsPerUpdate() const
+	{
+		if ( CheckKey(NAME_CL_TicsPerUpdate) != NULL )
+			return *static_cast<FIntCVar *>(*CheckKey(NAME_CL_TicsPerUpdate));
+		else {
+			Printf ( "Error: No TicsPerUpdate key found!\n" );
+			return 0;
+		}
+	}
+	int GetConnectionType() const
+	{
+		if ( CheckKey(NAME_CL_ConnectionType) != NULL )
+			return *static_cast<FIntCVar *>(*CheckKey(NAME_CL_ConnectionType));
+		else {
+			Printf ( "Error: No ConnectionType key found!\n" );
+			return 0;
+		}
+	}
+	int GetClientFlags() const
+	{
+		if ( CheckKey(NAME_CL_ClientFlags) != NULL )
+			return *static_cast<FIntCVar *>(*CheckKey(NAME_CL_ClientFlags));
+		else {
+			Printf ( "Error: No ClientFlags key found!\n" );
+			return 0;
+		}
+	}
 };
 
-FArchive &operator<< (FArchive &arc, userinfo_t &info);
-
+void ReadUserInfo(FArchive &arc, userinfo_t &info, FString &skin);
+void WriteUserInfo(FArchive &arc, userinfo_t &info);
 
 //
 // Extended player object info: player_t
@@ -312,6 +466,7 @@ class player_t
 {
 public:
 	player_t();
+	player_t &operator= (const player_t &p);
 
 	void Serialize (FArchive &arc);
 	size_t FixPointers (const DObject *obj, DObject *replacement);
@@ -319,6 +474,7 @@ public:
 
 	void SetLogNumber (int num);
 	void SetLogText (const char *text);
+	void SendPitchLimits() const;
 
 	APlayerPawn	*mo;
 	BYTE		playerstate;
@@ -345,6 +501,8 @@ public:
 
 	bool		centering;
 	BYTE		turnticks;
+
+
 	bool		attackdown;
 	bool		usedown;
 	DWORD		oldbuttons;
@@ -356,17 +514,22 @@ public:
 	bool		backpack;
 	
 	int			fragcount;				// [RH] Cumulative frags for this player
+	BYTE		WeaponState;
 
 	AWeapon	   *ReadyWeapon;
 	AWeapon	   *PendingWeapon;			// WP_NOCHANGE if not changing
 
 	int			cheats;					// bit flags
 	int			cheats2;				// [BB] More bit flags
+	int			timefreezer;			// Player has an active time freezer
 	short		refire;					// refired shots are less accurate
+	bool		waiting;
 	int			killcount, itemcount, secretcount;		// for intermission
 	int			damagecount, bonuscount;// for screen flashing
 	int			hazardcount;			// for delayed Strife damage
 	int			poisoncount;			// screen flash for poison damage
+	FName		poisontype;				// type of poison damage to apply
+	FName		poisonpaintype;			// type of Pain state to enter for poison damage
 	TObjPtr<AActor>		poisoner;		// NULL for non-player actors
 	TObjPtr<AActor>		attacker;		// who did damage (NULL for floors)
 	int			extralight;				// so gun flashes light up areas
@@ -380,13 +543,12 @@ public:
 	TObjPtr<AWeapon>	PremorphWeapon;		// ready weapon before morphing
 	int			chickenPeck;			// chicken peck countdown
 	int			jumpTics;				// delay the next jump for a moment
+	bool		onground;				// Identifies if this player is on the ground or other object
 
 	int			respawn_time;			// [RH] delay respawning until this tic
 	TObjPtr<AActor>		camera;			// [RH] Whose eyes this player sees through
 
 	int			air_finished;			// [RH] Time when you start drowning
-
-	WORD		accuracy, stamina;		// [RH] Strife stats
 
 	FName		LastDamageType;			// [RH] For damage-specific pain and death sounds
 
@@ -402,9 +564,9 @@ public:
 
 
 	TObjPtr<AActor>		enemy;		// The dead meat.
-	TObjPtr<AActor>		missile;	// A threathing missile that got to be avoided.
-	TObjPtr<AActor>		mate;		// Friend (used for grouping in templay or coop.
-	TObjPtr<AActor>		last_mate;	// If bots mate dissapeared (not if died) that mate is
+	TObjPtr<AActor>		missile;	// A threatening missile that needs to be avoided.
+	TObjPtr<AActor>		mate;		// Friend (used for grouping in teamplay or coop).
+	TObjPtr<AActor>		last_mate;	// If bots mate disappeared (not if died) that mate is
 							// pointed to by this. Allows bot to roam to it if
 							// necessary.
 	*/
@@ -416,6 +578,9 @@ public:
 	float		BlendA;
 
 	FString		LogText;	// [RH] Log for Strife
+
+	int			MinPitch;	// Viewpitch limits (negative is up, positive is down)
+	int			MaxPitch;
 
 	SBYTE	crouching;
 	SBYTE	crouchdir;
@@ -519,8 +684,8 @@ public:
 	// True XYZ position as told to us by the server.
 	fixed_t		ServerXYZ[3];
 
-	// True XYZ momentum as told to us by the server.
-	fixed_t		ServerXYZMom[3];
+	// True XYZ velocity as told to us by the server.
+	fixed_t		ServerXYZVel[3];
 
 	// Ping of the player to the server he's playing on.
 	ULONG		ulPing;
@@ -592,17 +757,20 @@ public:
 		crouching = 0;
 		crouchviewdelta = 0;
 	}
+	
+	bool CanCrouch() const
+	{
+		return morphTics == 0 || mo->PlayerFlags & PPF_CROUCHABLEMORPH;
+	}
 
 	int GetSpawnClass();
 };
 
 // Bookkeeping on players - state.
-extern player_t players[MAXPLAYERS];
+// [EP] Add 1 slot for the DummyPlayer
+extern player_t players[MAXPLAYERS + 1];
 
-inline FArchive &operator<< (FArchive &arc, player_t *&p)
-{
-	return arc.SerializePointer (players, (BYTE **)&p, sizeof(*players));
-}
+FArchive &operator<< (FArchive &arc, player_t *&p);
 
 //*****************************************************************************
 //	PROTOTYPES
@@ -641,32 +809,34 @@ bool	PLAYER_IsAliveOrCanRespawn( player_t *pPlayer );
 void	PLAYER_RemoveFriends( const ULONG ulPlayer );
 void	PLAYER_LeavesGame( const ULONG ulPlayer );
 void	PLAYER_ClearEnemySoundFields( const ULONG ulPlayer );
+bool	PLAYER_NameUsed( const FString &Name, const ULONG ulIgnorePlayer = MAXPLAYERS );
+FString	PLAYER_GenerateUniqueName( void );
 
-void P_CheckPlayerSprites();
+void P_CheckPlayerSprite(AActor *mo, int &spritenum, fixed_t &scalex, fixed_t &scaley);
 
+inline void AActor::SetFriendPlayer(player_t *player)
+{
+	if (player == NULL)
+	{
+		FriendPlayer = 0;
+	}
+	else
+	{
+		FriendPlayer = int(player - players) + 1;
+	}
+}
+
+inline bool AActor::IsNoClip2() const
+{
+	if (player != NULL && player->mo == this)
+	{
+		return (player->cheats & CF_NOCLIP2) != 0;
+	}
+	return false;
+}
 
 #define CROUCHSPEED (FRACUNIT/12)
 
-// [GRB] Custom player classes
-enum
-{
-	PCF_NOMENU			= 1,	// Hide in new game menu
-};
-
-class FPlayerClass
-{
-public:
-	FPlayerClass ();
-	FPlayerClass (const FPlayerClass &other);
-	~FPlayerClass ();
-
-	bool CheckSkin (int skin);
-
-	const PClass *Type;
-	DWORD Flags;
-	TArray<int> Skins;
-};
-
-extern TArray<FPlayerClass> PlayerClasses;
+bool P_IsPlayerTotallyFrozen(const player_t *player);
 
 #endif // __D_PLAYER_H__

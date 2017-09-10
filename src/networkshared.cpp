@@ -65,48 +65,87 @@ static	int		g_OutboundBytesMeasured = 0;
 
 //*****************************************************************************
 //
-void NETWORK_InitBuffer( NETBUFFER_s *pBuffer, ULONG ulLength, BUFFERTYPE_e BufferType )
+NETBUFFER_s::NETBUFFER_s ( )
 {
-	memset( pBuffer, 0, sizeof( *pBuffer ));
-	pBuffer->ulMaxSize = ulLength;
-	pBuffer->pbData = new BYTE[ulLength];
-	pBuffer->BufferType = BufferType;
+	this->pbData = NULL;
+	this->ulMaxSize = 0;
+	this->BufferType = (BUFFERTYPE_e)0;
+	Clear();
 }
 
 //*****************************************************************************
 //
-void NETWORK_FreeBuffer( NETBUFFER_s *pBuffer )
+NETBUFFER_s::NETBUFFER_s ( const NETBUFFER_s &Buffer )
 {
-	if ( pBuffer->pbData )
+	Init ( Buffer.ulMaxSize, Buffer.BufferType );
+	Clear();
+
+	memcpy( this->pbData, Buffer.pbData, Buffer.ulMaxSize );
+	this->ByteStream.pbStream = this->pbData + ( Buffer.ByteStream.pbStream - Buffer.pbData );
+	this->ByteStream.pbStreamEnd = this->pbData + ( Buffer.ByteStream.pbStreamEnd - Buffer.pbData );
+	this->ByteStream.bitShift = Buffer.ByteStream.bitShift;
+	if ( Buffer.ByteStream.bitBuffer != NULL )
+		this->ByteStream.bitBuffer = this->ByteStream.pbStream + ( Buffer.ByteStream.bitBuffer - Buffer.ByteStream.pbStream );
+
+	this->ulCurrentSize = Buffer.ulCurrentSize;
+}
+
+//*****************************************************************************
+//
+void NETBUFFER_s::Init( ULONG ulLength, BUFFERTYPE_e BufferType )
+{
+	memset( this, 0, sizeof( *this ));
+	this->ulMaxSize = ulLength;
+	this->pbData = new BYTE[ulLength];
+	this->BufferType = BufferType;
+}
+
+//*****************************************************************************
+//
+void NETBUFFER_s::Free()
+{
+	if ( this->pbData )
 	{
-		delete[] ( pBuffer->pbData );
-		pBuffer->pbData = NULL;
+		delete[] ( this->pbData );
+		this->pbData = NULL;
 	}
 
-	pBuffer->ulMaxSize = 0;
-	pBuffer->BufferType = (BUFFERTYPE_e)0;
+	this->ulMaxSize = 0;
+	this->BufferType = (BUFFERTYPE_e)0;
 }
 
 //*****************************************************************************
 //
-void NETWORK_ClearBuffer( NETBUFFER_s *pBuffer )
+void NETBUFFER_s::Clear()
 {
-	pBuffer->ulCurrentSize = 0;
-	pBuffer->ByteStream.pbStream = pBuffer->pbData;
-	if ( pBuffer->BufferType == BUFFERTYPE_READ )
-		pBuffer->ByteStream.pbStreamEnd = pBuffer->ByteStream.pbStream;
+	this->ulCurrentSize = 0;
+	this->ByteStream.pbStream = this->pbData;
+	this->ByteStream.bitBuffer = NULL;
+	this->ByteStream.bitShift = -1;
+	if ( this->BufferType == BUFFERTYPE_READ )
+		this->ByteStream.pbStreamEnd = this->ByteStream.pbStream;
 	else
-		pBuffer->ByteStream.pbStreamEnd = pBuffer->ByteStream.pbStream + pBuffer->ulMaxSize;
+		this->ByteStream.pbStreamEnd = this->ByteStream.pbStream + this->ulMaxSize;
 }
 
 //*****************************************************************************
 //
-LONG NETWORK_CalcBufferSize( NETBUFFER_s *pBuffer )
+LONG NETBUFFER_s::CalcSize() const
 {
-	if ( pBuffer->BufferType == BUFFERTYPE_READ )
-		return ( LONG( pBuffer->ByteStream.pbStreamEnd - pBuffer->ByteStream.pbStream ));
+	if ( this->BufferType == BUFFERTYPE_READ )
+		return ( LONG( this->ByteStream.pbStreamEnd - this->ByteStream.pbStream ));
 	else
-		return ( LONG( pBuffer->ByteStream.pbStream - pBuffer->pbData ));
+		return ( LONG( this->ByteStream.pbStream - this->pbData ));
+}
+
+//*****************************************************************************
+//
+LONG NETBUFFER_s::WriteTo( BYTESTREAM_s &ByteStream ) const
+{
+	LONG bufferSize = CalcSize();
+	if ( bufferSize > 0 )
+		NETWORK_WriteBuffer( &ByteStream, this->pbData, bufferSize );
+	return bufferSize;
 }
 
 //*****************************************************************************
@@ -138,6 +177,44 @@ int NETWORK_StopTrafficMeasurement ( )
 //================================================================================
 // IO read functions
 //================================================================================
+
+//*****************************************************************************
+//
+BYTESTREAM_s::BYTESTREAM_s() :
+	bitBuffer( NULL ),
+	bitShift( -1 ) {}
+
+//*****************************************************************************
+//
+void BYTESTREAM_s::EnsureBitSpace( int bits, bool writing )
+{
+	if ( ( bitBuffer == NULL ) || ( bitShift < 0 ) || ( bitShift + bits > 8 ) )
+	{
+		if ( writing )
+		{
+			// Not enough bits left in our current byte, we need a new one.
+			NETWORK_WriteByte( this, 0 );
+			bitBuffer = pbStream - 1;
+		}
+		else
+		{
+			// No room for the value in this byte, so we need a new one.
+			if ( NETWORK_ReadByte( this ) != -1 )
+			{
+				bitBuffer = pbStream - 1;
+			}
+			else
+			{
+				// Argh! No bytes left!
+				Printf("BYTESTREAM_s::EnsureBitSpace: out of bytes to use\n");
+				static BYTE fallback = 0;
+				bitBuffer = &fallback;
+			}
+		}
+
+		bitShift = 0;
+	}
+}
 
 //*****************************************************************************
 //
@@ -232,6 +309,57 @@ const char *NETWORK_ReadString( BYTESTREAM_s *pByteStream )
 	const int endIndex = ( ulIdx < MAX_NETWORK_STRING ) ? ulIdx : MAX_NETWORK_STRING - 1;
 	s_szString[endIndex] = '\0';
 	return ( s_szString );
+}
+
+//*****************************************************************************
+//
+bool NETWORK_ReadBit( BYTESTREAM_s *byteStream )
+{
+	byteStream->EnsureBitSpace( 1, false );
+
+	// Use a bit shift to extract a bit from our current byte
+	bool result = !!( *byteStream->bitBuffer & ( 1 << byteStream->bitShift ));
+	byteStream->bitShift++;
+	return result;
+}
+
+//*****************************************************************************
+//
+int NETWORK_ReadVariable( BYTESTREAM_s *byteStream )
+{
+	// Read two bits to form an integer 0...3
+	int length = NETWORK_ReadBit( byteStream );
+	length |= NETWORK_ReadBit( byteStream ) << 1;
+
+	// Use this length to read in an integer of variable length.
+	switch ( length )
+	{
+	default:
+	case 0: return 0;
+	case 1: return NETWORK_ReadByte( byteStream );
+	case 2: return NETWORK_ReadShort( byteStream );
+	case 3: return NETWORK_ReadLong( byteStream );
+	}
+}
+
+//*****************************************************************************
+//
+int NETWORK_ReadShortByte ( BYTESTREAM_s* byteStream, int bits )
+{
+	if ( bits >= 0 && bits <= 8 )
+	{
+		byteStream->EnsureBitSpace( bits, false );
+		int mask = ( 1 << bits ) - 1; // Create a mask to cover the bits we want.
+		mask <<= byteStream->bitShift; // Shift the mask so that it covers the correct bits.
+		int result = *byteStream->bitBuffer & mask; // Apply the shifted mask on our byte to remove unwanted bits.
+		result >>= byteStream->bitShift; // Shift the result back to start from 0.
+		byteStream->bitShift += bits; // Increase shift to mark these bits as used.
+		return result;
+	}
+	else
+	{
+		return 0;
+	}
 }
 
 //================================================================================
@@ -352,6 +480,65 @@ void NETWORK_WriteBuffer( BYTESTREAM_s *pByteStream, const void *pvBuffer, int n
 void NETWORK_WriteHeader( BYTESTREAM_s *pByteStream, int Byte )
 {
 	NETWORK_WriteByte( pByteStream, Byte );
+	pByteStream->bitBuffer = NULL;
+	pByteStream->bitShift = -1;
+}
+
+//*****************************************************************************
+//
+void NETWORK_WriteBit( BYTESTREAM_s *byteStream, bool bit )
+{
+	// Add a bit to this byte
+	byteStream->EnsureBitSpace( 1, true );
+	if ( bit )
+		*byteStream->bitBuffer |= 1 << byteStream->bitShift;
+	++byteStream->bitShift;
+}
+
+//*****************************************************************************
+//
+void NETWORK_WriteVariable( BYTESTREAM_s *byteStream, int value )
+{
+	int length;
+
+	// Determine how long we need to send this value
+	if ( value == 0 )
+		length = 0; // 0 - don't bother sending it at all
+	else if (( value <= 0xFF ) && ( value >= 0 ))
+		length = 1; // Can be sent as a byte
+	else if (( value <= 0x7FFF ) && ( value >= -0x8000 ))
+		length = 2; // Can be sent as a short
+	else
+		length = 3; // Must be sent as a long
+
+	// Write this length as two bits
+	NETWORK_WriteBit( byteStream, !!( length & 1 ) );
+	NETWORK_WriteBit( byteStream, !!( length & 2 ) );
+
+	// Depending on the required length, write the value.
+	switch ( length )
+	{
+	case 1: NETWORK_WriteByte( byteStream, value ); break;
+	case 2: NETWORK_WriteShort( byteStream, value ); break;
+	case 3: NETWORK_WriteLong( byteStream, value ); break;
+	}
+}
+
+//*****************************************************************************
+//
+void NETWORK_WriteShortByte( BYTESTREAM_s *byteStream, int value, int bits )
+{
+	if (( bits < 1 ) || ( bits > 8 ))
+	{
+		Printf( "NETWORK_WriteShortByte: bits must be within range [1..8], got %d.\n", bits );
+		return;
+	}
+
+	byteStream->EnsureBitSpace( bits, true );
+	value &= (( 1 << bits ) - 1 ); // Form a mask from the bits and trim our value using it.
+	value <<= byteStream->bitShift; // Shift the value to its proper position.
+	*byteStream->bitBuffer |= value; // Add it to the byte.
+	byteStream->bitShift += bits; // Bump the shift value accordingly.
 }
 
 //=============================================================================
@@ -360,18 +547,34 @@ void NETWORK_WriteHeader( BYTESTREAM_s *pByteStream, int Byte )
 
 //*****************************************************************************
 //
-bool NETWORK_CompareAddress( NETADDRESS_s Address1, NETADDRESS_s Address2, bool bIgnorePort )
+NETADDRESS_s::NETADDRESS_s()
 {
-	return (( Address1.abIP[0] == Address2.abIP[0] ) &&
-		( Address1.abIP[1] == Address2.abIP[1] ) &&
-		( Address1.abIP[2] == Address2.abIP[2] ) &&
-		( Address1.abIP[3] == Address2.abIP[3] ) &&
-		( bIgnorePort ? 1 : ( Address1.usPort == Address2.usPort )));
+	abIP[0] = abIP[1] = abIP[2] = abIP[3] = 0;
+	usPort = 0;
 }
 
 //*****************************************************************************
 //
-bool NETWORK_StringToAddress( const char *s, NETADDRESS_s *a )
+bool NETADDRESS_s::Compare ( const NETADDRESS_s& other, bool ignorePort ) const
+{
+	return (( abIP[0] == other.abIP[0] ) &&
+		( abIP[1] == other.abIP[1] ) &&
+		( abIP[2] == other.abIP[2] ) &&
+		( abIP[3] == other.abIP[3] ) &&
+		( ignorePort ? 1 : ( usPort == other.usPort )));
+}
+
+//*****************************************************************************
+//
+NETADDRESS_s::NETADDRESS_s ( const char* string, bool* ok )
+{
+	static bool sink;
+	( ok ? *ok : sink ) = this->LoadFromString( string );
+}
+
+//*****************************************************************************
+//
+bool NETADDRESS_s::LoadFromString ( const char* string )
 {
 	struct hostent  *h;
 	struct sockaddr_in sadr;
@@ -383,7 +586,7 @@ bool NETWORK_StringToAddress( const char *s, NETADDRESS_s *a )
 
 	sadr.sin_port = 0;
 
-	strncpy (copy, s, 512-1);
+	strncpy (copy, string, 512-1);
 	copy[512-1] = 0;
 
 	// strip off a trailing :port if present
@@ -405,39 +608,88 @@ bool NETWORK_StringToAddress( const char *s, NETADDRESS_s *a )
 		{
 			// If the string cannot be resolved to a valid IP address, return false.
 			if (( h = gethostbyname( copy )) == NULL )
-				return ( false );
+				return false;
+
 			*(int *)&sadr.sin_addr = *(int *)h->h_addr_list[0];
 		}
 		else
 			*(int *)&sadr.sin_addr = ulRet;
 	}
 
-	NETWORK_SocketAddressToNetAddress (&sadr, a);
-
+	this->LoadFromSocketAddress( sadr );
 	return true;
 }
 
 //*****************************************************************************
 //
-void NETWORK_SocketAddressToNetAddress( struct sockaddr_in *s, NETADDRESS_s *a )
+void NETADDRESS_s::LoadFromSocketAddress ( const sockaddr_in& sockaddr )
 {
-     *(int *)&a->abIP = *(int *)&s->sin_addr;
-     a->usPort = s->sin_port;
+	*(int *)&this->abIP = *(const int *)&sockaddr.sin_addr;
+	this->usPort = sockaddr.sin_port;
 }
 
 //*****************************************************************************
 //
-void NETWORK_NetAddressToSocketAddress( NETADDRESS_s &Address, struct sockaddr_in &SocketAddress )
+sockaddr_in NETADDRESS_s::ToSocketAddress() const
 {
-	// Initialize the socket address.
-	memset( &SocketAddress, 0, sizeof( SocketAddress ));
+	sockaddr_in result;
+	memset( &result, 0, sizeof result );
+	*(int *)&result.sin_addr = *(const int *)&abIP;
+	result.sin_port = usPort;
+	result.sin_family = AF_INET;
+	return result;
+}
 
-	// Set the socket's address and port.
-	*(int *)&SocketAddress.sin_addr = *(int *)&Address.abIP;
-	SocketAddress.sin_port = Address.usPort;
+//*****************************************************************************
+//
+const char* NETADDRESS_s::ToHostName() const
+{
+	//gethostbyaddr();
+	struct hostent *hp;
+	struct sockaddr_in socketAddress = ToSocketAddress();
+	static char		s_szName[256];
 
-	// Set the socket address's family (what does this do?).
-	SocketAddress.sin_family = AF_INET;
+	hp = gethostbyaddr( (char *) &(socketAddress.sin_addr), sizeof(socketAddress.sin_addr), AF_INET );
+
+	if ( hp )
+		strncpy ( s_szName, (char *)hp->h_name, sizeof(s_szName) - 1 );
+	else
+		sprintf ( s_szName, "host_not_found" );
+
+	return s_szName;
+}
+
+//*****************************************************************************
+//
+void NETADDRESS_s::ToIPStringArray( IPStringArray& address ) const
+{
+	for ( int i = 0; i < 4; ++i )
+		itoa( abIP[i], address[i], 10 );
+}
+
+//*****************************************************************************
+//
+void NETADDRESS_s::SetPort ( USHORT port )
+{
+	usPort = htons( port );
+}
+
+//*****************************************************************************
+//
+const char* NETADDRESS_s::ToString() const
+{
+	static char	buffer[64];
+	sprintf( buffer, "%i.%i.%i.%i:%i", abIP[0], abIP[1], abIP[2], abIP[3], ntohs( usPort ));
+	return ( buffer );
+}
+
+//*****************************************************************************
+//
+const char* NETADDRESS_s::ToStringNoPort() const
+{
+	static char	buffer[64];
+	sprintf( buffer, "%i.%i.%i.%i", abIP[0], abIP[1], abIP[2], abIP[3] );
+	return ( buffer );
 }
 
 //*****************************************************************************
@@ -533,107 +785,6 @@ bool NETWORK_StringToIP( const char *pszAddress, char *pszIP0, char *pszIP1, cha
     return ( true );
 }
 
-//*****************************************************************************
-//
-void NETWORK_AddressToIPStringArray( const NETADDRESS_s &Address, IPStringArray &szAddress )
-{
-	for ( int i = 0; i < 4; ++i )
-		itoa( Address.abIP[i], szAddress[i], 10 );
-}
-
-//*****************************************************************************
-//
-const char *NETWORK_GetHostByIPAddress( NETADDRESS_s Address )
-{
-	//gethostbyaddr();
-	struct hostent *hp;
-	struct sockaddr_in socketAddress;// = (struct sockaddr_in *) (&sa);
-	static char		s_szName[256];
-
-	// Convert the IP address to a socket address.
-	NETWORK_NetAddressToSocketAddress ( Address, socketAddress );
-
-	hp = gethostbyaddr( (char *) &(socketAddress.sin_addr), sizeof(socketAddress.sin_addr), AF_INET );
-
-	if ( hp )
-		strncpy ( s_szName, (char *)hp->h_name, sizeof(s_szName) - 1 );
-	else
-		sprintf ( s_szName, "host_not_found" );
-
-	return s_szName;
-}
-
-//*****************************************************************************
-//
-std::string GenerateCouldNotOpenFileErrorString( const char *pszFunctionHeader, const char *pszFileName, LONG lErrorCode )
-{
-	std::stringstream errorMessage;
-	errorMessage << pszFunctionHeader << ": Couldn't open file: " << pszFileName << "!\nREASON: ";
-	switch ( lErrorCode )
-	{
-	case EACCES:
-
-		errorMessage << "EACCES: Search permission is denied on a component of the path prefix, or the file exists and the permissions specified by mode are denied, or the file does not exist and write permission is denied for the parent directory of the file to be created.\n";
-		break;
-	case EINTR:
-
-		errorMessage << "EINTR: A signal was caught during fopen().\n";
-		break;
-	case EISDIR:
-
-		errorMessage << "EISDIR: The named file is a directory and mode requires write access.\n";
-		break;
-	case EMFILE:
-
-		errorMessage << "EMFILE: {OPEN_MAX} file descriptors are currently open in the calling process.\n";
-		break;
-	case ENAMETOOLONG:
-
-		errorMessage << "ENAMETOOLONG: Pathname resolution of a symbolic link produced an intermediate result whose length exceeds {PATH_MAX}.\n";
-		break;
-	case ENFILE:
-
-		errorMessage << "ENFILE: The maximum allowable number of files is currently open in the system.\n";
-		break;
-	case ENOENT:
-
-		errorMessage << "ENOENT: A component of filename does not name an existing file or filename is an empty string.\n";
-		break;
-	case ENOSPC:
-
-		errorMessage << "ENOSPC: The directory or file system that would contain the new file cannot be expanded, the file does not exist, and it was to be created.\n";
-		break;
-	case ENOTDIR:
-
-		errorMessage << "ENOTDIR: A component of the path prefix is not a directory.\n";
-		break;
-	case ENXIO:
-
-		errorMessage << "ENXIO: The named file is a character special or block special file, and the device associated with this special file does not exist.\n";
-		break;
-	case EROFS:
-
-		errorMessage << "EROFS: The named file resides on a read-only file system and mode requires write access.\n";
-		break;
-	case EINVAL:
-
-		errorMessage << "EINVAL: The value of the mode argument is not valid.\n";
-		break;
-	case ENOMEM:
-
-		errorMessage << "ENOMEM: Insufficient storage space is available.\n";
-		break;
-//	case EOVERFLOW:
-//	case ETXTBSY:
-//	case ELOOP:
-	default:
-
-		errorMessage << "UNKNOWN\n";
-		break;
-	}
-	return errorMessage.str();
-}
-
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 //-- CLASSES ---------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------------------------------------------------
@@ -673,7 +824,7 @@ bool IPFileParser::parseIPList( const char* FileName, std::vector<IPADDRESSBAN_s
 	}
 	else
 	{
-		sprintf( _errorMessage, "%s", GenerateCouldNotOpenFileErrorString( "IPFileParser::parseIPList", FileName, errno ).c_str() );
+		sprintf( _errorMessage, "IPFileParser::parseIPList: could not open %s: %s\n", FileName, strerror( errno ));
 		return false;
 	}
 
@@ -762,7 +913,7 @@ bool IPFileParser::parseNextLine( FILE *pFile, IPADDRESSBAN_s &IP, ULONG &BanIdx
 						return ( true );
 					}
 				}
-				else if ( NETWORK_StringToAddress( szIP, &IPAddress ))
+				else if ( IPAddress.LoadFromString( szIP ))
 				{
 					if ( BanIdx == _listLength )
 					{
@@ -971,7 +1122,7 @@ ULONG IPList::getFirstMatchingEntryIndex( const IPStringArray &szAddress ) const
 ULONG IPList::getFirstMatchingEntryIndex( const NETADDRESS_s &Address ) const
 {
 	IPStringArray szAddress;
-	NETWORK_AddressToIPStringArray( Address, szAddress );
+	Address.ToIPStringArray( szAddress );
 	return getFirstMatchingEntryIndex( szAddress );
 }
 
@@ -987,7 +1138,7 @@ bool IPList::isIPInList( const IPStringArray &szAddress ) const
 bool IPList::isIPInList( const NETADDRESS_s &Address ) const
 {
 	IPStringArray szAddress;
-	NETWORK_AddressToIPStringArray( Address, szAddress );
+	Address.ToIPStringArray( szAddress );
 	return isIPInList( szAddress );
 }
 
@@ -1195,13 +1346,13 @@ void IPList::addEntry( const char *pszIP0, const char *pszIP1, const char *pszIP
 			messageStream << " It expires on " << szDate << ".";
 		
 		messageStream << "\n";
-
-		Message = messageStream.str();
 	}
 	else
 	{
-		Message = GenerateCouldNotOpenFileErrorString( "IPList::addEntry", _filename.c_str(), errno );
+		messageStream << "IPList::addEntry: could not open " << _filename << " for writing: " << strerror( errno ) << "\n";
 	}
+
+	Message = messageStream.str();
 }
 
 //*****************************************************************************
@@ -1213,7 +1364,7 @@ void IPList::addEntry( const char *pszIPAddress, const char *pszPlayerName, cons
 
 	if ( NETWORK_StringToIP( pszIPAddress, szStringBan[0], szStringBan[1], szStringBan[2], szStringBan[3] ))
 		addEntry( szStringBan[0], szStringBan[1], szStringBan[2], szStringBan[3], pszPlayerName, pszComment, Message, tExpiration );
-	else if ( NETWORK_StringToAddress( pszIPAddress, &BanAddress ))
+	else if ( BanAddress.LoadFromString( pszIPAddress ))
 	{
 		itoa( BanAddress.abIP[0], szStringBan[0], 10 );
 		itoa( BanAddress.abIP[1], szStringBan[1], 10 );
@@ -1300,7 +1451,7 @@ bool IPList::rewriteListToFile ()
 	}
 	else
 	{
-		_error = GenerateCouldNotOpenFileErrorString( "IPList::rewriteListToFile", _filename.c_str(), errno );
+		_error = "IPList::rewriteListToFile: couldn't open " + _filename + " for writing: " + strerror( errno ) + "\n";
 		return false;
 	}
 }
@@ -1361,7 +1512,7 @@ bool QueryIPQueue::addressInQueue( const NETADDRESS_s AddressFrom ) const
 	// Search through the queue.
 	for ( unsigned int i = _iQueueHead; i != _iQueueTail; i = ( i + 1 ) % MAX_QUERY_IPS )
 	{
-		if ( NETWORK_CompareAddress( AddressFrom, _IPQueue[i].Address, true ))
+		if ( AddressFrom.CompareNoPort( _IPQueue[i].Address ))
 			return true;
 	}
 

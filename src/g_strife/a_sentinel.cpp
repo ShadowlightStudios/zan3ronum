@@ -14,7 +14,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelBob)
 	fixed_t minz, maxz;
 
 	// [CW] This is handled by the server.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return;
 
 	if (self->flags & MF_INFLOAT)
@@ -23,7 +23,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelBob)
 
 		// [CW] Moving the actor is server side.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_MoveThing( self, CM_MOMZ );
+			SERVERCOMMANDS_MoveThing( self, CM_VELZ );
 
 		return;
 	}
@@ -48,7 +48,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelBob)
 
 	// [CW] Moving the actor is server side.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( self, CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( self, CM_VELZ );
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_SentinelAttack)
@@ -62,14 +62,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelAttack)
 	}
 
 	// [CW] If we aren't a client, spawn the missile.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( !CLIENTDEMO_IsPlaying( )))
-	{
-		missile = P_SpawnMissileZAimed (self, self->z + 32*FRACUNIT, self->target, PClass::FindClass("SentinelFX2"));
-
-		// [CW] Spawn the missile server side.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SpawnMissile( missile );
-	}
+	if ( NETWORK_InClientMode() == false )
+		missile = P_SpawnMissileZAimed (self, self->z + 32*FRACUNIT, self->target, PClass::FindClass("SentinelFX2"), true); // [BB] Inform clients
 
 	if (missile != NULL && (missile->velx | missile->vely) != 0)
 	{
@@ -85,7 +79,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelAttack)
 				trail->velx = missile->velx;
 				trail->vely = missile->vely;
 				trail->velz = missile->velz;
-				P_CheckMissileSpawn (trail);
+				P_CheckMissileSpawn (trail, self->radius);
 			}
 		}
 		missile->z += missile->velz >> 2;
@@ -97,7 +91,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelRefire)
 	A_FaceTarget (self);
 
 	// [CW] Clients may not do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return;
 
 	if (pr_sentinelrefire() >= 30)
@@ -106,6 +100,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SentinelRefire)
 			self->target->health <= 0 ||
 			!P_CheckSight (self, self->target, SF_SEEPASTBLOCKEVERYTHING|SF_SEEPASTSHOOTABLELINES) ||
 			P_HitFriend(self) ||
+			(self->MissileState == NULL && !self->CheckMeleeRange()) ||
 			pr_sentinelrefire() < 40)
 		{
 			// [CW] Tell clients to set the frame.

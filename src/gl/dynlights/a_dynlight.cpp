@@ -37,7 +37,6 @@
 
 #include "templates.h"
 #include "m_random.h"
-#include "r_main.h"
 #include "p_local.h"
 #include "c_dispatch.h"
 #include "g_level.h"
@@ -55,6 +54,7 @@
 
 EXTERN_CVAR (Float, gl_lights_size);
 EXTERN_CVAR (Bool, gl_lights_additive);
+EXTERN_CVAR(Int, vid_renderer)
 
 
 //==========================================================================
@@ -109,7 +109,7 @@ void AVavoomLightColor::BeginPlay ()
 {
 	int l_args[5];
 	memcpy(l_args, args, sizeof(l_args));
-	memset(args, 0, 5);
+	memset(args, 0, sizeof(args));
 	m_intensity[0] = l_args[0] * 4;
 	args[LIGHT_RED] = l_args[1] >> 1;
 	args[LIGHT_GREEN] = l_args[2] >> 1;
@@ -228,7 +228,10 @@ void ADynamicLight::Deactivate(AActor *activator)
 //==========================================================================
 void ADynamicLight::Tick()
 {
-
+	if (vid_renderer == 0)
+	{
+		return;
+	}
 	if (IsOwned())
 	{
 		if (!target || !target->state)
@@ -351,7 +354,7 @@ void ADynamicLight::UpdateLocation()
 			angle_t angle = target->angle>>ANGLETOFINESHIFT;
 			PrevX = x = target->x + FixedMul(m_offX, finecosine[angle]) + FixedMul(m_offZ, finesine[angle]);
 			PrevY = y = target->y + FixedMul(m_offX, finesine[angle]) - FixedMul(m_offZ, finecosine[angle]);
-			PrevZ = z = target->z + m_offY;
+			PrevZ = z = target->z + m_offY + target->GetBobOffset();
 			subsector = R_PointInSubsector(x, y);
 			Sector = subsector->sector;
 		}
@@ -548,12 +551,17 @@ void ADynamicLight::CollectWithinRadius(subsector_t *subSec, float radius)
 			}
 		}
 
-		if (seg->PartnerSeg && seg->PartnerSeg->Subsector->validcount!=::validcount)
+		seg_t *partner = seg->PartnerSeg;
+		if (partner)
 		{
-			// check distance from x/y to seg and if within radius add PartnerSeg->Subsector (lather/rinse/repeat)
-			if (DistToSeg(seg) <= radius)
+			subsector_t *sub = partner->Subsector;
+			if (sub != NULL && sub->validcount!=::validcount)
 			{
-				CollectWithinRadius(seg->PartnerSeg->Subsector, radius);
+				// check distance from x/y to seg and if within radius add opposing subsector (lather/rinse/repeat)
+				if (DistToSeg(seg) <= radius)
+				{
+					CollectWithinRadius(sub, radius);
+				}
 			}
 		}
 	}

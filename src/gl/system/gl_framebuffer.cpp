@@ -42,15 +42,16 @@
 #include "gl/system/gl_system.h"
 #include "files.h"
 #include "m_swap.h"
-#include "r_draw.h"
 #include "v_video.h"
-#include "r_main.h"
+#include "doomstat.h"
 #include "m_png.h"
 #include "m_crc32.h"
 #include "vectors.h"
 #include "v_palette.h"
 #include "templates.h"
+#include "farchive.h"
 
+#include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
@@ -63,17 +64,18 @@
 #include "gl/utility/gl_templates.h"
 #include "gl/gl_functions.h"
 
-// [BB]
-CVAR( Bool, cl_disallowfullpitch, false, CVAR_ARCHIVE )
-
 IMPLEMENT_CLASS(OpenGLFrameBuffer)
 EXTERN_CVAR (Float, vid_brightness)
 EXTERN_CVAR (Float, vid_contrast)
 EXTERN_CVAR (Bool, vid_vsync)
 
-void gl_SetupMenu();
+CVAR(Bool, gl_aalines, false, CVAR_ARCHIVE)
 
 FGLRenderer *GLRenderer;
+
+void gl_SetupMenu();
+void gl_LoadExtensions();
+void gl_PrintStartupLog();
 
 //==========================================================================
 //
@@ -91,12 +93,13 @@ OpenGLFrameBuffer::OpenGLFrameBuffer(void *hMonitor, int width, int height, int 
 	LastCamera = NULL;
 
 	InitializeState();
+	gl_SetupMenu();
 	gl_GenerateGlobalBrightmapFromColormap();
 	DoSetGamma();
 	needsetgamma = true;
 	swapped = false;
 	Accel2D = true;
-	if (gl.SetVSync!=NULL) gl.SetVSync(vid_vsync);
+	SetVSync(vid_vsync);
 }
 
 OpenGLFrameBuffer::~OpenGLFrameBuffer()
@@ -115,15 +118,14 @@ void OpenGLFrameBuffer::InitializeState()
 {
 	static bool first=true;
 
-	gl.LoadExtensions();
+	gl_LoadExtensions();
 	Super::InitializeState();
-	gl_SetupMenu();
 	if (first)
 	{
 		first=false;
 		// [BB] For some reason this crashes, if compiled with MinGW and optimization. Has to be investigated.
 #ifdef _MSC_VER
-		gl.PrintStartupLog();
+		gl_PrintStartupLog();
 #endif
 
 		if (gl.flags&RFL_NPOT_TEXTURE)
@@ -135,40 +137,40 @@ void OpenGLFrameBuffer::InitializeState()
 			Printf("Occlusion query enabled.\n");
 		}
 	}
-	gl.ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-	gl.ClearDepth(1.0f);
-	gl.DepthFunc(GL_LESS);
-	gl.ShadeModel(GL_SMOOTH);
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClearDepth(1.0f);
+	glDepthFunc(GL_LESS);
+	glShadeModel(GL_SMOOTH);
 
-	gl.Enable(GL_DITHER);
-	gl.Enable(GL_ALPHA_TEST);
-	gl.Disable(GL_CULL_FACE);
-	gl.Disable(GL_POLYGON_OFFSET_FILL);
-	gl.Enable(GL_POLYGON_OFFSET_LINE);
-	gl.Enable(GL_BLEND);
-	gl.Enable(GL_DEPTH_CLAMP_NV);
-	gl.Disable(GL_DEPTH_TEST);
-	gl.Enable(GL_TEXTURE_2D);
-	gl.Disable(GL_LINE_SMOOTH);
+	glEnable(GL_DITHER);
+	glEnable(GL_ALPHA_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_POLYGON_OFFSET_FILL);
+	glEnable(GL_POLYGON_OFFSET_LINE);
+	glEnable(GL_BLEND);
+	glEnable(GL_DEPTH_CLAMP_NV);
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glDisable(GL_LINE_SMOOTH);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glAlphaFunc(GL_GEQUAL,0.5f);
-	gl.Hint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-	gl.Hint(GL_POLYGON_SMOOTH_HINT, GL_NICEST);
-	gl.Hint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+	glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+	glHint(GL_POLYGON_SMOOTH_HINT, GL_NICEST);
+	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
 
 	// This was to work around a bug in some older driver. Probably doesn't make sense anymore.
-	gl.Enable(GL_FOG);
-	gl.Disable(GL_FOG);
+	glEnable(GL_FOG);
+	glDisable(GL_FOG);
 
-	gl.Hint(GL_FOG_HINT, GL_FASTEST);
-	gl.Fogi(GL_FOG_MODE, GL_EXP);
+	glHint(GL_FOG_HINT, GL_FASTEST);
+	glFogi(GL_FOG_MODE, GL_EXP);
 
 
-	gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	int trueH = GetTrueHeight();
 	int h = GetHeight();
-	gl.Viewport(0, (trueH - h)/2, GetWidth(), GetHeight()); 
+	glViewport(0, (trueH - h)/2, GetWidth(), GetHeight()); 
 
 	Begin2D(false);
 	GLRenderer->Initialize();
@@ -223,13 +225,13 @@ void OpenGLFrameBuffer::Swap()
 {
 	Finish.Reset();
 	Finish.Clock();
-	gl.Finish();
+	glFinish();
 	if (needsetgamma) 
 	{
 		//DoSetGamma();
 		needsetgamma = false;
 	}
-	gl.SwapBuffers();
+	SwapBuffers();
 	Finish.Unclock();
 	swapped = true;
 	FHardwareTexture::UnbindAll();
@@ -286,13 +288,6 @@ bool OpenGLFrameBuffer::SetContrast(float contrast)
 {
 	DoSetGamma();
 	return true;
-}
-
-bool OpenGLFrameBuffer::UsesColormap() const
-{
-	// The GL renderer has no use for colormaps so let's
-	// not create them and save us some time.
-	return false;
 }
 
 //===========================================================================
@@ -376,75 +371,6 @@ void OpenGLFrameBuffer::GetHitlist(BYTE *hitlist)
 
 //==========================================================================
 //
-// DFrameBuffer :: PrecacheTexture
-//
-//==========================================================================
-
-void OpenGLFrameBuffer::PrecacheTexture(FTexture *tex, int cache)
-{
-	if (tex != NULL)
-	{
-		if (cache)
-		{
-			tex->PrecacheGL();
-		}
-		else
-		{
-			tex->UncacheGL();
-		}
-	}
-}
-
-
-//==========================================================================
-//
-// DFrameBuffer :: StateChanged
-//
-//==========================================================================
-
-void OpenGLFrameBuffer::StateChanged(AActor *actor)
-{
-	gl_SetActorLights(actor);
-}
-
-//===========================================================================
-//
-// notify the renderer that serialization of the curent level is about to start/end
-//
-//===========================================================================
-
-void OpenGLFrameBuffer::StartSerialize(FArchive &arc)
-{
-	gl_DeleteAllAttachedLights();
-	if (SaveVersion >= 2058)
-	{
-		arc << fogdensity << outsidefogdensity << skyfog;
-	}
-}
-
-void OpenGLFrameBuffer::EndSerialize(FArchive &arc)
-{
-	gl_RecreateAllAttachedLights();
-	if (arc.IsLoading()) gl_InitPortals();
-}
-
-//===========================================================================
-//
-// Get max. view angle (renderer specific information so it goes here now)
-//
-//===========================================================================
-
-EXTERN_CVAR(Float, maxviewpitch)
-
-int OpenGLFrameBuffer::GetMaxViewPitch(bool down)
-{
-	// [BB]
-	if (cl_disallowfullpitch) return Super::GetMaxViewPitch(down);
-	else return (down? maxviewpitch : -maxviewpitch) * ANGLE_1;
-}
-
-//==========================================================================
-//
 // DFrameBuffer :: CreatePalette
 //
 // Creates a native palette from a remap table, if supported.
@@ -463,11 +389,11 @@ FNativePalette *OpenGLFrameBuffer::CreatePalette(FRemapTable *remap)
 //==========================================================================
 bool OpenGLFrameBuffer::Begin2D(bool)
 {
-	gl.MatrixMode(GL_MODELVIEW);
-	gl.LoadIdentity();
-	gl.MatrixMode(GL_PROJECTION);
-	gl.LoadIdentity();
-	gl.Ortho(
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(
 		(GLdouble) 0,
 		(GLdouble) GetWidth(), 
 		(GLdouble) GetHeight(), 
@@ -475,9 +401,20 @@ bool OpenGLFrameBuffer::Begin2D(bool)
 		(GLdouble) -1.0, 
 		(GLdouble) 1.0 
 		);
-	gl.Disable(GL_DEPTH_TEST);
-	gl.Disable(GL_MULTISAMPLE);
-	if (GLRenderer != NULL) GLRenderer->Begin2D();
+	glDisable(GL_DEPTH_TEST);
+
+	// Korshun: ENABLE AUTOMAP ANTIALIASING!!!
+	if (gl_aalines)
+		glEnable(GL_LINE_SMOOTH);
+	else
+	{
+		glDisable(GL_MULTISAMPLE);
+		glDisable(GL_LINE_SMOOTH);
+		glLineWidth(1.0);
+	}
+
+	if (GLRenderer != NULL)
+			GLRenderer->Begin2D();
 	return true;
 }
 
@@ -560,6 +497,26 @@ void OpenGLFrameBuffer::Clear(int left, int top, int right, int bottom, int palc
 		GLRenderer->Clear(left, top, right, bottom, palcolor, color);
 }
 
+//==========================================================================
+//
+// D3DFB :: FillSimplePoly
+//
+// Here, "simple" means that a simple triangle fan can draw it.
+//
+//==========================================================================
+
+void OpenGLFrameBuffer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoints,
+	double originx, double originy, double scalex, double scaley,
+	angle_t rotation, FDynamicColormap *colormap, int lightlevel)
+{
+	if (GLRenderer != NULL)
+	{
+		GLRenderer->FillSimplePoly(texture, points, npoints, originx, originy, scalex, scaley,
+			rotation, colormap, lightlevel);
+	}
+}
+
+
 //===========================================================================
 // 
 //	Takes a screenshot
@@ -575,7 +532,7 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 	ScreenshotBuffer = new BYTE[w * h * 3];
 
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	gl.ReadPixels(0,(GetTrueHeight() - GetHeight()) / 2,w,h,GL_RGB,GL_UNSIGNED_BYTE,ScreenshotBuffer);
+	glReadPixels(0,(GetTrueHeight() - GetHeight()) / 2,w,h,GL_RGB,GL_UNSIGNED_BYTE,ScreenshotBuffer);
 	glPixelStorei(GL_PACK_ALIGNMENT, 4);
 	pitch = -w*3;
 	color_type = SS_RGB;
@@ -595,18 +552,11 @@ void OpenGLFrameBuffer::ReleaseScreenshotBuffer()
 }
 
 
-void OpenGLFrameBuffer::WriteSavePic (player_t *player, FILE *file, int width, int height)
+void OpenGLFrameBuffer::GameRestart()
 {
-	GLRenderer->WriteSavePic(player, file, width, height);
-}
-
-void OpenGLFrameBuffer::RenderView (player_t* player)
-{
-	GLRenderer->RenderView(player);
-}
-
-
-void OpenGLFrameBuffer::DrawRemainingPlayerSprites()
-{
-	// not used by hardware renderer
+	memcpy (SourcePalette, GPalette.BaseColors, sizeof(PalEntry)*256);
+	UpdatePalette ();
+	ScreenshotBuffer = NULL;
+	LastCamera = NULL;
+	gl_GenerateGlobalBrightmapFromColormap();
 }

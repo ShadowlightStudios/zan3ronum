@@ -60,18 +60,18 @@
 #include "gi.h"
 #include "c_dispatch.h"
 #include "decallib.h"
-#include "r_draw.h"
 #include "v_palette.h"
 #include "a_sharedglobal.h"
 #include "thingdef/thingdef.h"
 #include "thingdef/thingdef_exp.h"
 #include "vectors.h"
 #include "dobject.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "sc_man.h"
 #include "i_system.h"
 #include "doomerrors.h"
 #include "p_effect.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "cl_demo.h"
 #include "network.h"
@@ -169,6 +169,41 @@ struct CodePointerAlias
 };
 static TArray<CodePointerAlias> MBFCodePointers;
 
+struct AmmoPerAttack
+{
+	actionf_p func;
+	int ammocount;
+};
+
+DECLARE_ACTION(A_Punch)
+DECLARE_ACTION(A_FirePistol)
+DECLARE_ACTION(A_FireShotgun)
+DECLARE_ACTION(A_FireShotgun2)
+DECLARE_ACTION(A_FireCGun)
+DECLARE_ACTION(A_FireMissile)
+DECLARE_ACTION_PARAMS(A_Saw)
+DECLARE_ACTION(A_FirePlasma)
+DECLARE_ACTION(A_FireBFG)
+DECLARE_ACTION(A_FireOldBFG)
+DECLARE_ACTION_PARAMS(A_FireRailgun) // [TP/BB] Added params
+
+// Default ammo use of the various weapon attacks
+static AmmoPerAttack AmmoPerAttacks[] = {
+	{ AF_A_Punch, 0},
+	{ AF_A_FirePistol, 1},
+	{ AF_A_FireShotgun, 1}, 
+	{ AF_A_FireShotgun2, 2},
+	{ AF_A_FireCGun, 1},
+	{ AF_A_FireMissile, 1},
+	{ AFP_A_Saw, 0},
+	{ AF_A_FirePlasma, 1},
+	{ AF_A_FireBFG, -1},	// uses deh.BFGCells
+	{ AF_A_FireOldBFG, 1},
+	{ AFP_A_FireRailgun, 1}, // [TP/BB] Added params
+	{ NULL, 0}
+};
+
+
 // Miscellaneous info that used to be constant
 DehInfo deh =
 {
@@ -190,6 +225,7 @@ DehInfo deh =
 	255,	// Rocket explosion style, 255=use cvar
 	FRACUNIT*2/3,		// Rocket explosion alpha
 	false,	// .NoAutofreeze
+	40,		// BFG cells per shot
 };
 
 // Doom identified pickup items by their sprites. ZDoom prefers to use their
@@ -316,7 +352,7 @@ static const struct {
 	{ "[PARS]",		PatchPars },
 	{ "[CODEPTR]",	PatchCodePtrs },
 	{ "[MUSIC]",	PatchMusic },
-	{ NULL, },
+	{ NULL, NULL },
 };
 
 static int HandleMode (const char *mode, int num);
@@ -698,8 +734,11 @@ void SetDehParams(FState * state, int codepointer)
 		if (value2) StateParams.Set(ParamIndex+1, new FxConstant(SoundMap[value2-1], *pos));	// hit sound
 		break;
 	case MBF_PlaySound:
-		StateParams.Set(ParamIndex+0, new FxConstant(SoundMap[value1-1], *pos));			// soundid
-		StateParams.Set(ParamIndex+4, new FxConstant((value2?ATTN_NONE:ATTN_NORM), *pos));	// attenuation
+		StateParams.Set(ParamIndex+0, new FxConstant(SoundMap[value1-1], *pos));				// soundid
+		StateParams.Set(ParamIndex+1, new FxConstant(CHAN_BODY, *pos));							// channel
+		StateParams.Set(ParamIndex+2, new FxConstant(1.0, *pos));								// volume
+		StateParams.Set(ParamIndex+3, new FxConstant(false, *pos));								// looping
+		StateParams.Set(ParamIndex+4, new FxConstant((value2 ? ATTN_NONE : ATTN_NORM), *pos));	// attenuation
 		break;
 	case MBF_RandomJump:
 		StateParams.Set(ParamIndex+0, new FxConstant(2, *pos));					// count
@@ -1094,6 +1133,15 @@ static int PatchThing (int thingy)
 						value[0] &= ~MF_TRANSLUCENT; // clean the slot
 						vchanged[2] = true; value[2] |= 2; // let the TRANSLUCxx code below handle it
 					}
+					if ((info->flags & MF_MISSILE) && (info->flags2 & MF2_NOTELEPORT)
+						&& !(value[0] & MF_MISSILE))
+					{
+						// ZDoom gives missiles flags that did not exist in Doom: MF2_NOTELEPORT, 
+						// MF2_IMPACT, and MF2_PCROSS. The NOTELEPORT one can be a problem since 
+						// some projectile actors (those new to Doom II) were not excluded from 
+						// triggering line effects and can teleport when the missile flag is removed.
+						info->flags2 &= ~MF2_NOTELEPORT;
+					}
 					info->flags = value[0];
 				}
 				if (vchanged[1])
@@ -1189,15 +1237,24 @@ static int PatchThing (int thingy)
 			PushTouchedActor(const_cast<PClass *>(type));
 		}
 
-		// Make MF3_ISMONSTER match MF_COUNTKILL
-		if (info->flags & MF_COUNTKILL)
+		// If MF_COUNTKILL is set, make sure the other standard monster flags are
+		// set, too. And vice versa.
+		if (thingy != 1) // don't mess with the player's flags
 		{
-			info->flags3 |= MF3_ISMONSTER;
+			if (info->flags & MF_COUNTKILL)
+			{
+				info->flags2 |= MF2_PUSHWALL | MF2_MCROSS | MF2_PASSMOBJ;
+				info->flags3 |= MF3_ISMONSTER;
+			}
+			else
+			{
+				info->flags2 &= ~(MF2_PUSHWALL | MF2_MCROSS);
+				info->flags3 &= ~MF3_ISMONSTER;
+			}
 		}
-		else
-		{
-			info->flags3 &= ~MF3_ISMONSTER;
-		}
+		// Everything that's altered here gets the CANUSEWALLS flag, just in case
+		// it calls P_Move().
+		info->flags4 |= MF4_CANUSEWALLS;
 		if (patchedStates)
 		{
 			statedef.InstallStates(type->ActorInfo, info);
@@ -1303,7 +1360,7 @@ static int PatchFrame (int frameNum)
 
 		if (keylen == 8 && stricmp (Line1, "Duration") == 0)
 		{
-			tics = clamp (val, -1, 65534);
+			tics = clamp (val, -1, SHRT_MAX);
 		}
 		else if (keylen == 9 && stricmp (Line1, "Unknown 1") == 0)
 		{
@@ -1578,6 +1635,7 @@ static int PatchWeapon (int weapNum)
 		else if (stricmp (Line1, "Ammo use") == 0 || stricmp (Line1, "Ammo per shot") == 0)
 		{
 			info->AmmoUse1 = val;
+			info->flags6 |= MF6_INTRYMOVE;	// flag the weapon for postprocessing (reuse a flag that can't be set by external means)
 		}
 		else if (stricmp (Line1, "Min ammo") == 0)
 		{
@@ -1704,22 +1762,22 @@ static int PatchCheats (int dummy)
 static int PatchMisc (int dummy)
 {
 	static const struct Key keys[] = {
-		{ "Initial Health",			myoffsetof(struct DehInfo,StartHealth) },
-		{ "Initial Bullets",		myoffsetof(struct DehInfo,StartBullets) },
-		{ "Max Health",				myoffsetof(struct DehInfo,MaxHealth) },
-		{ "Max Armor",				myoffsetof(struct DehInfo,MaxArmor) },
-		{ "Green Armor Class",		myoffsetof(struct DehInfo,GreenAC) },
-		{ "Blue Armor Class",		myoffsetof(struct DehInfo,BlueAC) },
-		{ "Max Soulsphere",			myoffsetof(struct DehInfo,MaxSoulsphere) },
-		{ "Soulsphere Health",		myoffsetof(struct DehInfo,SoulsphereHealth) },
-		{ "Megasphere Health",		myoffsetof(struct DehInfo,MegasphereHealth) },
-		{ "God Mode Health",		myoffsetof(struct DehInfo,GodHealth) },
-		{ "IDFA Armor",				myoffsetof(struct DehInfo,FAArmor) },
-		{ "IDFA Armor Class",		myoffsetof(struct DehInfo,FAAC) },
-		{ "IDKFA Armor",			myoffsetof(struct DehInfo,KFAArmor) },
-		{ "IDKFA Armor Class",		myoffsetof(struct DehInfo,KFAAC) },
-		{ "No Autofreeze",			myoffsetof(struct DehInfo,NoAutofreeze) },
-		{ NULL, }
+		{ "Initial Health",			static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,StartHealth)) },
+		{ "Initial Bullets",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,StartBullets)) },
+		{ "Max Health",				static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,MaxHealth)) },
+		{ "Max Armor",				static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,MaxArmor)) },
+		{ "Green Armor Class",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,GreenAC)) },
+		{ "Blue Armor Class",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,BlueAC)) },
+		{ "Max Soulsphere",			static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,MaxSoulsphere)) },
+		{ "Soulsphere Health",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,SoulsphereHealth)) },
+		{ "Megasphere Health",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,MegasphereHealth)) },
+		{ "God Mode Health",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,GodHealth)) },
+		{ "IDFA Armor",				static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,FAArmor)) },
+		{ "IDFA Armor Class",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,FAAC)) },
+		{ "IDKFA Armor",			static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,KFAArmor)) },
+		{ "IDKFA Armor Class",		static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,KFAAC)) },
+		{ "No Autofreeze",			static_cast<ptrdiff_t>(myoffsetof(struct DehInfo,NoAutofreeze)) },
+		{ NULL, 0 }
 	};
 	int result;
 
@@ -1731,7 +1789,7 @@ static int PatchMisc (int dummy)
 		{
 			if (stricmp (Line1, "BFG Cells/Shot") == 0)
 			{
-				((AWeapon*)GetDefaultByName ("BFG9000"))->AmmoUse1 = atoi (Line2);
+				deh.BFGCells = atoi (Line2);
 			}
 			else if (stricmp (Line1, "Rocket Explosion Style") == 0)
 			{
@@ -1873,8 +1931,8 @@ static int PatchMisc (int dummy)
 		player->health = deh.StartHealth;
 
 		// Hm... I'm not sure that this is the right way to change this info...
-		unsigned int index = PClass::FindClass(NAME_DoomPlayer)->Meta.GetMetaInt (ACMETA_DropItems) - 1;
-		if (index >= 0 && index < DropItemList.Size())
+		int index = PClass::FindClass(NAME_DoomPlayer)->Meta.GetMetaInt (ACMETA_DropItems) - 1;
+		if (index >= 0 && index < (signed)DropItemList.Size())
 		{
 			FDropItem * di = DropItemList[index];
 			while (di != NULL)
@@ -2278,6 +2336,18 @@ static int DoInclude (int dummy)
 	return GetLine();
 }
 
+CVAR(Int, dehload, 0, CVAR_ARCHIVE)	// Autoloading of .DEH lumps is disabled by default.
+
+// checks if lump is a .deh or .bex file. Only lumps in the root directory are considered valid.
+static bool isDehFile(int lumpnum)
+{
+	const char* const fullName  = Wads.GetLumpFullName(lumpnum);
+	const char* const extension = strrchr(fullName, '.');
+
+	return NULL != extension && strchr(fullName, '/') == NULL
+		&& (0 == stricmp(extension, ".deh") || 0 == stricmp(extension, ".bex"));
+}
+
 int D_LoadDehLumps()
 {
 	int lastlump = 0, lumpnum, count = 0;
@@ -2286,6 +2356,34 @@ int D_LoadDehLumps()
 	{
 		count += D_LoadDehLump(lumpnum);
 	}
+
+	if (0 == PatchSize && dehload > 0)
+	{
+		// No DEH/BEX patch is loaded yet, try to find lump(s) with specific extensions
+
+		if (dehload == 1)	// load all .DEH lumps that are found.
+		{
+			for (lumpnum = 0, lastlump = Wads.GetNumLumps(); lumpnum < lastlump; ++lumpnum)
+			{
+				if (isDehFile(lumpnum))
+				{
+					count += D_LoadDehLump(lumpnum);
+				}
+			}
+		}
+		else 	// only load the last .DEH lump that is found.
+		{
+			for (lumpnum = Wads.GetNumLumps()-1; lumpnum >=0; --lumpnum)
+			{
+				if (isDehFile(lumpnum))
+				{
+					count += D_LoadDehLump(lumpnum);
+					break;
+				}
+			}
+		}
+	}
+
 	return count;
 }
 
@@ -2301,7 +2399,16 @@ bool D_LoadDehLump(int lumpnum)
 }
 
 // [TP]
-const TArray<FString>& D_GetDehFileNames()
+TArray<FString> D_GetDehFileNames()
+{
+	TArray<FString> filenames;
+	for ( unsigned int i = 0; i < g_LoadedDehFiles.Size( ); ++i )
+		filenames.Push( ExtractFileBase( g_LoadedDehFiles[i], true ) );
+	return filenames;
+}
+
+// [Zalewa]
+const TArray<FString>& D_GetDehFiles( )
 {
 	return g_LoadedDehFiles;
 }
@@ -2324,9 +2431,9 @@ bool D_LoadDehFile(const char *patchfile)
 		bool result = DoDehPatch();
 
 		// [TP] If the patching succeeded, write this patch down so we can broadcast it to the
-		// launcher.
+		// launcher (and to "File|Join" in server console ~[Zalewa]).
 		if ( result )
-			g_LoadedDehFiles.Push( ExtractFileBase( patchfile, true ) );
+			g_LoadedDehFiles.Push( patchfile );
 
 		return result;
 	}
@@ -2368,6 +2475,12 @@ static bool DoDehPatch()
 			Printf (PRINT_BOLD, "\"%s\" is an old and unsupported DeHackEd patch\n", PatchFile);
 			return false;
 		}
+		// fix for broken WolfenDoom patches which contain \0 characters in some places.
+		for (int i = 0; i < PatchSize; i++)
+		{
+			if (PatchFile[i] == 0) PatchFile[i] = ' ';	
+		}
+
 		PatchPt = strchr (PatchFile, '\n');
 		while ((cont = GetLine()) == 1)
 		{
@@ -2503,8 +2616,6 @@ static void UnloadDehSupp ()
 		BitNames.ShrinkToFit();
 		StyleNames.Clear();
 		StyleNames.ShrinkToFit();
-		WeaponNames.Clear();
-		WeaponNames.ShrinkToFit();
 		AmmoNames.Clear();
 		AmmoNames.ShrinkToFit();
 
@@ -2797,6 +2908,7 @@ static bool LoadDehSupp ()
 			}
 			else if (sc.Compare("WeaponNames"))
 			{
+				WeaponNames.Clear();	// This won't be cleared by UnloadDEHSupp so we need to do it here explicitly
 				sc.MustGetStringName("{");
 				while (!sc.CheckString("}"))
 				{
@@ -2869,7 +2981,7 @@ void FinishDehPatch ()
 		PClass *subclass = RUNTIME_CLASS(ADehackedPickup)->CreateDerivedClass
 			(typeNameBuilder, sizeof(ADehackedPickup));
 		AActor *defaults2 = GetDefaultByType (subclass);
-		memcpy (defaults2, defaults1, sizeof(AActor));
+		memcpy ((void *)defaults2, (void *)defaults1, sizeof(AActor));
 
 		// Make a copy of the replaced class's state labels 
 		FStateDefinitions statedef;
@@ -2901,6 +3013,57 @@ void FinishDehPatch ()
 	// Now that all Dehacked patches have been processed, it's okay to free StateMap.
 	StateMap.Clear();
 	StateMap.ShrinkToFit();
+	TouchedActors.Clear();
+	TouchedActors.ShrinkToFit();
+
+	// Now it gets nasty: We have to fiddle around with the weapons' ammo use info to make Doom's original
+	// ammo consumption work as intended.
+
+	for(unsigned i = 0; i < WeaponNames.Size(); i++)
+	{
+		AWeapon *weap = (AWeapon*)GetDefaultByType(WeaponNames[i]);
+		bool found = false;
+		if (weap->flags6 & MF6_INTRYMOVE)
+		{
+			// Weapon sets an explicit amount of ammo to use so we won't need any special processing here
+			weap->flags6 &= ~MF6_INTRYMOVE;
+		}
+		else
+		{
+			weap->WeaponFlags |= WIF_DEHAMMO;
+			weap->AmmoUse1 = 0;
+			// to allow proper checks in CheckAmmo we have to find the first attack pointer in the Fire sequence
+			// and set its default ammo use as the weapon's AmmoUse1.
+
+			TMap<FState*, bool> StateVisited;
+
+			FState *state = WeaponNames[i]->ActorInfo->FindState(NAME_Fire);
+			while (state != NULL)
+			{
+				bool *check = StateVisited.CheckKey(state);
+				if (check != NULL && *check)
+				{
+					break;	// State has already been checked so we reached a loop
+				}
+				StateVisited[state] = true;
+				for(unsigned j = 0; AmmoPerAttacks[j].func != NULL; j++)
+				{
+					if (state->ActionFunc == AmmoPerAttacks[j].func)
+					{
+						found = true;
+						int use = AmmoPerAttacks[j].ammocount;
+						if (use < 0) use = deh.BFGCells;
+						weap->AmmoUse1 = use;
+						break;
+					}
+				}
+				if (found) break;
+				state = state->GetNextState();
+			}
+		}
+	}
+	WeaponNames.Clear();
+	WeaponNames.ShrinkToFit();
 }
 
 void ModifyDropAmount(AInventory *inv, int dropamount);
@@ -2916,11 +3079,7 @@ bool ADehackedPickup::TryPickup (AActor *&toucher)
 	if (RealPickup != NULL)
 	{
 		// The internally spawned item should never count towards statistics.
-		if (RealPickup->flags & MF_COUNTITEM)
-		{
-			RealPickup->flags &= ~MF_COUNTITEM;
-			level.total_items--;
-		}
+		RealPickup->ClearCounters();
 		if (!(flags & MF_DROPPED))
 		{
 			RealPickup->flags &= ~MF_DROPPED;

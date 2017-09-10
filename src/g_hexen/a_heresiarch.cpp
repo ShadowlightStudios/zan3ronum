@@ -67,7 +67,7 @@ public:
 	const PClass *StopBall;
 
 	void Serialize (FArchive &arc);
-	void Die (AActor *source, AActor *inflictor);
+	void Die (AActor *source, AActor *inflictor, int dmgflags);
 };
 
 IMPLEMENT_CLASS (AHeresiarch)
@@ -78,17 +78,17 @@ void AHeresiarch::Serialize (FArchive &arc)
 	arc << StopBall;
 }
 
-void AHeresiarch::Die (AActor *source, AActor *inflictor)
+void AHeresiarch::Die (AActor *source, AActor *inflictor, int dmgflags)
 {
 	// The heresiarch just executes a script instead of a special upon death
 	int script = special;
 	special = 0;
 
-	Super::Die (source, inflictor);
+	Super::Die (source, inflictor, dmgflags);
 
 	if (script != 0)
 	{
-		P_StartScript (this, NULL, script, level.mapname, 0, 0, 0, 0, 0, false);
+		P_StartScript (this, NULL, script, level.mapname, NULL, 0, 0);
 	}
 }
 
@@ -200,8 +200,7 @@ void ASorcBall::DoFireSpell ()
 	CastSorcererSpell ();
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -223,23 +222,21 @@ void ASorcBall::DoFireSpell ()
 void ASorcBall1::DoFireSpell ()
 {
 	// [BB] This is server-side (involves random numbers).
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
 	if (pr_heresiarch() < 200)
 	{
-		S_Sound (target, CHAN_VOICE, "SorcererSpellCast", 1, ATTN_NONE);
+		S_Sound (target, CHAN_VOICE, "SorcererSpellCast", 1, ATTN_NONE, true);	// [BB] Inform the clients.
 		special2 = SORCFX4_RAPIDFIRE_TIME;
 		args[4] = 128;
 		target->args[3] = SORC_FIRING_SPELL;
 
-		// [BB] If we're the server, tell the clients to play the sound and set special2 and arguments.
+		// [BB] If we're the server, tell the clients to set special2 and arguments.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		{
-			SERVERCOMMANDS_SoundActor( target, CHAN_VOICE,  "SorcererSpellCast", 1, ATTN_NONE );
 			SERVERCOMMANDS_SetThingSpecial2( this );
 			SERVERCOMMANDS_SetThingArguments( this );
 			SERVERCOMMANDS_SetThingArguments( target );
@@ -272,8 +269,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcSpinBalls)
 	z = self->z - self->floorclip + self->height;
 	
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -384,11 +380,10 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcBallOrbit)
 	case SORC_STOPPING:			// Balls stopping
 		if ((parent->StopBall == RUNTIME_TYPE(actor)) &&
 			 (parent->args[1] > SORCBALL_SPEED_ROTATIONS) &&
-			 (abs(angle - (parent->angle>>ANGLETOFINESHIFT)) < (30<<5)))
+			 (absangle(angle - (parent->angle>>ANGLETOFINESHIFT)) < (30<<5)))
 		{
 			// [BB] This is server-side (since StopBall involved random numbers).
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				break;
 			}
@@ -416,8 +411,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcBallOrbit)
 		if (parent->StopBall == RUNTIME_TYPE(actor))
 		{
 			// [BB] This is server-side (since StopBall involved random numbers).
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				break;
 			}
@@ -440,8 +434,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcBallOrbit)
 		if (parent->StopBall == RUNTIME_TYPE(actor))
 		{
 			// [BB] This is server-side (since StopBall involved random numbers).
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				break;
 			}
@@ -633,11 +626,7 @@ void ASorcBall::SorcUpdateBallAngle ()
 
 void ASorcBall::CastSorcererSpell ()
 {
-	S_Sound (target, CHAN_VOICE, "SorcererSpellCast", 1, ATTN_NONE);
-
-	// [BB] If we're the server, tell the clients to play the sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SoundActor( target, CHAN_VOICE,  "SorcererSpellCast", 1, ATTN_NONE );
+	S_Sound (target, CHAN_VOICE, "SorcererSpellCast", 1, ATTN_NONE, true);	// [BB] Inform the clients.
 
 	// Put sorcerer into throw spell animation
 	if (target->health > 0)
@@ -663,8 +652,7 @@ void ASorcBall2::CastSorcererSpell ()
 	Super::CastSorcererSpell ();
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -704,8 +692,7 @@ void ASorcBall3::CastSorcererSpell ()
 	Super::CastSorcererSpell ();
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -773,8 +760,7 @@ void ASorcBall1::CastSorcererSpell ()
 	Super::CastSorcererSpell ();
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -842,8 +828,7 @@ void A_SorcOffense2(AActor *actor)
 	}
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -961,8 +946,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcFX2Split)
 	AActor *mo;
 
 	// [BB] This is server-side. The client only destroy the actor.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		self->Destroy ();
 		return;
@@ -1033,8 +1017,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcFX2Orbit)
 	fixed_t dist = parent->radius;
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( !CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() == false )
 	{
 		if ((parent->health <= 0) ||		// Sorcerer is dead
 			(!parent->args[0]))				// Time expired
@@ -1115,8 +1098,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcFX2Orbit)
 DEFINE_ACTION_FUNCTION(AActor, A_SpawnBishop)
 {
 	// [BB] This is server-side. The client only destroy the actor.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		self->Destroy ();
 		return;
@@ -1128,8 +1110,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpawnBishop)
 	{
 		if (!P_TestMobjLocation(mo))
 		{
+			mo->ClearCounters();
 			mo->Destroy ();
-			level.total_monsters--;
 		}
 		else if (self->target != NULL)
 		{ // [RH] Make the new bishops inherit the Heriarch's target
@@ -1167,8 +1149,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcererBishopEntry)
 DEFINE_ACTION_FUNCTION(AActor, A_SorcFX4Check)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

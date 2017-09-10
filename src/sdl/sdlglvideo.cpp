@@ -57,10 +57,8 @@ EXTERN_CVAR (Int, vid_renderer)
 
 CUSTOM_CVAR(Int, gl_vid_multisample, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL )
 {
-	Printf("This won't take effect until "GAMENAME" is restarted.\n");
+	Printf("This won't take effect until " GAMENAME " is restarted.\n");
 }
-
-RenderContext gl;
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -87,6 +85,7 @@ static MiniModeInfo WinModes[] =
 	{ 960, 600 },	// 16:10
 	{ 960, 720 },
 	{ 1024, 576 },	// 16:9
+	{ 1024, 600 },	// 17:10
 	{ 1024, 640 },	// 16:10
 	{ 1024, 768 },
 	{ 1088, 612 },	// 16:9
@@ -96,6 +95,7 @@ static MiniModeInfo WinModes[] =
 	{ 1280, 720 },	// 16:9
 	{ 1280, 800 },	// 16:10
 	{ 1280, 960 },
+	{ 1344, 756 },  // 16:9
 	{ 1360, 768 },	// 16:9
 	{ 1400, 787 },	// 16:9
 	{ 1400, 875 },	// 16:10
@@ -104,10 +104,12 @@ static MiniModeInfo WinModes[] =
 	{ 1600, 900 },	// 16:9
 	{ 1600, 1000 },	// 16:10
 	{ 1600, 1200 },
-	{ 1680, 1050 },
-	{ 1920, 1080 },
-	{ 1920, 1200 },
-	{ 2054, 1536 }
+	{ 1680, 1050 }, // 16:10
+	{ 1920, 1080 }, // 16:9
+	{ 1920, 1200 }, // 16:10
+	{ 2054, 1536 },
+	{ 2560, 1440 },  // 16:9
+	{ 2880, 1800 }  // 16:10
 };
 
 // CODE --------------------------------------------------------------------
@@ -120,7 +122,6 @@ SDLGLVideo::SDLGLVideo (int parm)
         fprintf( stderr, "Video initialization failed: %s\n",
              SDL_GetError( ) );
     }
-	GetContext(gl);
 #ifndef	_WIN32
 	// mouse cursor is visible by default on linux systems, we disable it by default
 	SDL_ShowCursor (0);
@@ -130,7 +131,6 @@ SDLGLVideo::SDLGLVideo (int parm)
 SDLGLVideo::~SDLGLVideo ()
 {
 	if (GLRenderer != NULL) GLRenderer->FlushTextures();
-	SDL_Quit( );
 }
 
 void SDLGLVideo::StartModeIterator (int bits, bool fs)
@@ -277,6 +277,45 @@ bool SDLGLVideo::SetResolution (int width, int height, int bits)
 	return true;	// We must return true because the old video context no longer exists.
 }
 
+//==========================================================================
+//
+// 
+//
+//==========================================================================
+
+bool SDLGLVideo::SetupPixelFormat(bool allowsoftware, int multisample)
+{
+	SDL_GL_SetAttribute( SDL_GL_RED_SIZE,  8 );
+	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE,  8 );
+	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE,  8 );
+	SDL_GL_SetAttribute( SDL_GL_ALPHA_SIZE,  8 );
+	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE,  24 );
+	SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE,  8 );
+//		SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER,  1 );
+	if (multisample > 0) {
+		SDL_GL_SetAttribute( SDL_GL_MULTISAMPLEBUFFERS, 1 );
+		SDL_GL_SetAttribute( SDL_GL_MULTISAMPLESAMPLES, multisample );
+	}
+	return true;
+}
+
+//==========================================================================
+//
+// 
+//
+//==========================================================================
+
+bool SDLGLVideo::InitHardware (bool allowsoftware, int multisample)
+{
+	if (!SetupPixelFormat(allowsoftware, multisample))
+	{
+		Printf ("R_OPENGL: Reverting to software mode...\n");
+		return false;
+	}
+	return true;
+}
+
+
 // FrameBuffer implementation -----------------------------------------------
 
 SDLGLFB::SDLGLFB (void *, int width, int height, int, int, bool fullscreen)
@@ -292,20 +331,29 @@ SDLGLFB::SDLGLFB (void *, int width, int height, int, int, bool fullscreen)
 
 	UpdatePending = false;
 	
-	if (!gl.InitHardware(false, gl_vid_compatibility, localmultisample))
+	if (!static_cast<SDLGLVideo*>(Video)->InitHardware(false, localmultisample))
 	{
 		vid_renderer = 0;
 		return;
 	}
 
-	Screen = SDL_SetVideoMode (width, height, vid_displaybits,
+		
+	Screen = SDL_SetVideoMode (width, height,
+		32,
 		SDL_HWSURFACE|SDL_HWPALETTE|SDL_OPENGL | SDL_GL_DOUBLEBUFFER|SDL_ANYFORMAT|
 		(fullscreen ? SDL_FULLSCREEN : 0));
 
 	if (Screen == NULL)
 		return;
 
-	m_supportsGamma = !!SDL_GetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
+	m_supportsGamma = -1 != SDL_GetGammaRamp(m_origGamma[0], m_origGamma[1], m_origGamma[2]);
+	
+#if defined(__APPLE__)
+	// Need to set title here because a window is not created yet when calling the same function from main()
+	char caption[100];
+	mysnprintf(caption, countof(caption), GAMESIG " %s (%s)", GetVersionString(), GetGitTime());
+	SDL_WM_SetCaption(caption, NULL);
+#endif // __APPLE__
 }
 
 SDLGLFB::~SDLGLFB ()
@@ -316,15 +364,11 @@ SDLGLFB::~SDLGLFB ()
 	}
 }
 
+
+
+
 void SDLGLFB::InitializeState() 
 {
-	int value = 0;
-	SDL_GL_GetAttribute( SDL_GL_STENCIL_SIZE, &value );
-	if (!value) 
-	{
-		Printf("Failed to use stencil buffer!\n");	//[C] is it needed to recreate buffer in "cheapest mode"?
-		gl.flags|=RFL_NOSTENCIL;
-	}
 }
 
 bool SDLGLFB::CanUpdate ()
@@ -386,8 +430,21 @@ bool SDLGLFB::IsValid ()
 	return DFrameBuffer::IsValid() && Screen != NULL;
 }
 
+void SDLGLFB::SetVSync( bool vsync )
+{
+#if defined (__APPLE__)
+	const GLint value = vsync ? 1 : 0;
+	CGLSetParameter( CGLGetCurrentContext(), kCGLCPSwapInterval, &value );
+#endif
+}
+
 void SDLGLFB::NewRefreshRate ()
 {
+}
+
+void SDLGLFB::SwapBuffers()
+{
+	SDL_GL_SwapBuffers ();
 }
 
 

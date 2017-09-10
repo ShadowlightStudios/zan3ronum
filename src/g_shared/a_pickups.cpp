@@ -16,7 +16,9 @@
 #include "a_specialspot.h"
 #include "thingdef/thingdef.h"
 #include "g_level.h"
+#include "g_game.h"
 #include "doomstat.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "deathmatch.h"
 #include "network.h"
@@ -101,7 +103,14 @@ bool AAmmo::HandlePickup (AInventory *item)
 			}
 			int oldamount = Amount;
 
-			Amount += receiving;
+			if (Amount > 0 && Amount + receiving < 0)
+			{
+				Amount = 0x7fffffff;
+			}
+			else
+			{
+				Amount += receiving;
+			}
 			if (Amount > MaxAmount && !sv_unlimited_pickup)
 			{
 				Amount = MaxAmount;
@@ -153,7 +162,7 @@ AInventory *AAmmo::CreateCopy (AActor *other)
 		{
 			// [BC] In certain modes, hide this item indefinitely so we can respawn it if
 			// necessary.
-			if ((( flags & MF_DROPPED ) == false ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS ))
+			if ((( flags & MF_DROPPED ) == false ) && ( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS ))
 				SetState ( FindState("HideIndefinitely") );
 			// [BC] Changed this so it stays around for one frame.
 			else
@@ -204,38 +213,52 @@ AInventory *AAmmo::CreateTossable()
 //
 //---------------------------------------------------------------------------
 
-bool P_GiveBody (AActor *actor, int num)
+bool P_GiveBody (AActor *actor, int num, int max)
 {
-	int max;
+	if (actor->health <= 0 || (actor->player != NULL && actor->player->playerstate == PST_DEAD))
+	{ // Do not heal dead things.
+		return false;
+	}
+
+	// [EP] DummyPlayer shouldn't receive anything.
+	if (actor->player == COOP_GetVoodooDollDummyPlayer())
+		return false;
+
 	player_t *player = actor->player;
 
+	num = clamp(num, -65536, 65536);	// prevent overflows for bad values
 	if (player != NULL)
 	{
-		// [BC] Apply the prosperity power.
-		if ( player->cheats & CF_PROSPERITY )
-			max = deh.MaxSoulsphere + 50;
-		// [BC] Add the player's max. health bonus to his max.
-		else
-			max = static_cast<APlayerPawn*>(actor)->GetMaxHealth() + player->stamina + player->lMaxHealthBonus;
-		// [MH] First step in predictable generic morph effects
- 		if (player->morphTics)
- 		{
-			if (player->MorphStyle & MORPH_FULLHEALTH)
-			{
-				if (!(player->MorphStyle & MORPH_ADDSTAMINA))
+		// Max is 0 by default, preserving default behavior for P_GiveBody()
+		// calls while supporting AHealth.
+		if (max <= 0)
+		{
+			// [BC] Apply the prosperity power.
+			if ( player->cheats & CF_PROSPERITY )
+				max = deh.MaxSoulsphere + 50;
+			// [BC] Add the player's max. health bonus to his max.
+			else
+				max = static_cast<APlayerPawn*>(actor)->GetMaxHealth() + player->mo->stamina + player->lMaxHealthBonus;
+			// [MH] First step in predictable generic morph effects
+ 			if (player->morphTics)
+ 			{
+				if (player->MorphStyle & MORPH_FULLHEALTH)
 				{
-					max -= player->stamina;
+					if (!(player->MorphStyle & MORPH_ADDSTAMINA))
+					{
+						max -= player->mo->stamina;
+					}
 				}
-			}
-			else // old health behaviour
-			{
-				max = MAXMORPHHEALTH;
-				if (player->MorphStyle & MORPH_ADDSTAMINA)
+				else // old health behaviour
 				{
-					max += player->stamina;
+					max = MAXMORPHHEALTH;
+					if (player->MorphStyle & MORPH_ADDSTAMINA)
+					{
+						max += player->mo->stamina;
+					}
 				}
-			}
- 		}
+ 			}
+		}
 		// [RH] For Strife: A negative body sets you up with a percentage
 		// of your full health.
 		if (num < 0)
@@ -264,6 +287,8 @@ bool P_GiveBody (AActor *actor, int num)
 	}
 	else
 	{
+		// Parameter value for max is ignored on monsters, preserving original
+		// behaviour on AHealth as well as on existing calls to P_GiveBody().
 		max = actor->SpawnHealth();
 		if (num < 0)
 		{
@@ -298,8 +323,7 @@ bool P_GiveBody (AActor *actor, int num)
 DEFINE_ACTION_FUNCTION(AActor, A_RestoreSpecialThing1)
 {
 	// [BC] Clients have their own version of this function.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// Just go back into hiding until the server tells this item to respawn.
 		static_cast<AInventory *>( self )->Hide( );
@@ -343,8 +367,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_RestoreSpecialThing2)
 DEFINE_ACTION_FUNCTION(AActor, A_RestoreSpecialDoomThing)
 {
 	// [BC] Clients have their own version of this function.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// Just go back into hiding until the server tells this item to respawn.
 		static_cast<AInventory *>( self )->Hide( );
@@ -383,10 +406,17 @@ DEFINE_ACTION_FUNCTION(AActor, A_RestoreSpecialPosition)
 
 	_x = self->SpawnPoint[0];
 	_y = self->SpawnPoint[1];
-	sec = P_PointInSector (_x, _y);
 
-	self->SetOrigin (_x, _y, sec->floorplane.ZatPoint (_x, _y));
-	P_CheckPosition (self, _x, _y);
+	self->UnlinkFromWorld();
+	self->x = _x;
+	self->y = _y;
+	self->LinkToWorld(true);
+	sec = self->Sector;
+	self->z =
+	self->dropoffz =
+	self->floorz = sec->floorplane.ZatPoint(_x, _y);
+	self->ceilingz = sec->ceilingplane.ZatPoint(_x, _y);
+	P_FindFloorCeiling(self, FFCF_ONLYSPAWNPOS);
 
 	if (self->flags & MF_SPAWNCEILING)
 	{
@@ -408,12 +438,23 @@ DEFINE_ACTION_FUNCTION(AActor, A_RestoreSpecialPosition)
 	else
 	{
 		self->z = self->SpawnPoint[2] + self->floorz;
-		if (self->flags2 & MF2_FLOATBOB)
-		{
-			self->z += FloatBobOffsets[(self->FloatBobPhase + level.maptime) & 63];
-		}
 	}
-	self->SetOrigin (self->x, self->y, self->z);
+	// Redo floor/ceiling check, in case of 3D floors
+	P_FindFloorCeiling(self, FFCF_SAMESECTOR | FFCF_ONLY3DFLOORS | FFCF_3DRESTRICT);
+	if (self->z < self->floorz)
+	{ // Do not reappear under the floor, even if that's where we were for the
+	  // initial spawn.
+		self->z = self->floorz;
+	}
+	if ((self->flags & MF_SOLID) && (self->z + self->height > self->ceilingz))
+	{ // Do the same for the ceiling.
+		self->z = self->ceilingz - self->height;
+	}
+	// Do not interpolate from the position the actor was at when it was
+	// picked up, in case that is different from where it is now.
+	self->PrevX = self->x;
+	self->PrevY = self->y;
+	self->PrevZ = self->z;
 }
 
 
@@ -480,6 +521,18 @@ void AInventory::Serialize (FArchive &arc)
 
 //===========================================================================
 //
+// AInventory :: MarkPrecacheSounds
+//
+//===========================================================================
+
+void AInventory::MarkPrecacheSounds() const
+{
+	Super::MarkPrecacheSounds();
+	PickupSound.MarkUsed();
+}
+
+//===========================================================================
+//
 // AInventory :: SpecialDropAction
 //
 // Called by P_DropItem. Return true to prevent the standard drop tossing.
@@ -508,6 +561,7 @@ bool AInventory::ShouldRespawn ()
 	if ( survival && (ItemFlags & IF_FORCERESPAWNINSURVIVAL) ) return true;
 
 	if ((ItemFlags & IF_BIGPOWERUP) && !(dmflags & DF_RESPAWN_SUPER)) return false;
+	if (ItemFlags & IF_NEVERRESPAWN) return false;
 	return !!(dmflags & DF_ITEMS_RESPAWN);
 }
 
@@ -522,6 +576,42 @@ void AInventory::BeginPlay ()
 	Super::BeginPlay ();
 	ChangeStatNum (STAT_INVENTORY);
 	flags |= MF_DROPPED;	// [RH] Items are dropped by default
+}
+
+//===========================================================================
+//
+// AInventory :: Grind
+//
+//===========================================================================
+
+bool AInventory::Grind(bool items)
+{
+	// Does this grind request even care about items?
+	if (!items)
+	{
+		return false;
+	}
+	// Dropped items are normally destroyed by crushers. Set the DONTGIB flag,
+	// and they'll act like corpses with it set and be immune to crushers.
+	if (flags & MF_DROPPED)
+	{
+		if (!(flags3 & MF3_DONTGIB))
+		{
+			// [BC] If we're the server, tell clients to destroy this item.
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				SERVERCOMMANDS_DestroyThing( this );
+
+			// [BC] Don't destroy items in client mode; the server will tell us to.
+			if ( NETWORK_InClientMode() == false )
+			{
+				// [BB] Only destroy the actor if it's not needed for a map reset. Otherwise just hide it.
+				this->HideOrDestroyIfSafe ();
+			}
+		}
+		return false;
+	}
+	// Non-dropped items call the super method for compatibility.
+	return Super::Grind(items);
 }
 
 //===========================================================================
@@ -577,7 +667,15 @@ bool AInventory::HandlePickup (AInventory *item)
 	{
 		if (Amount < MaxAmount || sv_unlimited_pickup)
 		{
-			Amount += item->Amount;
+			if (Amount > 0 && Amount + item->Amount < 0)
+			{
+				Amount = 0x7fffffff;
+			}
+			else
+			{
+				Amount += item->Amount;
+			}
+		
 			if (Amount > MaxAmount && !sv_unlimited_pickup)
 			{
 				Amount = MaxAmount;
@@ -620,7 +718,7 @@ bool AInventory::GoAway ()
 		// [BB] If the map resets and this item is level spawned but not supposed to
 		// be respawned regularly, we need to make sure that the item doesn't respawn,
 		// but still allow it to return when the map resets.
-		else if ( ( ulSTFlags & STFL_LEVELSPAWNED ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS ) )
+		else if ( ( ulSTFlags & STFL_LEVELSPAWNED ) && ( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS ) )
 		{
 			HideIndefinitely( );
 			return true;
@@ -647,7 +745,7 @@ void AInventory::GoAwayAndDie ()
 
 		// [BC] In certain modes, hide this item indefinitely so we can respawn it if
 		// necessary.
-		if ((( flags & MF_DROPPED ) == false ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS ))
+		if ((( flags & MF_DROPPED ) == false ) && ( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS ))
 			SetState(FindState("HideIndefinitely"));
 		else
 			SetState (FindState("HoldAndDestroy"));
@@ -702,7 +800,7 @@ AInventory *AInventory::CreateTossable ()
 	{
 		return NULL;
 	}
-	if ((ItemFlags & IF_UNDROPPABLE) || Owner == NULL || Amount <= 0)
+	if ((ItemFlags & (IF_UNDROPPABLE|IF_UNTOSSABLE)) || Owner == NULL || Amount <= 0)
 	{
 		return NULL;
 	}
@@ -710,7 +808,7 @@ AInventory *AInventory::CreateTossable ()
 	{
 		// [BB] Don't convert the item to a pickup in client mode, the server tells us to spawn the item.
 		// Just remove it from the owner's inventory.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			if (Owner != NULL) Owner->RemoveInventory (this);
 			return ( NULL );
@@ -724,8 +822,7 @@ AInventory *AInventory::CreateTossable ()
 
 	// [BB] Don't spawn the item in client mode, the server tells us to spawn the item.
 	// Just reduce the remaining amount of this item type here.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		Amount--;
 		return ( NULL );
@@ -737,10 +834,10 @@ AInventory *AInventory::CreateTossable ()
 	{
 		copy->MaxAmount = MaxAmount;
 		copy->Amount = 1;
+		copy->DropTime = 30;
+		copy->flags &= ~(MF_SPECIAL|MF_SOLID);
 		Amount--;
 	}
-	copy->DropTime = 30;
-	copy->flags &= ~(MF_SPECIAL|MF_SOLID);
 	return copy;
 }
 
@@ -791,7 +888,7 @@ void AInventory::BecomePickup ()
 		LinkToWorld ();
 		P_FindFloorCeiling (this);
 	}
-	flags = GetDefault()->flags | MF_DROPPED;
+	flags = (GetDefault()->flags | MF_DROPPED) & ~MF_COUNTITEM;
 	renderflags &= ~RF_INVISIBLE;
 	SetState (SpawnState);
 }
@@ -865,7 +962,7 @@ fixed_t AInventory::GetSpeedFactor ()
 //
 //===========================================================================
 
-int AInventory::AlterWeaponSprite (vissprite_t *vis)
+int AInventory::AlterWeaponSprite (visstyle_t *vis)
 {
 	if (Inventory != NULL)
 	{
@@ -1042,6 +1139,8 @@ void AInventory::Touch (AActor *toucher)
 		toucher = toucher->player->mo;
 	}
 
+	bool localview = toucher->CheckLocalView(consoleplayer);
+
 	if (!CallTryPickup (toucher, &toucher)) return;
 
 	// This is the only situation when a pickup flash should ever play.
@@ -1082,7 +1181,7 @@ void AInventory::Touch (AActor *toucher)
 		{
 			const char * message = PickupMessage ();
 
-			if (toucher->CheckLocalView (consoleplayer)
+			if (message != NULL && *message != 0 && localview
 				&& (StaticLastMessageTic != gametic || StaticLastMessage != message))
 			{
 				StaticLastMessageTic = gametic;
@@ -1096,7 +1195,10 @@ void AInventory::Touch (AActor *toucher)
 			if (toucher->player != NULL)
 			{
 				PlayPickupSound (toucher->player->mo);
+			if (!(ItemFlags & IF_NOSCREENFLASH))
+			{
 				toucher->player->bonuscount = BONUSADD;
+			}
 			}
 			else
 			{
@@ -1124,6 +1226,11 @@ void AInventory::Touch (AActor *toucher)
 		// [BC] Tell clients the new found item count.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_SetMapNumFoundItems( );
+	}
+
+	if (flags5 & MF5_COUNTSECRET)
+	{
+		P_GiveSecret(toucher, true, true);
 	}
 
 	// [BC] If the item has an announcer sound, play it.
@@ -1183,8 +1290,8 @@ void AInventory::Touch (AActor *toucher)
 			if ( zadmflags & ZADF_SHARE_KEYS )
 			{
 				// [Dusk] Announcement message
-				SERVER_Printf( PRINT_HIGH, TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL " has found the " TEXTCOLOR_GOLD "%s!\n",
-					toucher->player->userinfo.netname, GetTag() );
+				SERVER_Printf( TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL " has found the " TEXTCOLOR_GOLD "%s!\n",
+					toucher->player->userinfo.GetName(), GetTag() );
 
 				// [Dusk] Audio cue - skip the player picking the key because he
 				// hears the pickup sound from the original key. The little *bloop*
@@ -1214,7 +1321,7 @@ void AInventory::DoPickupSpecial (AActor *toucher)
 {
 	if (special)
 	{
-		LineSpecials[special] (NULL, toucher, false,
+		P_ExecuteSpecial(special, NULL, toucher, false,
 			args[0], args[1], args[2], args[3], args[4]);
 		special = 0;
 	}
@@ -1230,9 +1337,7 @@ void AInventory::DoPickupSpecial (AActor *toucher)
 
 const char *AInventory::PickupMessage ()
 {
-	const char *message = GetClass()->Meta.GetMetaString (AIMETA_PickupMessage);
-
-	return message != NULL? message : "You got a pickup";
+	return GetClass()->Meta.GetMetaString (AIMETA_PickupMessage);
 }
 
 //===========================================================================
@@ -1313,6 +1418,10 @@ void AInventory::Destroy ()
 	}
 	Inventory = NULL;
 	Super::Destroy ();
+
+	// Although contrived it can theoretically happen that these variables still got a pointer to this item
+	if (SendItemUse == this) SendItemUse = NULL;
+	if (SendItemDrop == this) SendItemDrop = NULL;
 }
 
 //===========================================================================
@@ -1545,13 +1654,33 @@ bool AInventory::TryPickup (AActor *&toucher)
 
 //===========================================================================
 //
-// AInventory :: TryPickup
+// AInventory :: TryPickupRestricted
+//
+//===========================================================================
+
+bool AInventory::TryPickupRestricted (AActor *&toucher)
+{
+	return false;
+}
+
+//===========================================================================
+//
+// AInventory :: CallTryPickup
 //
 //===========================================================================
 
 bool AInventory::CallTryPickup (AActor *toucher, AActor **toucher_return)
 {
-	bool res = TryPickup(toucher);
+	// unmorphed versions of a currently morphed actor cannot pick up anything. 
+	if (toucher->flags & MF_UNMORPHED) return false;
+
+	bool res;
+	if (CanPickup(toucher))
+		res = TryPickup(toucher);
+	else if (!(ItemFlags & IF_RESTRICTABSOLUTELY))
+		res = TryPickupRestricted(toucher);	// let an item decide for itself how it will handle this
+	else
+		return false;
 
 	// Morph items can change the toucher so we need an option to return this info.
 	if (toucher_return != NULL) *toucher_return = toucher;
@@ -1566,6 +1695,40 @@ bool AInventory::CallTryPickup (AActor *toucher, AActor **toucher_return)
 	return res;
 }
 
+
+//===========================================================================
+//
+// AInventory :: CanPickup
+//
+//===========================================================================
+
+bool AInventory::CanPickup (AActor *toucher)
+{
+	if (!toucher)
+		return false;
+
+	FActorInfo *ai = GetClass()->ActorInfo;
+	// Is the item restricted to certain player classes?
+	if (ai->RestrictedToPlayerClass.Size() != 0)
+	{
+		for (unsigned i = 0; i < ai->RestrictedToPlayerClass.Size(); ++i)
+		{
+			if (toucher->IsKindOf(ai->RestrictedToPlayerClass[i]))
+				return true;
+		}
+		return false;
+	}
+	// Or is it forbidden to certain other classes?
+	else
+	{
+		for (unsigned i = 0; i < ai->ForbiddenToPlayerClass.Size(); ++i)
+		{
+			if (toucher->IsKindOf(ai->ForbiddenToPlayerClass[i]))
+				return false;
+		}
+	}
+	return true;
+}
 
 //===========================================================================
 //
@@ -1704,66 +1867,15 @@ const char *AHealth::PickupMessage ()
 
 bool AHealth::TryPickup (AActor *&other)
 {
-	player_t *player = other->player;
-	int max = MaxAmount;
-	
-	if (player != NULL)
+	PrevHealth = other->player != NULL ? other->player->health : other->health;
+	// P_GiveBody adds one new feature, applied only if it is possible to pick up negative health:
+	// Negative values are treated as positive percentages, ie Amount -100 means 100% health, ignoring max amount.
+	if (P_GiveBody(other, Amount, MaxAmount))
 	{
-		PrevHealth = other->player->health;
-		// [BC] Apply the prosperity power.
-		if ( player->cheats & CF_PROSPERITY )
-			max = deh.MaxSoulsphere + 50;
-		else if (max == 0)
-		{
-			// [BC] Add the player's max. health bonus to his max.
-			max = static_cast<APlayerPawn*>(other)->GetMaxHealth() + player->stamina + player->lMaxHealthBonus;
-			// [MH] First step in predictable generic morph effects
- 			if (player->morphTics)
- 			{
-				if (player->MorphStyle & MORPH_FULLHEALTH)
-				{
-					if (!(player->MorphStyle & MORPH_ADDSTAMINA))
-					{
-						max -= player->stamina;
-					}
-				}
-				else // old health behaviour
-				{
-					max = MAXMORPHHEALTH;
-					if (player->MorphStyle & MORPH_ADDSTAMINA)
-					{
-						max += player->stamina;
-					}
-				}
-			}
-		}
-		// [BC] Apply max. health bonus to the max. allowable health.
-		else
-			max = max + player->lMaxHealthBonus;
-
-		if (player->health >= max)
-		{
-			return false;
-		}
-		player->health += Amount;
-		if (player->health > max)
-		{
-			player->health = max;
-		}
-		player->mo->health = player->health;
+		GoAwayAndDie();
+		return true;
 	}
-	else
-	{
-		PrevHealth = INT_MAX;
-		if (P_GiveBody(other, Amount))
-		{
-			GoAwayAndDie ();
-			return true;
-		}
-		return false;
-	}
-	GoAwayAndDie ();
-	return true;
+	return false;
 }
 
 IMPLEMENT_CLASS (AHealthPickup)
@@ -1885,7 +1997,7 @@ bool AMaxHealth::TryPickup( AActor *&pOther )
 		else if ( lMax == 0 )
 		{
 			// [BC] Add the player's max. health bonus to his max.
-			lMax = static_cast<APlayerPawn *>( pOther )->GetMaxHealth( ) + pPlayer->stamina + pPlayer->lMaxHealthBonus;
+			lMax = static_cast<APlayerPawn *>( pOther )->GetMaxHealth( ) + pPlayer->mo->stamina + pPlayer->lMaxHealthBonus;
 			if ( pPlayer->morphTics )
 				lMax = MAXMORPHHEALTH;
 		}
@@ -2083,10 +2195,10 @@ bool ABackpackItem::HandlePickup (AInventory *item)
 AInventory *ABackpackItem::CreateTossable ()
 {
 	ABackpackItem *pack = static_cast<ABackpackItem *>(Super::CreateTossable());
-	// [BB] Clients don't convert the item to a pickup, they just remove it from their inventory.
-	// Hence we need the following check.
-	if ( pack != NULL )
+	if (pack != NULL)
+	{
 		pack->bDepleted = true;
+	}
 	return pack;
 }
 

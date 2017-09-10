@@ -120,8 +120,9 @@ typedef enum {
 	sDamage_SuperHellslime = 116,
 	Scroll_StrifeCurrent = 118,
 
-	// Caverns of Darkness healing sector
-	Sector_Heal = 196,
+	
+	Sector_Hidden = 195,
+	Sector_Heal = 196, // Caverns of Darkness healing sector
 
 	Light_OutdoorLightning = 197,
 	Light_IndoorLightning1 = 198,
@@ -202,7 +203,23 @@ typedef int (*lnSpecFunc)(struct line_t	*line,
 
 extern lnSpecFunc LineSpecials[256];
 
+extern BYTE NamedACSToNormalACS[7];
+static inline bool P_IsACSSpecial(int specnum)
+{
+	return (specnum >= ACS_Execute && specnum <= ACS_LockedExecuteDoor) ||
+			specnum == ACS_ExecuteAlways;
+}
+
 int P_FindLineSpecial (const char *string, int *min_args=NULL, int *max_args=NULL);
 bool P_ActivateThingSpecial(AActor * thing, AActor * trigger, bool death=false);
+int P_ExecuteSpecial(int			num,
+					 struct line_t	*line,
+					 class AActor	*activator,
+					 bool			backSide,
+					 int			arg1,
+					 int			arg2,
+					 int			arg3,
+					 int			arg4,
+					 int			arg5);
 
 #endif //__P_LNSPEC_H__

@@ -25,8 +25,7 @@ static FRandom pr_pain ("BishopPainBlur");
 DEFINE_ACTION_FUNCTION(AActor, A_BishopAttack)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -35,17 +34,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopAttack)
 	{
 		return;
 	}
-	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM);
-
-	// [BB] If we're the server, tell the clients to play the sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SoundActor( self, CHAN_BODY, S_GetName(self->AttackSound), 1, ATTN_NORM );
-
+	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM, true);	// [BB] Inform the clients.
 	if (self->CheckMeleeRange())
 	{
 		int damage = pr_atk.HitDice (4);
-		P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-		P_TraceBleed (damage, self->target, self);
+		int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+		P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
 		return;
 	}
 	self->special1 = (pr_atk() & 3) + 5;
@@ -63,8 +57,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopAttack2)
 	AActor *mo;
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -80,16 +73,10 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopAttack2)
 
 		return;
 	}
-	mo = P_SpawnMissile (self, self->target, PClass::FindClass("BishopFX"));
+	mo = P_SpawnMissile (self, self->target, PClass::FindClass("BishopFX"), NULL, true); // [BB] Inform clients
 	if (mo != NULL)
 	{
 		mo->tracer = self->target;
-
-		// [BB] If we're the server, tell the clients to spawn this missile.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		{
-			SERVERCOMMANDS_SpawnMissile( mo );
-		}
 	}
 	self->special1--;
 }
@@ -114,8 +101,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopMissileWeave)
 DEFINE_ACTION_FUNCTION(AActor, A_BishopDecide)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -143,8 +129,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopDecide)
 DEFINE_ACTION_FUNCTION(AActor, A_BishopDoBlur)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -162,14 +147,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopDoBlur)
 	{ // Thrust forward
 		P_ThrustMobj (self, self->angle, 11*FRACUNIT);
 	}
-	S_Sound (self, CHAN_BODY, "BishopBlur", 1, ATTN_NORM);
 
-	// [BB] If we're the server, update the thing's momentum and play the sound.
+	// [BB] If we're the server, update the thing's velocity.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
-		SERVERCOMMANDS_MoveThingExact( self, CM_MOMX|CM_MOMY );
-		SERVERCOMMANDS_SoundActor( self, CHAN_BODY, "BishopBlur", 1, ATTN_NORM );
+		SERVERCOMMANDS_MoveThingExact( self, CM_VELX|CM_VELY );
 	}
+
+	S_Sound (self, CHAN_BODY, "BishopBlur", 1, ATTN_NORM, true);	// [BB] Inform the clients.
 }
 
 //============================================================================
@@ -181,8 +166,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopDoBlur)
 DEFINE_ACTION_FUNCTION(AActor, A_BishopSpawnBlur)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -194,9 +178,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopSpawnBlur)
 		self->velx = 0;
 		self->vely = 0;
 
-		// [BB] If we're the server, update the thing's momentum.
+		// [BB] If we're the server, update the thing's velocity.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_MoveThingExact( self, CM_MOMX|CM_MOMY );
+			SERVERCOMMANDS_MoveThingExact( self, CM_VELX|CM_VELY );
 
 		if (pr_sblur() > 96)
 		{
@@ -239,15 +223,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopChase)
 {
 	// [BB] This is server-side. The z coordinate seems to go out of sync
 	// on client and server, if you make this client side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
-	self->z -= FloatBobOffsets[self->special2] >> 1;
+	self->z -= finesine[self->special2 << BOBTOFINESHIFT] * 4;
 	self->special2 = (self->special2 + 4) & 63;
-	self->z += FloatBobOffsets[self->special2] >> 1;
+	self->z += finesine[self->special2 << BOBTOFINESHIFT] * 4;
 
 	// [BB] If we're the server, update the thing's z coordinate.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -282,8 +265,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BishopPainBlur)
 	AActor *mo;
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

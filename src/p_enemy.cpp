@@ -44,6 +44,7 @@
 #include "thingdef/thingdef.h"
 #include "d_dehacked.h"
 #include "g_level.h"
+#include "teaminfo.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "cooperative.h"
@@ -117,50 +118,59 @@ void P_RandomChaseDir (AActor *actor);
 // PROC P_RecursiveSound
 //
 // Called by P_NoiseAlert.
-// Recursively traverse adjacent sectors,
+// Traverses adjacent sectors,
 // sound blocking lines cut off traversal.
 //----------------------------------------------------------------------------
 
-void P_RecursiveSound (sector_t *sec, AActor *soundtarget, bool splash, int soundblocks)
+struct NoiseTarget
 {
-	int 		i;
-	line_t* 	check;
-	sector_t*	other;
-	AActor*		actor;
-		
+	sector_t *sec;
+	int soundblocks;
+};
+static TArray<NoiseTarget> NoiseList(128);
+
+static void NoiseMarkSector(sector_t *sec, AActor *soundtarget, bool splash, AActor *emitter, int soundblocks, fixed_t maxdist)
+{
 	// wake up all monsters in this sector
 	if (sec->validcount == validcount
-		&& sec->soundtraversed <= soundblocks+1)
+		&& sec->soundtraversed <= soundblocks + 1)
 	{
 		return; 		// already flooded
 	}
-	
+
 	sec->validcount = validcount;
-	sec->soundtraversed = soundblocks+1;
+	sec->soundtraversed = soundblocks + 1;
 	sec->SoundTarget = soundtarget;
 
 	// [RH] Set this in the actors in the sector instead of the sector itself.
-	for (actor = sec->thinglist; actor != NULL; actor = actor->snext)
+	for (AActor *actor = sec->thinglist; actor != NULL; actor = actor->snext)
 	{
-		if (actor != soundtarget && (!splash || !(actor->flags4 & MF4_NOSPLASHALERT)))
+		if (actor != soundtarget && (!splash || !(actor->flags4 & MF4_NOSPLASHALERT)) &&
+			(!maxdist || (P_AproxDistance(actor->x - emitter->x, actor->y - emitter->y) <= maxdist)))
 		{
 			actor->LastHeard = soundtarget;
 		}
 	}
+	NoiseList.Push({ sec, soundblocks });
+}
 
-	for (i = 0; i < sec->linecount; i++)
+
+static void P_RecursiveSound(sector_t *sec, AActor *soundtarget, bool splash, AActor *emitter, int soundblocks, fixed_t maxdist)
+{
+	for (int i = 0; i < sec->linecount; i++)
 	{
-		check = sec->lines[i];
+		line_t *check = sec->lines[i];
 		if (check->sidedef[1] == NULL ||
 			!(check->flags & ML_TWOSIDED))
 		{
 			continue;
 		}
-		
+
 		// Early out for intra-sector lines
 		if (check->sidedef[0]->sector == check->sidedef[1]->sector) continue;
 
-		if ( check->sidedef[0]->sector == sec)
+		sector_t *other;
+		if (check->sidedef[0]->sector == sec)
 			other = check->sidedef[1]->sector;
 		else
 			other = check->sidedef[0]->sector;
@@ -185,14 +195,15 @@ void P_RecursiveSound (sector_t *sec, AActor *soundtarget, bool splash, int soun
 		if (check->flags & ML_SOUNDBLOCK)
 		{
 			if (!soundblocks)
-				P_RecursiveSound (other, soundtarget, splash, 1);
+				NoiseMarkSector(other, soundtarget, splash, emitter, 1, maxdist);
 		}
 		else
 		{
-			P_RecursiveSound (other, soundtarget, splash, soundblocks);
+			NoiseMarkSector(other, soundtarget, splash, emitter, soundblocks, maxdist);
 		}
 	}
 }
+
 
 
 
@@ -205,7 +216,7 @@ void P_RecursiveSound (sector_t *sec, AActor *soundtarget, bool splash, int soun
 //
 //----------------------------------------------------------------------------
 
-void P_NoiseAlert (AActor *target, AActor *emitter, bool splash)
+void P_NoiseAlert (AActor *target, AActor *emitter, bool splash, fixed_t maxdist)
 {
 	if (emitter == NULL)
 		return;
@@ -214,7 +225,12 @@ void P_NoiseAlert (AActor *target, AActor *emitter, bool splash)
 		return;
 
 	validcount++;
-	P_RecursiveSound (emitter->Sector, target, splash, 0);
+	NoiseList.Clear();
+	NoiseMarkSector(emitter->Sector, target, splash, emitter, 0, maxdist);
+	for (unsigned i = 0; i < NoiseList.Size(); i++)
+	{
+		P_RecursiveSound(NoiseList[i].sec, target, splash, emitter, NoiseList[i].soundblocks, maxdist);
+	}
 }
 
 
@@ -315,7 +331,7 @@ bool P_CheckMissileRange (AActor *actor)
 {
 	fixed_t dist;
 		
-	if (!P_CheckSight (actor, actor->target, SF_SEEPASTBLOCKEVERYTHING|SF_SEEPASTSHOOTABLELINES))
+	if (!P_CheckSight (actor, actor->target, SF_SEEPASTBLOCKEVERYTHING))
 		return false;
 		
 	if (actor->flags & MF_JUSTHIT)
@@ -434,20 +450,14 @@ bool P_Move (AActor *actor)
 		return false;
 	}
 
-	// [RH] Instead of yanking non-floating monsters to the ground,
-	// let gravity drop them down, unless they're moving down a step.
+	// [RH] Walking actors that are not on the ground cannot walk. We don't
+	// want to yank them to the ground here as Doom did, since that makes
+	// it difficult to thrust them vertically in a reasonable manner.
 	// [GZ] Let jumping actors jump.
 	if (!((actor->flags & MF_NOGRAVITY) || (actor->flags6 & MF6_CANJUMP))
 		&& actor->z > actor->floorz && !(actor->flags2 & MF2_ONMOBJ))
 	{
-		if (actor->z > actor->floorz + actor->MaxStepHeight)
-		{
-			return false;
-		}
-		else
-		{
-			actor->z = actor->floorz;
-		}
+		return false;
 	}
 
 	if ((unsigned)actor->movedir >= 8)
@@ -519,12 +529,12 @@ bool P_Move (AActor *actor)
 	try_ok = true;
 	for(int i=1; i < steps; i++)
 	{
-		try_ok = P_TryMove(actor, origx + Scale(deltax, i, steps), origy + Scale(deltay, i, steps), dropoff, false, tm);
+		try_ok = P_TryMove(actor, origx + Scale(deltax, i, steps), origy + Scale(deltay, i, steps), dropoff, NULL, tm);
 		if (!try_ok) break;
 	}
 
 	// killough 3/15/98: don't jump over dropoffs:
-	if (try_ok) try_ok = P_TryMove (actor, tryx, tryy, dropoff, false, tm);
+	if (try_ok) try_ok = P_TryMove (actor, tryx, tryy, dropoff, NULL, tm);
 
 	// [GrafZahl] Interpolating monster movement as it is done here just looks bad
 	// so make it switchable
@@ -544,12 +554,40 @@ bool P_Move (AActor *actor)
 		actor->vely += FixedMul (deltay, movefactor);
 	}
 
+	// [RH] If a walking monster is no longer on the floor, move it down
+	// to the floor if it is within MaxStepHeight, presuming that it is
+	// actually walking down a step.
+	if (try_ok &&
+		!((actor->flags & MF_NOGRAVITY) || (actor->flags6 & MF6_CANJUMP))
+		&& actor->z > actor->floorz && !(actor->flags2 & MF2_ONMOBJ))
+	{
+		if (actor->z <= actor->floorz + actor->MaxStepHeight)
+		{
+			fixed_t savedz = actor->z;
+			actor->z = actor->floorz;
+			// Make sure that there isn't some other actor between us and
+			// the floor we could get stuck in. The old code did not do this.
+			if (!P_TestMobjZ(actor))
+			{
+				actor->z = savedz;
+			}
+			else
+			{ // The monster just hit the floor, so trigger any actions.
+				if (actor->floorsector->SecActTarget != NULL &&
+					actor->floorz == actor->floorsector->floorplane.ZatPoint(actor->x, actor->y))
+				{
+					actor->floorsector->SecActTarget->TriggerAction(actor, SECSPAC_HitFloor);
+				}
+				P_CheckFor3DFloorHit(actor);
+			}
+		}
+	}
+
 	if (!try_ok)
 	{
 		// [BC] Don't float in client mode.
 		if (((actor->flags6 & MF6_CANJUMP)||(actor->flags & MF_FLOAT)) && tm.floatok &&
-			( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+			( NETWORK_InClientMode() == false ))
 		{ // must adjust height
 			fixed_t savedz = actor->z;
 
@@ -979,7 +1017,7 @@ void P_NewChaseDir(AActor * actor)
 	// MBF's monster_backing option. Made an actor flag instead. Also cleaned the code up to make it readable.
 	// Todo: implement the movement logic
 	AActor *target = actor->target;
-	if (target->health > 0 && !actor->IsFriend(target))
+	if (target->health > 0 && !actor->IsFriend(target) && target != actor->goal)
     {   // Live enemy target
 
 		if (actor->flags3 & MF3_AVOIDMELEE)
@@ -1261,7 +1299,7 @@ bool P_IsVisible(AActor *lookee, AActor *other, INTBOOL allaround, FLookExParams
 	else
 	{
 		mindist = maxdist = 0;
-		fov = allaround? 0 : ANGLE_180;
+		fov = allaround ? 0 : ANGLE_180;
 	}
 
 	fixed_t dist = P_AproxDistance (other->x - lookee->x, other->y - lookee->y);
@@ -1286,7 +1324,7 @@ bool P_IsVisible(AActor *lookee, AActor *other, INTBOOL allaround, FLookExParams
 	}
 
 	// P_CheckSight is by far the most expensive operation in here so let's do it last.
-	return P_CheckSight(lookee, other, SF_SEEPASTBLOCKEVERYTHING);
+	return P_CheckSight(lookee, other, SF_SEEPASTSHOOTABLELINES);
 }
 
 //---------------------------------------------------------------------------
@@ -1305,7 +1343,7 @@ bool P_LookForMonsters (AActor *actor)
 	TThinkerIterator<AActor> iterator;
 
 	// [BC] This is handled server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return ( false );
 
 	if (!P_CheckSight (players[0].mo, actor, SF_SEEPASTBLOCKEVERYTHING))
@@ -1554,6 +1592,9 @@ AActor *LookForEnemiesInBlock (AActor *lookee, int index, void *extparam)
 		if (!(link->flags3 & MF3_ISMONSTER))
 			continue;			// don't target it if it isn't a monster (could be a barrel)
 
+		if (link->flags7 & MF7_NEVERTARGET)
+			continue;
+
 		other = NULL;
 		if (link->flags & MF_FRIENDLY)
 		{
@@ -1676,8 +1717,7 @@ bool P_LookForPlayers (AActor *actor, INTBOOL allaround, FLookExParams *params)
 	bool		bAllDone;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( false );
 	}
@@ -1738,7 +1778,8 @@ bool P_LookForPlayers (AActor *actor, INTBOOL allaround, FLookExParams *params)
 		}
 #endif
 		// [SP] If you don't see any enemies in deathmatch, look for players (but only when friend to a specific player.)
-		if (actor->FriendPlayer == 0) return result;
+		// [BB] TEAM_NONE -> TEAM_None
+		if (actor->FriendPlayer == 0 && (!teamplay || actor->DesignatedTeam == TEAM_None)) return result;
 		// [BB] Adapted to take into account teamgame.
 		if (result || (!deathmatch && !teamgame)) return true;
 
@@ -1816,19 +1857,24 @@ bool P_LookForPlayers (AActor *actor, INTBOOL allaround, FLookExParams *params)
 				continue;
 		}
 
-		if ((player->mo->flags & MF_SHADOW && !(i_compatflags & COMPATF_INVISIBILITY)) ||
-			player->mo->flags3 & MF3_GHOST)
+		// [RC] Well, let's let special monsters with this flag active be able to see
+		// the player then, eh?
+		if(!(actor->flags6 & MF6_SEEINVISIBLE)) 
 		{
-			if ((P_AproxDistance (player->mo->x - actor->x,
-					player->mo->y - actor->y) > 2*MELEERANGE)
-				&& P_AproxDistance (player->mo->velx, player->mo->vely)
-				< 5*FRACUNIT)
-			{ // Player is sneaking - can't detect
-				return false;
-			}
-			if (pr_lookforplayers() < 225)
-			{ // Player isn't sneaking, but still didn't detect
-				return false;
+			if ((player->mo->flags & MF_SHADOW && !(i_compatflags & COMPATF_INVISIBILITY)) ||
+				player->mo->flags3 & MF3_GHOST)
+			{
+				if ((P_AproxDistance (player->mo->x - actor->x,
+						player->mo->y - actor->y) > 2*MELEERANGE)
+					&& P_AproxDistance (player->mo->velx, player->mo->vely)
+					< 5*FRACUNIT)
+				{ // Player is sneaking - can't detect
+					continue;
+				}
+				if (pr_lookforplayers() < 225)
+				{ // Player isn't sneaking, but still didn't detect
+					continue;
+				}
 			}
 		}
 		
@@ -1887,8 +1933,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Look)
 	AActor *targ;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// [RH] Andy Baker's stealth monsters
 		if (self->flags & MF_STEALTH)
@@ -1994,19 +2039,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_Look)
 	{
 		if (self->flags2 & MF2_BOSS)
 		{ // full volume
-			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NONE);
-
-			// [BC] Play the sound for clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SoundActor( self, CHAN_VOICE, S_GetName( self->SeeSound ), 1, ATTN_NONE );
+			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NONE, true );	// [BC] Inform the clients.
 		}
 		else
 		{
-			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NORM);
-
-			// [BC] Play the sound for clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SoundActor( self, CHAN_VOICE, S_GetName( self->SeeSound ), 1, ATTN_NORM );
+			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NORM, true );	// [BC] Inform the clients.
 		}
 	}
 
@@ -2035,12 +2072,13 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_LookEx)
 	ACTION_PARAM_FIXED(minseedist, 1);
 	ACTION_PARAM_FIXED(maxseedist, 2);
 	ACTION_PARAM_FIXED(maxheardist, 3);
-	ACTION_PARAM_ANGLE(fov, 4);
+	ACTION_PARAM_DOUBLE(fov_f, 4);
 	ACTION_PARAM_STATE(seestate, 5);
 
 	AActor *targ = NULL; // Shuts up gcc
 	fixed_t dist;
-	FLookExParams params = {fov, minseedist, maxseedist, maxheardist, flags, seestate };
+	angle_t fov = (fov_f == 0) ? ANGLE_180 : angle_t(fov_f * ANGLE_90 / 90);
+	FLookExParams params = { fov, minseedist, maxseedist, maxheardist, flags, seestate };
 
 	// [TP] The client does not execute this
 	if ( NETWORK_InClientMode() )
@@ -2078,7 +2116,8 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_LookEx)
 	{
 		if (!(flags & LOF_NOSOUNDCHECK))
 		{
-			targ = (self->flags & MF_NOSECTOR)? self->Sector->SoundTarget : self->LastHeard;
+			targ = (i_compatflags & COMPATF_SOUNDTARGET || self->flags & MF_NOSECTOR)?
+				self->Sector->SoundTarget : self->LastHeard;
 			if (targ != NULL)
 			{
 				// [RH] If the soundtarget is dead, don't chase it
@@ -2205,43 +2244,50 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_LookEx)
 	{
 		if (flags & LOF_FULLVOLSEESOUND)
 		{ // full volume
-			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NONE);
+			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NONE, true );	// [TP] Inform the clients.
 		}
 		else
 		{
-			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NORM);
-		}
-
-		// [TP] If we're the server, play the sound
-		if ( NETWORK_GetState() == NETSTATE_SERVER )
-		{
-			SERVERCOMMANDS_SoundActor( self, CHAN_VOICE, self->SeeSound, 1,
-				(flags & LOF_FULLVOLSEESOUND) ? ATTN_NONE : ATTN_NORM );
+			S_Sound (self, CHAN_VOICE, self->SeeSound, 1, ATTN_NORM, true );	// [TP] Inform the clients.
 		}
 	}
 
 	if (self->target && !(self->flags & MF_INCHASE))
 	{
-		if (seestate)
-		{
-			// [TP] Tell clients to set the thing's state.
-			if ( NETWORK_GetState() == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetThingFrame( self, seestate );
+        if (!(flags & LOF_NOJUMP))
+        {
+            if (seestate)
+            {
+				// [TP] Tell clients to set the thing's state.
+				if ( NETWORK_GetState() == NETSTATE_SERVER )
+					SERVERCOMMANDS_SetThingFrame( self, seestate );
 
-			self->SetState (seestate);
-		}
-		else
-		{
-			// [TP] Tell clients to set the thing's state.
-			if ( NETWORK_GetState() == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetThingState( self, STATE_SEE );
+                self->SetState (seestate);
+            }
+            else
+            {
+				// [TP] Tell clients to set the thing's state.
+				if ( NETWORK_GetState() == NETSTATE_SERVER )
+					SERVERCOMMANDS_SetThingState( self, STATE_SEE );
 
-			self->SetState (self->SeeState);
-		}
+                self->SetState (self->SeeState);
+            }
+        }
 	}
 }
 
 // [KS] *** End additions by me ***
+
+//==========================================================================
+//
+// A_ClearLastHeard
+//
+//==========================================================================
+
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_ClearLastHeard)
+{
+	self->LastHeard = NULL;
+}
 
 //==========================================================================
 //
@@ -2283,8 +2329,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Wander)
 
 	// [BC] In client mode, just keep walking until the server tells us to
 	// change directions.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		P_Move( self );
 		return;
@@ -2308,8 +2353,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Look2)
 	AActor *targ;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -2424,8 +2468,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 	}
 
 	// [BC] Clients do not know what the target is.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		actor->target = NULL;
 		actor->goal = NULL;
@@ -2446,10 +2489,13 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 
 	if (nightmarefast && G_SkillProperty(SKILLP_FastMonsters))
 	{ // Monsters move faster in nightmare mode
-		actor->tics -= actor->tics / 2;
-		if (actor->tics < 3)
+		if (actor->tics > 3)
 		{
-			actor->tics = 3;
+			actor->tics -= actor->tics / 2;
+			if (actor->tics < 3)
+			{
+				actor->tics = 3;
+			}
 		}
 	}
 
@@ -2559,8 +2605,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 		actor->flags &= ~MF_JUSTATTACKED;
 		if ((!actor->isFast()) && !dontmove &&
 			// [BC] Don't decide a new chase dir in client mode.
-			( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+			( NETWORK_InClientMode() == false ))
 		{
 			P_NewChaseDir (actor);
 		}
@@ -2587,7 +2632,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 			// as the goal.
 			while ( (spec = specit.Next()) )
 			{
-				LineSpecials[spec->special] (NULL, actor, false, spec->args[0],
+				P_ExecuteSpecial(spec->special, NULL, actor, false, spec->args[0],
 					spec->args[1], spec->args[2], spec->args[3], spec->args[4]);
 			}
 
@@ -2635,8 +2680,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 
 	if (fastchase && !dontmove &&
 		// [BC] Don't fast chase in client mode.
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
 		if (actor->FastChaseStrafeCount > 0)
 		{
@@ -2671,11 +2715,11 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 				}
 			}
 
-			// [BC] If we're the server, update the thing's momentum.
+			// [BC] If we're the server, update the thing's velocity.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			{
 				SERVERCOMMANDS_MoveThing( actor, CM_X|CM_Y|CM_Z );
-				SERVERCOMMANDS_MoveThingExact( actor, CM_MOMX|CM_MOMY );
+				SERVERCOMMANDS_MoveThingExact( actor, CM_VELX|CM_VELY );
 			}
 		}
 
@@ -2691,13 +2735,11 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 		if (meleestate && actor->CheckMeleeRange ())
 		{
 			if (actor->AttackSound)
-				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM);
+				S_Sound (actor, CHAN_WEAPON, actor->AttackSound, 1, ATTN_NORM, true );	// [BC] Inform the clients.
 
-			// [BC] If we are the server, tell clients about the state change, and play
-			// the attack sound.
+			// [BC] If we are the server, tell clients about the state change.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			{
-				SERVERCOMMANDS_SoundActor( actor, CHAN_WEAPON, S_GetName( actor->AttackSound ), 1, ATTN_NORM );
 				SERVERCOMMANDS_SetThingFrame( actor, meleestate );
 				SERVERCOMMANDS_MoveThing( actor, CM_X|CM_Y|CM_Z );
 			}
@@ -2738,8 +2780,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 	// possibly choose another target
 	if ((( NETWORK_GetState( ) != NETSTATE_SINGLE ) || actor->TIDtoHate)
 		&& !actor->threshold
-		&& ( NETWORK_GetState( ) != NETSTATE_CLIENT )
-		&& ( CLIENTDEMO_IsPlaying( ) == false )
+		&& ( NETWORK_InClientMode() == false )
 		// [BB] In invasion mode, player doesn't have to be visible to be chased by monsters.
 		// [BB] The flags argument of P_CheckSight has to be the same here as it is in P_LookForPlayers.
 		&& !P_CheckSight (actor, actor->target, SF_SEEPASTBLOCKEVERYTHING) && ( invasion == false ) )
@@ -2781,8 +2822,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 
 		// [BC] In client mode, just keep walking until the server tells us to
 		// change directions.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			P_Move( actor );
 		}
@@ -2798,8 +2838,7 @@ void A_DoChase (AActor *actor, bool fastchase, FState *meleestate, FState *missi
 		{
 			// [BC] In client mode, just keep walking until the server tells us to
 			// change directions.
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				P_TryMove( actor, oldX, oldY, false );
 			}
@@ -2842,8 +2881,7 @@ static bool P_CheckForResurrection(AActor *self, bool usevilestates)
 	AActor *temp;
 		
 	// [BC] Movement is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// Return to normal attack.
 		//A_Chase (self);
@@ -2858,156 +2896,136 @@ static bool P_CheckForResurrection(AActor *self, bool usevilestates)
 		fixed_t viletryx = self->x + FixedMul (absSpeed, xspeed[self->movedir]);
 		fixed_t viletryy = self->y + FixedMul (absSpeed, yspeed[self->movedir]);
 		AActor *corpsehit;
-		FState *raisestate;
 
 		FBlockThingsIterator it(FBoundingBox(viletryx, viletryy, 32*FRACUNIT));
 		while ((corpsehit = it.Next()))
 		{
-			if (!(corpsehit->flags & MF_CORPSE) )
-				continue;	// not a monster
-			
-			if (corpsehit->tics != -1)
-				continue;	// not lying still yet
-			
-			raisestate = corpsehit->FindState(NAME_Raise);
-			if (raisestate == NULL)
-				continue;	// monster doesn't have a raise state
-
-			if (corpsehit->IsKindOf(RUNTIME_CLASS(APlayerPawn)))
-				continue;	// do not resurrect players
-
-			// use the current actor's radius instead of the Arch Vile's default.
-			fixed_t maxdist = corpsehit->GetDefault()->radius + self->radius; 
-
-			maxdist = corpsehit-> GetDefault()->radius + self->radius; 
-				
-			if ( abs(corpsehit-> x - viletryx) > maxdist ||
-				 abs(corpsehit-> y - viletryy) > maxdist )
-				continue;			// not actually touching
-
-			corpsehit->velx = corpsehit->vely = 0;
-			// [RH] Check against real height and radius
-
-			fixed_t oldheight = corpsehit->height;
-			fixed_t oldradius = corpsehit->radius;
-			int oldflags = corpsehit->flags;
-
-			corpsehit->flags |= MF_SOLID;
-			corpsehit->height = corpsehit->GetDefault()->height;
-			bool check = P_CheckPosition (corpsehit, corpsehit->x, corpsehit->y);
-			corpsehit->flags = oldflags;
-			corpsehit->radius = oldradius;
-			corpsehit->height = oldheight;
-			if (!check) continue;
-
-			// got one!
-			temp = self->target;
-			self->target = corpsehit;
-			A_FaceTarget (self);
-			if (self->flags & MF_FRIENDLY)
+			FState *raisestate = corpsehit->GetRaiseState();
+			if (raisestate != NULL)
 			{
-				// If this is a friendly Arch-Vile (which is turning the resurrected monster into its friend)
-				// and the Arch-Vile is currently targetting the resurrected monster the target must be cleared.
-				if (self->lastenemy == temp) self->lastenemy = NULL;
-				if (self->lastenemy == corpsehit) self->lastenemy = NULL;
-				if (temp == self->target) temp = NULL;
-			}
-			self->target = temp;
-								
-			// [BC] If we are the server, tell clients about the state change.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetThingState( self, STATE_HEAL );
+				// use the current actor's radius instead of the Arch Vile's default.
+				fixed_t maxdist = corpsehit->GetDefault()->radius + self->radius;
 
-			// Make the state the monster enters customizable.
-			FState * state = self->FindState(NAME_Heal);
-			if (state != NULL)
-			{
-				self->SetState (state);
-			}
-			else if (usevilestates)
-			{
-				// For Dehacked compatibility this has to use the Arch Vile's
-				// heal state as a default if the actor doesn't define one itself.
-				const PClass *archvile = PClass::FindClass("Archvile");
-				if (archvile != NULL)
+				maxdist = corpsehit->GetDefault()->radius + self->radius;
+
+				if (abs(corpsehit->x - viletryx) > maxdist ||
+					abs(corpsehit->y - viletryy) > maxdist)
+					continue;			// not actually touching
+#ifdef _3DFLOORS
+				// Let's check if there are floors in between the archvile and its target
+				sector_t *vilesec = self->Sector;
+				sector_t *corpsec = corpsehit->Sector;
+				// We only need to test if at least one of the sectors has a 3D floor.
+				sector_t *testsec = vilesec->e->XFloor.ffloors.Size() ? vilesec :
+					(vilesec != corpsec && corpsec->e->XFloor.ffloors.Size()) ? corpsec : NULL;
+				if (testsec)
 				{
-					self->SetState (archvile->ActorInfo->FindState(NAME_Heal));
-				}
-			}
-			S_Sound (corpsehit, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
-			info = corpsehit->GetDefault ();
-			
-			if (corpsehit->state == corpsehit->FindState(NAME_GenericCrush))
-			{			
-				corpsehit->Translation = info->Translation; // Clean up bloodcolor translation from crushed corpses
-			}
-			if (ib_compatflags & BCOMPATF_VILEGHOSTS)
-			{
-				corpsehit->height <<= 2;
-				// [GZ] This was a commented-out feature, so let's make use of it,
-				// but only for ghost monsters so that they are visibly different.
-				if (corpsehit->height == 0)
-				{
-					// Make raised corpses look ghostly
-					if (corpsehit->alpha > TRANSLUC50)
+					fixed_t zdist1, zdist2;
+					if (P_Find3DFloor(testsec, corpsehit->x, corpsehit->y, corpsehit->z, false, true, zdist1)
+						!= P_Find3DFloor(testsec, self->x, self->y, self->z, false, true, zdist2))
 					{
-						corpsehit->alpha /= 2;
-					}
-					// This will only work if the render style is changed as well.
-					if (corpsehit->RenderStyle == LegacyRenderStyles[STYLE_Normal])
-					{
-						corpsehit->RenderStyle = STYLE_Translucent;
+						// Not on same floor
+						if (vilesec == corpsec || abs(zdist1 - self->z) > self->height)
+							continue;
 					}
 				}
+#endif
+
+				corpsehit->velx = corpsehit->vely = 0;
+				// [RH] Check against real height and radius
+
+				fixed_t oldheight = corpsehit->height;
+				fixed_t oldradius = corpsehit->radius;
+				int oldflags = corpsehit->flags;
+
+				corpsehit->flags |= MF_SOLID;
+				corpsehit->height = corpsehit->GetDefault()->height;
+				bool check = P_CheckPosition(corpsehit, corpsehit->x, corpsehit->y);
+				corpsehit->flags = oldflags;
+				corpsehit->radius = oldradius;
+				corpsehit->height = oldheight;
+				if (!check) continue;
+
+				// got one!
+				temp = self->target;
+				self->target = corpsehit;
+				A_FaceTarget(self);
+				if (self->flags & MF_FRIENDLY)
+				{
+					// If this is a friendly Arch-Vile (which is turning the resurrected monster into its friend)
+					// and the Arch-Vile is currently targetting the resurrected monster the target must be cleared.
+					if (self->lastenemy == temp) self->lastenemy = NULL;
+					if (self->lastenemy == corpsehit) self->lastenemy = NULL;
+					if (temp == self->target) temp = NULL;
+				}
+				self->target = temp;
+
+				// [BC] If we are the server, tell clients about the state change.
+				// [EP/BB] Handle also A_VileChase which requires the archvile's states.
+				if ( NETWORK_GetState() == NETSTATE_SERVER )
+					SERVERCOMMANDS_SetThingState( self, usevilestates ? STATE_ARCHVILE_HEAL : STATE_HEAL );
+
+				// Make the state the monster enters customizable.
+				FState * state = self->FindState(NAME_Heal);
+				if (state != NULL)
+				{
+					self->SetState(state);
+				}
+				else if (usevilestates)
+				{
+					// For Dehacked compatibility this has to use the Arch Vile's
+					// heal state as a default if the actor doesn't define one itself.
+					const PClass *archvile = PClass::FindClass("Archvile");
+					if (archvile != NULL)
+					{
+						self->SetState(archvile->ActorInfo->FindState(NAME_Heal));
+					}
+				}
+				S_Sound(corpsehit, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
+				info = corpsehit->GetDefault();
+
+				if (corpsehit->state == corpsehit->FindState(NAME_GenericCrush))
+				{
+					corpsehit->Translation = info->Translation; // Clean up bloodcolor translation from crushed corpses
+				}
+				if (ib_compatflags & BCOMPATF_VILEGHOSTS)
+				{
+					corpsehit->height <<= 2;
+					// [GZ] This was a commented-out feature, so let's make use of it,
+					// but only for ghost monsters so that they are visibly different.
+					if (corpsehit->height == 0)
+					{
+						// Make raised corpses look ghostly
+						if (corpsehit->alpha > TRANSLUC50)
+						{
+							corpsehit->alpha /= 2;
+						}
+						// This will only work if the render style is changed as well.
+						if (corpsehit->RenderStyle == LegacyRenderStyles[STYLE_Normal])
+						{
+							corpsehit->RenderStyle = STYLE_Translucent;
+						}
+					}
+				}
+				else
+				{
+					corpsehit->height = info->height;	// [RH] Use real mobj height
+					corpsehit->radius = info->radius;	// [RH] Use real radius
+				}
+
+				corpsehit->Revive();
+
+				// You are the Archvile's minion now, so hate what it hates
+				corpsehit->CopyFriendliness(self, false);
+
+				// [BC] If we're the server, tell clients to put the thing into its raise state.
+				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+					SERVERCOMMANDS_SetThingState( corpsehit, STATE_RAISE );
+
+				corpsehit->SetState(raisestate);
+
+				return true;
 			}
-			else
-			{
-				corpsehit->height = info->height;	// [RH] Use real mobj height
-				corpsehit->radius = info->radius;	// [RH] Use real radius
-			}
-			corpsehit->flags = info->flags;
-			corpsehit->flags2 = info->flags2;
-			corpsehit->flags3 = info->flags3;
-			corpsehit->flags4 = info->flags4;
-			corpsehit->flags5 = info->flags5;
-			corpsehit->flags6 = info->flags6;
-
-			// [BC] Apply new ST flags as well.
-			// [BB] The STFL_LEVELSPAWNED flag may not be removed by the default flags.
-			// Otherwise level spawned actors revived by an Archvile won't be restored
-			// during a call of GAME_ResetMap.
-			// [WS] We also need this similar treatment for STFL_POSITIONCHANGED.
-			const bool actorWasLevelSpawned = !!(corpsehit->ulSTFlags & STFL_LEVELSPAWNED);
-			const bool actorHasPositionChanged = !!(corpsehit->ulSTFlags & STFL_POSITIONCHANGED);
-			corpsehit->ulSTFlags = info->ulSTFlags;
-			if ( actorWasLevelSpawned )
-				corpsehit->ulSTFlags |= STFL_LEVELSPAWNED;
-			if ( actorHasPositionChanged )
-				corpsehit->ulSTFlags |= STFL_POSITIONCHANGED;
-			corpsehit->ulNetworkFlags = info->ulNetworkFlags;
-
-			corpsehit->health = info->health;
-			corpsehit->target = NULL;
-			corpsehit->lastenemy = NULL;
-
-			// [RH] If it's a monster, it gets to count as another kill
-			if (corpsehit->CountsAsKill())
-			{
-				level.total_monsters++;
-
-				// [BB] The number of total monsters was increased, update the invasion monster count accordingly.
-				INVASION_UpdateMonsterCount( corpsehit, false );
-			}
-
-			// You are the Archvile's minion now, so hate what it hates
-			corpsehit->CopyFriendliness (self, false);
-
-			// [BC] If we're the server, tell clients to put the thing into its raise state.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetThingState( corpsehit, STATE_RAISE );
-
-			corpsehit->SetState (raisestate);
-			return true;
 		}
 	}
 	return false;
@@ -3044,7 +3062,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Chase)
 	}
 	else // this is the old default A_Chase
 	{
-		A_DoChase (self, false, self->MeleeState, self->MissileState, true, !!(gameinfo.gametype & GAME_Raven), false);
+		A_DoChase (self, false, self->MeleeState, self->MissileState, true, gameinfo.nightmarefast, false);
 	}
 }
 
@@ -3056,7 +3074,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FastChase)
 DEFINE_ACTION_FUNCTION(AActor, A_VileChase)
 {
 	if (!P_CheckForResurrection(self, true))
-		A_DoChase (self, false, self->MeleeState, self->MissileState, true, !!(gameinfo.gametype & GAME_Raven), false);
+		A_DoChase (self, false, self->MeleeState, self->MissileState, true, gameinfo.nightmarefast, false);
 }
 
 DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_ExtChase)
@@ -3076,19 +3094,20 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_ExtChase)
 // for internal use
 void A_Chase(AActor *self)
 {
-	A_DoChase (self, false, self->MeleeState, self->MissileState, true, !!(gameinfo.gametype & GAME_Raven), false);
+	A_DoChase (self, false, self->MeleeState, self->MissileState, true, gameinfo.nightmarefast, false);
 }
 
 //=============================================================================
 //
 // A_FaceTarget
+// A_FaceMaster
+// A_FaceTracer
 //
 //=============================================================================
-void A_FaceTarget (AActor *self, angle_t max_turn)
+void A_Face (AActor *self, AActor *other, angle_t max_turn, angle_t max_pitch)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// [RH] Andy Baker's stealth monsters
 		if (self->flags & MF_STEALTH)
@@ -3099,7 +3118,7 @@ void A_FaceTarget (AActor *self, angle_t max_turn)
 		return;
 	}
 
-	if (!self->target)
+	if (!other)
 		return;
 
 	// [RH] Andy Baker's stealth monsters
@@ -3110,15 +3129,15 @@ void A_FaceTarget (AActor *self, angle_t max_turn)
 
 	self->flags &= ~MF_AMBUSH;
 
-	angle_t target_angle = R_PointToAngle2 (self->x, self->y, self->target->x, self->target->y);
+	angle_t other_angle = R_PointToAngle2 (self->x, self->y, other->x, other->y);
 
 	// 0 means no limit. Also, if we turn in a single step anyways, no need to go through the algorithms.
-	// It also means that there is no need to check for going past the target.
-	if (max_turn && (max_turn < (angle_t)abs(self->angle - target_angle)))
+	// It also means that there is no need to check for going past the other.
+	if (max_turn && (max_turn < absangle(self->angle - other_angle)))
 	{
-		if (self->angle > target_angle)
+		if (self->angle > other_angle)
 		{
-			if (self->angle - target_angle < ANGLE_180)
+			if (self->angle - other_angle < ANGLE_180)
 			{
 				self->angle -= max_turn;
 			}
@@ -3129,7 +3148,7 @@ void A_FaceTarget (AActor *self, angle_t max_turn)
 		}
 		else
 		{
-			if (target_angle - self->angle < ANGLE_180)
+			if (other_angle - self->angle < ANGLE_180)
 			{
 				self->angle += max_turn;
 			}
@@ -3141,11 +3160,52 @@ void A_FaceTarget (AActor *self, angle_t max_turn)
 	}
 	else
 	{
-		self->angle = target_angle;
+		self->angle = other_angle;
+	}
+
+	// [DH] Now set pitch. In order to maintain compatibility, this can be
+	// disabled and is so by default.
+	if (max_pitch <= ANGLE_180)
+	{
+		// [DH] Don't need to do proper fixed->double conversion, since the
+		// result is only used in a ratio.
+		double dist_x = other->x - self->x;
+		double dist_y = other->y - self->y;
+		// Positioning ala missile spawning, 32 units above foot level
+		fixed_t source_z = self->z + 32*FRACUNIT + self->GetBobOffset();
+		fixed_t target_z = other->z + 32*FRACUNIT + other->GetBobOffset();
+		// If the target z is above the target's head, reposition to the middle of
+		// its body.
+		if (target_z >= other->z + other->height)
+		{
+			target_z = other->z + other->height / 2;
+		}
+		double dist_z = target_z - source_z;
+		double dist = sqrt(dist_x*dist_x + dist_y*dist_y + dist_z*dist_z);
+
+		int other_pitch = (int)rad2bam(asin(dist_z / dist));
+
+		if (max_pitch != 0)
+		{
+			if (self->pitch > other_pitch)
+			{
+				max_pitch = MIN(max_pitch, unsigned(self->pitch - other_pitch));
+				self->pitch -= max_pitch;
+			}
+			else
+			{
+				max_pitch = MIN(max_pitch, unsigned(other_pitch - self->pitch));
+				self->pitch += max_pitch;
+			}
+		}
+		else
+		{
+			self->pitch = other_pitch;
+		}
 	}
 
 	// This will never work well if the turn angle is limited.
-	if (max_turn == 0 && (self->angle == target_angle) && self->target->flags & MF_SHADOW)
+	if (max_turn == 0 && (self->angle == other_angle) && other->flags & MF_SHADOW && !(self->flags6 & MF6_SEEINVISIBLE) )
     {
 		self->angle += pr_facetarget.Random2() << 21;
     }
@@ -3155,12 +3215,46 @@ void A_FaceTarget (AActor *self, angle_t max_turn)
 		SERVERCOMMANDS_SetThingAngle( self );
 }
 
+void A_FaceTarget (AActor *self, angle_t max_turn, angle_t max_pitch)
+{
+	A_Face(self, self->target, max_turn, max_pitch);
+}
+
+void A_FaceMaster (AActor *self, angle_t max_turn, angle_t max_pitch)
+{
+	A_Face(self, self->master, max_turn, max_pitch);
+}
+
+void A_FaceTracer (AActor *self, angle_t max_turn, angle_t max_pitch)
+{
+	A_Face(self, self->tracer, max_turn, max_pitch);
+}
+
 DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FaceTarget)
 {
-	ACTION_PARAM_START(1);
+	ACTION_PARAM_START(2);
 	ACTION_PARAM_ANGLE(max_turn, 0);
+	ACTION_PARAM_ANGLE(max_pitch, 1);
 
-	A_FaceTarget(self, max_turn);
+	A_FaceTarget(self, max_turn, max_pitch);
+}
+
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FaceMaster)
+{
+	ACTION_PARAM_START(2);
+	ACTION_PARAM_ANGLE(max_turn, 0);
+	ACTION_PARAM_ANGLE(max_pitch, 1);
+
+	A_FaceMaster(self, max_turn, max_pitch);
+}
+
+DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FaceTracer)
+{
+	ACTION_PARAM_START(2);
+	ACTION_PARAM_ANGLE(max_turn, 0);
+	ACTION_PARAM_ANGLE(max_pitch, 1);
+
+	A_FaceTracer(self, max_turn, max_pitch);
 }
 
 //===========================================================================
@@ -3173,8 +3267,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_FaceTarget)
 DEFINE_ACTION_FUNCTION(AActor, A_MonsterRail)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		// [RH] Andy Baker's stealth monsters
 		if (self->flags & MF_STEALTH)
@@ -3220,10 +3313,10 @@ DEFINE_ACTION_FUNCTION(AActor, A_MonsterRail)
 									self->target->x - self->target->velx * 3,
 									self->target->y - self->target->vely * 3);
 
-	if (self->target->flags & MF_SHADOW)
-    {
+	if (self->target->flags & MF_SHADOW && !(self->flags6 & MF6_SEEINVISIBLE))
+	{
 		self->angle += pr_railface.Random2() << 21;
-    }
+	}
 
 	// [BC] Set the thing's angle.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -3329,14 +3422,19 @@ void ModifyDropAmount(AInventory *inv, int dropamount)
 	{
 		// Half ammo when dropped by bad guys.
 		inv->Amount = inv->GetClass()->Meta.GetMetaInt (AIMETA_DropAmount, MAX(1, FixedMul(inv->Amount, dropammofactor)));
-		inv->ItemFlags|=flagmask;
+		inv->ItemFlags |= flagmask;
+	}
+	else if (inv->IsKindOf (RUNTIME_CLASS(AWeaponGiver)))
+	{
+		static_cast<AWeaponGiver *>(inv)->DropAmmoFactor = dropammofactor;
+		inv->ItemFlags |= flagmask;
 	}
 	else if (inv->IsKindOf (RUNTIME_CLASS(AWeapon)))
 	{
 		// The same goes for ammo from a weapon.
 		static_cast<AWeapon *>(inv)->AmmoGive1 = FixedMul(static_cast<AWeapon *>(inv)->AmmoGive1, dropammofactor);
 		static_cast<AWeapon *>(inv)->AmmoGive2 = FixedMul(static_cast<AWeapon *>(inv)->AmmoGive2, dropammofactor);
-		inv->ItemFlags|=flagmask;
+		inv->ItemFlags |= flagmask;
 	}			
 	else if (inv->IsKindOf (RUNTIME_CLASS(ADehackedPickup)))
 	{
@@ -3355,8 +3453,7 @@ CVAR(Int, sv_dropstyle, 0, CVAR_SERVERINFO | CVAR_ARCHIVE);
 AInventory *P_DropItem (AActor *source, const PClass *type, int dropamount, int chance)
 {
 	// [BC] This is handled server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( NULL );
 	}
@@ -3404,6 +3501,7 @@ AInventory *P_DropItem (AActor *source, const PClass *type, int dropamount, int 
 			{
 				AInventory * inv = static_cast<AInventory *>(mo);
 				ModifyDropAmount(inv, dropamount);
+				inv->ItemFlags |= IF_TOSSED;
 
 				// [BB] Now that the ammo amount from weapon pickups is handled on the server
 				// this shouldn't be necessary anymore. Remove after thorough testing.
@@ -3412,6 +3510,8 @@ AInventory *P_DropItem (AActor *source, const PClass *type, int dropamount, int 
 				//	SERVERCOMMANDS_SetWeaponAmmoGive( mo );
 				if (inv->SpecialDropAction (source))
 				{
+					// The special action indicates that the item should not spawn
+					inv->Destroy();
 					return NULL;
 				}
 				return inv;
@@ -3437,12 +3537,20 @@ void P_TossItem (AActor *item)
 	{
 		item->velx += pr_dropitem.Random2(7) << FRACBITS;
 		item->vely += pr_dropitem.Random2(7) << FRACBITS;
+
+		// [EP] The server should inform the clients having enough bandwidth.
+		if ( NETWORK_GetState() == NETSTATE_SERVER )
+			SERVERCOMMANDS_MoveThingExact( item, CM_VELX|CM_VELY, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_1 );
 	}
 	else
 	{
 		item->velx = pr_dropitem.Random2() << 8;
 		item->vely = pr_dropitem.Random2() << 8;
 		item->velz = FRACUNIT*5 + (pr_dropitem() << 10);
+
+		// [EP] The server should inform the clients having enough bandwidth.
+		if ( NETWORK_GetState() == NETSTATE_SERVER )
+			SERVERCOMMANDS_MoveThingExact( item, CM_VELX|CM_VELY|CM_VELZ, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_1 );
 	}
 }
 
@@ -3497,8 +3605,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Die)
 	ACTION_PARAM_START(1);
 	ACTION_PARAM_NAME(damagetype, 0);
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -3515,14 +3622,13 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Die)
 DEFINE_ACTION_FUNCTION(AActor, A_Detonate)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
 	int damage = self->GetMissileDamage (0, 1);
-	P_RadiusAttack (self, self->target, damage, damage, self->DamageType, true);
+	P_RadiusAttack (self, self->target, damage, damage, self->DamageType, RADF_HURTSOURCE);
 	P_CheckSplash(self, damage<<FRACBITS);
 
 	// [BC] If this explosion originated from a player, and it hit something, give the player
@@ -3577,8 +3683,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BossDeath)
 	FName mytype = self->GetClass()->TypeName;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -3600,7 +3705,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BossDeath)
 			}
 			checked = true;
 
-			LineSpecials[sa->Action](NULL, self, false, 
+			P_ExecuteSpecial(sa->Action, NULL, self, false, 
 				sa->Args[0], sa->Args[1], sa->Args[2], sa->Args[3], sa->Args[4]);
 		}
 	}
@@ -3701,8 +3806,7 @@ int P_Massacre ()
 	TThinkerIterator<AActor> iterator;
 
 	// [BC] This is handled server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( 0 );
 	}
@@ -3761,8 +3865,7 @@ bool A_RaiseMobj (AActor *actor, fixed_t speed)
 DEFINE_ACTION_FUNCTION(AActor, A_ClassBossHealth)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

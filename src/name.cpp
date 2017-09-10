@@ -35,6 +35,7 @@
 #include <string.h>
 #include "name.h"
 #include "c_dispatch.h"
+#include "c_console.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -65,6 +66,7 @@ struct FName::NameManager::NameBlock
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
 FName::NameManager FName::NameData;
+bool FName::NameManager::Inited;
 
 // Define the predefined names.
 static const char *PredefinedNames[] =
@@ -266,6 +268,8 @@ FName::NameManager::~NameManager()
 {
 	NameBlock *block, *next;
 
+	C_ClearTabCommands();
+
 	for (block = Blocks; block != NULL; block = next)
 	{
 		next = block->NextBlock;
@@ -280,4 +284,15 @@ FName::NameManager::~NameManager()
 	}
 	NumNames = MaxNames = 0;
 	memset (Buckets, -1, sizeof(Buckets));
+}
+
+//==========================================================================
+//
+// [TP] FName :: IsPredefined
+//
+//==========================================================================
+
+bool FName::IsPredefined() const
+{
+	return static_cast<unsigned>( Index ) < countof( PredefinedNames );
 }

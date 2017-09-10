@@ -1,5 +1,7 @@
 cmake_minimum_required( VERSION 2.4 )
 
+make_release_only()
+
 include( CheckFunctionExists )
 include( CheckCXXCompilerFlag )
 
@@ -12,9 +14,9 @@ endif( NOT CMAKE_BUILD_TYPE MATCHES "Release" )
 
 set( CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -D_DEBUG -DDEBUGMODE=1" )
 
-if( CMAKE_COMPILER_IS_GNUC )
+if( "${CMAKE_C_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_C_COMPILER_ID}" STREQUAL "Clang" )
 	set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wno-pointer-sign -Wno-uninitialized" )
-endif( CMAKE_COMPILER_IS_GNUC )
+endif( "${CMAKE_C_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_C_COMPILER_ID}" STREQUAL "Clang" )
 
 CHECK_FUNCTION_EXISTS( itoa ITOA_EXISTS )
 if( NOT ITOA_EXISTS )
@@ -37,6 +39,7 @@ add_library( dumb
     src/core/rendsig.c
     src/core/unload.c
     src/helpers/barray.c
+    src/helpers/blip_buf.c
     src/helpers/clickrem.c
     src/helpers/memfile.c
     src/helpers/resample.c
@@ -44,7 +47,6 @@ add_library( dumb
     src/helpers/sampbuf.c
     src/helpers/silence.c
     src/helpers/stdfile.c
-    src/it/filter.cpp
     src/it/itload.c
     src/it/itload2.c
     src/it/itmisc.c
@@ -61,6 +63,8 @@ add_library( dumb
     src/it/loadmod2.c
     src/it/loadmtm.c
     src/it/loadmtm2.c
+    src/it/loadokt.c
+    src/it/loadokt2.c
     src/it/loadoldpsm.c
     src/it/loadoldpsm2.c
     src/it/loadpsm.c
@@ -84,6 +88,8 @@ add_library( dumb
     src/it/readmod.c
     src/it/readmod2.c
     src/it/readmtm.c
+    src/it/readokt.c
+    src/it/readokt2.c
     src/it/readoldpsm.c
     src/it/readpsm.c
     src/it/readptm.c
@@ -97,10 +103,10 @@ add_library( dumb
     src/it/xmeffect.c )
 target_link_libraries( dumb )
 
-if( CMAKE_COMPILER_IS_GNUCXX )
+if( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )
 	CHECK_CXX_COMPILER_FLAG( -msse DUMB_CAN_USE_SSE )
 
 	if( DUMB_CAN_USE_SSE )
 		set_source_files_properties( src/it/filter.cpp PROPERTIES COMPILE_FLAGS -msse )
 	endif( DUMB_CAN_USE_SSE )
-endif( CMAKE_COMPILER_IS_GNUCXX )
+endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" )

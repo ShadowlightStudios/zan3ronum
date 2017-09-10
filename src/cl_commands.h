@@ -51,8 +51,20 @@
 #ifndef __CL_COMMANDS_H__
 #define __CL_COMMANDS_H__
 
+#include <set>
 #include "doomtype.h"
 #include "a_pickups.h"
+
+// [TP] UserInfoChanges is a set of cvar names, ordered such that built-in cvars are listed
+// before any mod ones. This ensures that, in the event that the client needs to split the
+// userinfo command into multiple packets, the built-in cvars are guaranteed to go in the
+// first one. The server expects the first packet to contain all built-in cvars.
+struct UserInfoSortingFunction
+{
+	bool operator()( FName cvar1Name, FName cvar2Name ) const;
+};
+
+typedef std::set<FName, UserInfoSortingFunction> UserInfoChanges;
 
 //*****************************************************************************
 //	PROTOTYPES
@@ -61,7 +73,8 @@ void	CLIENT_ResetFloodTimers( void );
 void	CLIENT_IgnoreWeaponSelect( bool bIgnore );
 bool	CLIENT_GetIgnoreWeaponSelect( void );
 bool	CLIENT_AllowSVCheatMessage( void );
-void	CLIENTCOMMANDS_UserInfo( ULONG ulFlags );
+void	CLIENTCOMMANDS_UserInfo( const UserInfoChanges &cvars );
+void	CLIENTCOMMANDS_SendAllUserInfo();
 void	CLIENTCOMMANDS_StartChat( void );
 void	CLIENTCOMMANDS_EndChat( void );
 void	CLIENTCOMMANDS_Say( ULONG ulMode, const char *pszString );
@@ -73,13 +86,14 @@ void	CLIENTCOMMANDS_WeaponSelect( const PClass *pType );
 void	CLIENTCOMMANDS_Taunt( void );
 void	CLIENTCOMMANDS_Spectate( void );
 void	CLIENTCOMMANDS_RequestJoin( const char *pszJoinPassword );
-void	CLIENTCOMMANDS_RequestRCON( char *pszRCONPassword );
-void	CLIENTCOMMANDS_RCONCommand( char *pszCommand );
+void	CLIENTCOMMANDS_RequestRCON( const char *pszRCONPassword );
+void	CLIENTCOMMANDS_RCONCommand( const char *pszCommand );
 void	CLIENTCOMMANDS_Suicide( void );
 void	CLIENTCOMMANDS_ChangeTeam( const char *pszJoinPassword, LONG lDesiredTeam );
 void	CLIENTCOMMANDS_SpectateInfo( void );
 void	CLIENTCOMMANDS_GenericCheat( LONG lCheat );
 void	CLIENTCOMMANDS_GiveCheat( char *pszItem, LONG lAmount );
+void	CLIENTCOMMANDS_TakeCheat( const char *item, LONG amount );
 void	CLIENTCOMMANDS_SummonCheat( const char *pszItem, LONG lType, const bool bSetAngle, const SHORT sAngle );
 void	CLIENTCOMMANDS_ReadyToGoOn( void );
 void	CLIENTCOMMANDS_ChangeDisplayPlayer( LONG lDisplayPlayer );
@@ -92,9 +106,14 @@ void	CLIENTCOMMANDS_RequestInventoryUse( AInventory *item );
 void	CLIENTCOMMANDS_RequestInventoryDrop( AInventory *pItem );
 void	CLIENTCOMMANDS_EnterConsole( void );
 void	CLIENTCOMMANDS_ExitConsole( void );
-void	CLIENTCOMMANDS_Puke ( LONG lScript, int args[3] );
+void	CLIENTCOMMANDS_Puke ( int script, int args[4], bool always );
 void	CLIENTCOMMANDS_MorphCheat ( const char *pszMorphClass );
 void	CLIENTCOMMANDS_FullUpdateReceived ( void );
 void	CLIENTCOMMANDS_InfoCheat( AActor* mobj, bool extended );
+void	CLIENTCOMMANDS_WarpCheat( fixed_t x, fixed_t y );
+void	CLIENTCOMMANDS_KillCheat( const char* what );
+void	CLIENTCOMMANDS_SpecialCheat( int special, const TArray<int>& args );
+void	CLIENTCOMMANDS_SetWantHideAccount( bool wantHideCountry );
+void	CLIENTCOMMANDS_SetVideoResolution();
 
 #endif	// __CL_COMMANDS_H__

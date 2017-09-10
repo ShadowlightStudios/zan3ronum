@@ -32,7 +32,6 @@
 #include "w_wad.h"
 #include "g_game.h"
 #include "g_level.h"
-#include "r_local.h"
 #include "s_sound.h"
 #include "doomstat.h"
 #include "v_video.h"
@@ -45,8 +44,13 @@
 #include "sc_man.h"
 #include "v_text.h"
 #include "gi.h"
-#include "r_translate.h"
+#include "d_player.h"
+// [BB]
+//#include "b_bot.h"
+#include "textures/textures.h"
+#include "r_data/r_translate.h"
 #include "templates.h"
+#include "gstrings.h"
 // [BB] New #includes.
 #include "campaign.h"
 #include "cl_demo.h"
@@ -69,7 +73,7 @@ typedef enum
 
 CVAR (Bool, wi_percents, true, CVAR_ARCHIVE)
 CVAR (Bool, wi_showtotaltime, true, CVAR_ARCHIVE)
-CVAR (Bool, wi_noautostartmap, false, CVAR_ARCHIVE)
+CVAR (Bool, wi_noautostartmap, false, CVAR_USERINFO|CVAR_UNSYNCED_USERINFO|CVAR_ARCHIVE) // [TP] This CVar is not supported online and is thus not synced online. (Maybe we should just remove it entirely)
 CVAR (Int, wi_autoscreenshot, false, CVAR_ARCHIVE) // [CK]
 
 
@@ -90,7 +94,7 @@ void WI_unloadData ();
 
 // NET GAME STUFF
 #define NG_STATSY				50
-#define NG_STATSX				(32 + star->GetWidth()/2 + 32*!dofrags)
+#define NG_STATSX				(32 + star->GetScaledWidth()/2 + 32*!dofrags)
 
 #define NG_SPACINGX 			64
 
@@ -229,10 +233,39 @@ static	LONG			g_lStopWatch;
 //		GRAPHICS
 //
 
+struct FPatchInfo
+{
+	FFont *mFont;
+	FTexture *mPatch;
+	EColorRange mColor;
+
+	void Init(FGIFont &gifont)
+	{
+		if (gifont.color == NAME_Null)
+		{
+			mPatch = TexMan[gifont.fontname];	// "entering"
+			mColor = mPatch == NULL? CR_UNTRANSLATED : CR_UNDEFINED;
+			mFont = NULL;
+		}
+		else
+		{
+			mFont = V_GetFont(gifont.fontname);
+			mColor = V_FindFontColor(gifont.color);
+			mPatch = NULL;
+		}
+		if (mFont == NULL)
+		{
+			mFont = BigFont;
+		}
+	}
+};
+
+static FPatchInfo mapname;
+static FPatchInfo finished;
+static FPatchInfo entering;
+
 static TArray<FTexture *> yah; 		// You Are Here graphic
 static FTexture* 		splat;		// splat
-static FTexture* 		finished;	// "Finished!" graphics
-static FTexture* 		entering;	// "Entering" graphic
 static FTexture* 		sp_secret;	// "secret"
 static FTexture* 		kills;		// "Kills", "Scrt", "Items", "Frags"
 static FTexture* 		secret;
@@ -244,8 +277,8 @@ static FTexture* 		sucks;
 static FTexture* 		killers;	// "killers", "victims"
 static FTexture* 		victims;
 static FTexture* 		total;		// "Total", your face, your dead face
-static FTexture* 		star;
-static FTexture* 		bstar;
+//static FTexture* 		star;
+//static FTexture* 		bstar;
 static FTexture* 		p;			// Player graphic
 static FTexture*		lnames[2];	// Name graphics of each level (centered)
 
@@ -322,11 +355,11 @@ ULONG WI_CalcRank( void )
 	if ( deathmatch == false )
 		return ( 2 );
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		// In teamplay deathmatch, go by the team's score to determine what this player's
 		// rank is.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 		{
 			// Not being on a team in teamplay is an automatic loss!
 			if ( players[consoleplayer].bOnTeam == false )
@@ -340,7 +373,7 @@ ULONG WI_CalcRank( void )
 
 		// In team LMS, go by the team's wins to determine what this player's
 		// rank is.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		{
 			// Not being on a team in teamplay is an automatic loss!
 			if ( players[consoleplayer].bOnTeam == false )
@@ -354,7 +387,7 @@ ULONG WI_CalcRank( void )
 
 		// In team possession, go by the team's points to determine what this player's
 		// rank is.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		{
 			// Not being on a team in teamplay is an automatic loss!
 			if ( players[consoleplayer].bOnTeam == false )
@@ -380,13 +413,13 @@ ULONG WI_CalcRank( void )
 		}
 
 		// In LMS, use wins to determine the player's score.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		{
 			if ( players[ulIdx].ulWins > players[consoleplayer].ulWins )
 				ulRank++;
 		}
 		// In possession, use points to determine the player's score.
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		{
 			if ( players[ulIdx].lPointCount > players[consoleplayer].lPointCount )
 				ulRank++;
@@ -758,8 +791,8 @@ void WI_drawBackground()
 			// scale all animations below to fit the size of the base pic
 			// The base pic is always scaled to fit the screen so this allows
 			// placing the animations precisely where they belong on the base pic
-			animwidth = background->GetScaledWidth();
-			animheight = background->GetScaledHeight();
+			animwidth = background->GetScaledWidthDouble();
+			animheight = background->GetScaledHeightDouble();
 			screen->FillBorder (NULL);
 			screen->DrawTexture(background, 0, 0, DTA_Fullscreen, true, TAG_DONE);
 		}
@@ -839,6 +872,41 @@ static int WI_DrawCharPatch (FFont *font, int charcode, int x, int y, EColorRang
 	return x - width;
 }
 
+//====================================================================
+//
+// CheckRealHeight
+//
+// Checks the posts in a texture and returns the lowest row (plus one)
+// of the texture that is actually used.
+//
+//====================================================================
+
+int CheckRealHeight(FTexture *tex)
+{
+	const FTexture::Span *span;
+	int maxy = 0, miny = tex->GetHeight();
+
+	for (int i = 0; i < tex->GetWidth(); ++i)
+	{
+		tex->GetColumn(i, &span);
+		while (span->Length != 0)
+		{
+			if (span->TopOffset < miny)
+			{
+				miny = span->TopOffset;
+			}
+			if (span->TopOffset + span->Length > maxy)
+			{
+				maxy = span->TopOffset + span->Length;
+			}
+			span++;
+		}
+	}
+	// Scale maxy before returning it
+	maxy = (maxy << 17) / tex->yScale;
+	maxy = (maxy >> 1) + (maxy & 1);
+	return maxy;
+}
 
 //====================================================================
 //
@@ -849,34 +917,73 @@ static int WI_DrawCharPatch (FFont *font, int charcode, int x, int y, EColorRang
 //
 //====================================================================
 
-int WI_DrawName(int y, const char *levelname)
+int WI_DrawName(int y, FTexture *tex, const char *levelname)
 {
-	int i;
-	size_t l;
-	const char *p;
-	int h = 0;
-	int lumph;
-
-	lumph = BigFont->GetHeight() * CleanYfac;
-
-	p = levelname;
-	if (!p) return 0;
-	l = strlen(p);
-	if (!l) return 0;
-
-	FBrokenLines *lines = V_BreakLines(BigFont, screen->GetWidth() / CleanXfac, p);
-
-	if (lines)
+	// draw <LevelName> 
+	if (tex)
 	{
-		for (i = 0; lines[i].Width >= 0; i++)
-		{
-			screen->DrawText(BigFont, CR_UNTRANSLATED, (SCREENWIDTH - lines[i].Width * CleanXfac) / 2, y + h, 
-				lines[i].Text, DTA_CleanNoMove, true, TAG_DONE);
-			h += lumph;
+		screen->DrawTexture(tex, (screen->GetWidth() - tex->GetScaledWidth()*CleanXfac) /2, y, DTA_CleanNoMove, true, TAG_DONE);
+		int h = tex->GetScaledHeight();
+		if (h > 50)
+		{ // Fix for Deus Vult II and similar wads that decide to make these hugely tall
+		  // patches with vast amounts of empty space at the bottom.
+			h = CheckRealHeight(tex);
 		}
-		V_FreeBrokenLines(lines);
+		return y + (h + BigFont->GetHeight()/4) * CleanYfac;
 	}
-	return h + lumph/4;
+	else 
+	{
+		int i;
+		size_t l;
+		const char *p;
+		int h = 0;
+		int lumph;
+
+		lumph = mapname.mFont->GetHeight() * CleanYfac;
+
+		p = levelname;
+		if (!p) return 0;
+		l = strlen(p);
+		if (!l) return 0;
+
+		FBrokenLines *lines = V_BreakLines(mapname.mFont, screen->GetWidth() / CleanXfac, p);
+
+		if (lines)
+		{
+			for (i = 0; lines[i].Width >= 0; i++)
+			{
+				screen->DrawText(mapname.mFont, mapname.mColor, (SCREENWIDTH - lines[i].Width * CleanXfac) / 2, y + h, 
+					lines[i].Text, DTA_CleanNoMove, true, TAG_DONE);
+				h += lumph;
+			}
+			V_FreeBrokenLines(lines);
+		}
+		return y + h + lumph/4;
+	}
+}
+
+//====================================================================
+//
+// Draws a text, either as patch or as string from the string table
+//
+//====================================================================
+
+int WI_DrawPatchText(int y, FPatchInfo *pinfo, const char *stringname)
+{
+	const char *string = GStrings(stringname);
+	int midx = screen->GetWidth() / 2;
+
+	if (pinfo->mPatch != NULL)
+	{
+		screen->DrawTexture(pinfo->mPatch, midx - pinfo->mPatch->GetScaledWidth()*CleanXfac/2, y, DTA_CleanNoMove, true, TAG_DONE);
+		return y + (pinfo->mPatch->GetScaledHeight() * CleanYfac);
+	}
+	else 
+	{
+		screen->DrawText(pinfo->mFont, pinfo->mColor, midx - pinfo->mFont->StringWidth(string)*CleanXfac/2,
+			y, string, DTA_CleanNoMove, true, TAG_DONE);
+		return y + pinfo->mFont->GetHeight() * CleanYfac;
+	}
 }
 
 
@@ -888,41 +995,21 @@ int WI_DrawName(int y, const char *levelname)
 // A level name patch can be specified for all games now, not just Doom.
 //
 //====================================================================
+
 int WI_drawLF ()
 {
 	int y = WI_TITLEY * CleanYfac;
-	int midx = screen->GetWidth() / 2;
 
-	FTexture *tex = wbs->LName0;
+	y = WI_DrawName(y, wbs->LName0, lnametexts[0]);
 	
-	// draw <LevelName> 
-	if (tex)
-	{
-		screen->DrawTexture(tex, midx - tex->GetWidth()*CleanXfac/2, y, DTA_CleanNoMove, true, TAG_DONE);
-		y += (tex->GetHeight() + BigFont->GetHeight()/4) * CleanYfac;
-	}
-	else 
-	{
-		y += WI_DrawName(y, lnametexts[0]);
-	}
-	
+	// Adjustment for different font sizes for map name and 'finished'.
+	y -= ((mapname.mFont->GetHeight() - finished.mFont->GetHeight()) * CleanYfac) / 4;
+
 	// draw "Finished!"
-	FFont *font = gameinfo.gametype & GAME_Raven ? SmallFont : BigFont;
-	if (y < (NG_STATSY - font->GetHeight()*3/4) * CleanYfac)
+	if (y < (NG_STATSY - finished.mFont->GetHeight()*3/4) * CleanYfac)
 	{
-		// don't draw 'finished' if the level name is too high!
-		if (gameinfo.gametype & GAME_DoomChex) 
-		{
-			screen->DrawTexture(finished, midx - finished->GetWidth()*CleanXfac/2, y, DTA_CleanNoMove, true, TAG_DONE);
-			return y + finished->GetHeight() * CleanYfac;
-		}
-		else 
-		{
-			screen->DrawText(font, CR_WHITE,
-				midx - font->StringWidth("finished")*CleanXfac/2, y - 4*CleanYfac, "finished", 
-				DTA_CleanNoMove, true, TAG_DONE);
-			return y + font->GetHeight() * CleanYfac;
-		}
+		// don't draw 'finished' if the level name is too tall
+		y = WI_DrawPatchText(y, &finished, "WI_FINISHED");
 	}
 	return y;
 }
@@ -936,36 +1023,14 @@ int WI_drawLF ()
 // A level name patch can be specified for all games now, not just Doom.
 //
 //====================================================================
+
 void WI_drawEL ()
 {
 	int y = WI_TITLEY * CleanYfac;
-	FFont *font = gameinfo.gametype & GAME_Raven ? SmallFont : BigFont;
 
-	// draw "entering"
-	// be careful with the added height so that it works for oversized 'entering' patches!
-	if (gameinfo.gametype & GAME_DoomChex)
-	{
-		screen->DrawTexture(entering, (SCREENWIDTH - entering->GetWidth() * CleanXfac) / 2, y, DTA_CleanNoMove, true, TAG_DONE);
-		y += (entering->GetHeight() + font->GetHeight()/4) * CleanYfac;
-	}
-	else
-	{
-		screen->DrawText(font, CR_WHITE,
-			(SCREENWIDTH - font->StringWidth("now entering:") * CleanXfac) / 2, y, 
-			"now entering:", DTA_CleanNoMove, true, TAG_DONE);
-		y += font->GetHeight()*5*CleanYfac/4;
-	}
-
-	// draw <LevelName>
-	FTexture *tex = wbs->LName1;
-	if (tex)
-	{
-		screen->DrawTexture(tex, (SCREENWIDTH - tex->GetWidth() * CleanXfac) / 2, y, DTA_CleanNoMove, true, TAG_DONE);
-	}
-	else
-	{
-		WI_DrawName(y, lnametexts[1]);
-	}
+	y = WI_DrawPatchText(y, &entering, "WI_ENTERING");
+	y += entering.mFont->GetHeight() * CleanYfac / 4;
+	WI_DrawName(y, wbs->LName1, lnametexts[1]);
 }
 
 
@@ -1005,10 +1070,10 @@ void WI_drawOnLnode( int   n, FTexture * c[] ,int numc)
 		int            bottom;
 
 
-		right = c[i]->GetWidth();
-		bottom = c[i]->GetHeight();
-		left = lnodes[n].x - c[i]->LeftOffset;
-		top = lnodes[n].y - c[i]->TopOffset;
+		right = c[i]->GetScaledWidth();
+		bottom = c[i]->GetScaledHeight();
+		left = lnodes[n].x - c[i]->GetScaledLeftOffset();
+		top = lnodes[n].y - c[i]->GetScaledTopOffset();
 		right += left;
 		bottom += top;
 		
@@ -1132,7 +1197,7 @@ void WI_drawTime (int x, int y, int t, bool no_sucks=false)
 	{ // "sucks"
 		if (sucks != NULL)
 		{
-			screen->DrawTexture (sucks, x - sucks->GetWidth(), y - IntermissionFont->GetHeight() - 2,
+			screen->DrawTexture (sucks, x - sucks->GetScaledWidth(), y - IntermissionFont->GetHeight() - 2,
 				DTA_Clean, true, TAG_DONE); 
 		}
 		else
@@ -1187,11 +1252,28 @@ void WI_updateNoState ()
 {
 	WI_updateAnimatedBack();
 
+	if (acceleratestage)
+	{
+		cnt = 0;
+	}
+	else
+	{
+		bool noauto = noautostartmap;
 
-	if (!wi_noautostartmap && !noautostartmap) cnt--;
-	if (acceleratestage) cnt=0;
+		for (int i = 0; !noauto && i < MAXPLAYERS; ++i)
+		{
+			if (playeringame[i])
+			{
+				noauto |= players[i].userinfo.GetNoAutostartMap();
+			}
+		}
+		if (!noauto)
+		{
+			cnt--;
+		}
+	}
 
-	if (cnt==0)
+	if (cnt == 0)
 	{
 		WI_End();
 		G_WorldDone();
@@ -1514,9 +1596,9 @@ void WI_UpdateCampaignStats( void )
 				cnt_Rank = WI_CalcRank( );
 		}
 
-		if ( cnt_NumPlayers >= static_cast<signed> ((( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) ? 2 : SERVER_CalcNumPlayers( ))))
+		if ( cnt_NumPlayers >= static_cast<signed> ((( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) ? 2 : SERVER_CalcNumPlayers( ))))
 		{
-			cnt_NumPlayers = (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) ? 2 : SERVER_CalcNumPlayers( ));
+			cnt_NumPlayers = (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) ? 2 : SERVER_CalcNumPlayers( ));
 			S_Sound( CHAN_VOICE, "intermission/nextstage", 1, ATTN_NONE );
 			cp_state++;
 		}
@@ -1576,17 +1658,17 @@ void WI_DrawCampaignStats (void)
 	WI_drawBackground(); 
 	WI_drawLF();
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 	{
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY, "WINS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY+lh, "FRAGS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
 	}
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 	{
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY, "POINTS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY+lh, "FRAGS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
 	}
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 	{
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY, "FRAGS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
 		screen->DrawText (BigFont, CR_RED, SP_STATSX, SP_STATSY+lh, "DEATHS", DTA_Clean, true, DTA_Shadow, true, TAG_DONE);
@@ -1616,7 +1698,7 @@ void WI_DrawCampaignStats (void)
 
 		if ( cp_state >= 7 )
 		{
-			if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			{
 				if ( CAMPAIGN_DidPlayerBeatMap( ))
 					sprintf( szString, "YOU WIN!" );
@@ -2071,14 +2153,14 @@ void WI_drawNetgameStats ()
 {
 	// [BC] We're not using these.
 	/*
-	int i, x, y, height;
-	int maxnamewidth, maxscorewidth;
+	int i, x, y, ypadding, height, lineheight;
+	int maxnamewidth, maxscorewidth, maxiconheight;
 	int pwidth = IntermissionFont->GetCharWidth('%');
 	int icon_x, name_x, kills_x, bonus_x, secret_x;
 	int bonus_len, secret_len;
 	int missed_kills, missed_items, missed_secrets;
 	EColorRange color;
-	const char *bonus_label;
+	const char *text_bonus, *text_color, *text_secret, *text_kills;
 	*/
 
 	// draw animated background
@@ -2089,16 +2171,22 @@ void WI_drawNetgameStats ()
 	// [BC] In cooperative mode, just draw the scoreboard.
 	SCOREBOARD_RenderBoard( me );
 /*
-	HU_GetPlayerWidths(maxnamewidth, maxscorewidth);
+	HU_GetPlayerWidths(maxnamewidth, maxscorewidth, maxiconheight);
 	height = SmallFont->GetHeight() * CleanYfac;
+	lineheight = MAX(height, maxiconheight * CleanYfac);
+	ypadding = (lineheight - height + 1) / 2;
 	y += 16*CleanYfac;
 
-	bonus_label = (gameinfo.gametype & GAME_Raven) ? "BONUS" : "ITEMS";
-	icon_x = (SmallFont->StringWidth("COLOR") + 8) * CleanXfac;
+	text_bonus = GStrings((gameinfo.gametype & GAME_Raven) ? "SCORE_BONUS" : "SCORE_ITEMS");
+	text_color = GStrings("SCORE_COLOR");
+	text_secret = GStrings("SCORE_SECRET");
+	text_kills = GStrings("SCORE_KILLS");
+
+	icon_x = (SmallFont->StringWidth(text_color) + 8) * CleanXfac;
 	name_x = icon_x + maxscorewidth * CleanXfac;
-	kills_x = name_x + (maxnamewidth + SmallFont->StringWidth("XXXXX") + 8) * CleanXfac;
-	bonus_x = kills_x + ((bonus_len = SmallFont->StringWidth(bonus_label)) + 8) * CleanXfac;
-	secret_x = bonus_x + ((secret_len = SmallFont->StringWidth("SECRET")) + 8) * CleanXfac;
+	kills_x = name_x + (maxnamewidth + MAX(SmallFont->StringWidth("XXXXX"), SmallFont->StringWidth(text_kills)) + 8) * CleanXfac;
+	bonus_x = kills_x + ((bonus_len = SmallFont->StringWidth(text_bonus)) + 8) * CleanXfac;
+	secret_x = bonus_x + ((secret_len = SmallFont->StringWidth(text_secret)) + 8) * CleanXfac;
 
 	x = (SCREENWIDTH - secret_x) >> 1;
 	icon_x += x;
@@ -2109,11 +2197,11 @@ void WI_drawNetgameStats ()
 
 	color = (gameinfo.gametype & GAME_Raven) ? CR_GREEN : CR_UNTRANSLATED;
 
-	screen->DrawText(SmallFont, color, x, y, "COLOR", DTA_CleanNoMove, true, TAG_DONE);
-	screen->DrawText(SmallFont, color, name_x, y, "NAME", DTA_CleanNoMove, true, TAG_DONE);
-	screen->DrawText(SmallFont, color, kills_x - SmallFont->StringWidth("KILLS")*CleanXfac, y, "KILLS", DTA_CleanNoMove, true, TAG_DONE);
-	screen->DrawText(SmallFont, color, bonus_x - bonus_len*CleanXfac, y, bonus_label, DTA_CleanNoMove, true, TAG_DONE);
-	screen->DrawText(SmallFont, color, secret_x - secret_len*CleanXfac, y, "SECRET", DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, x, y, text_color, DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, name_x, y, GStrings("SCORE_NAME"), DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, kills_x - SmallFont->StringWidth(text_kills)*CleanXfac, y, text_kills, DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, bonus_x - bonus_len*CleanXfac, y, text_bonus, DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, secret_x - secret_len*CleanXfac, y, text_secret, DTA_CleanNoMove, true, TAG_DONE);
 	y += height + 6 * CleanYfac;
 
 	missed_kills = wbs->maxkills;
@@ -2129,32 +2217,32 @@ void WI_drawNetgameStats ()
 			continue;
 
 		player = &players[i];
-		HU_DrawColorBar(x, y, height, i);
+		HU_DrawColorBar(x, y, lineheight, i);
 		color = (EColorRange)HU_GetRowColor(player, i == consoleplayer);
 		if (player->mo->ScoreIcon.isValid())
 		{
 			FTexture *pic = TexMan[player->mo->ScoreIcon];
 			screen->DrawTexture(pic, icon_x, y, DTA_CleanNoMove, true, TAG_DONE);
 		}
-		screen->DrawText(SmallFont, color, name_x, y, player->userinfo.netname, DTA_CleanNoMove, true, TAG_DONE);
-		WI_drawPercent(SmallFont, kills_x, y, cnt_kills[i], wbs->maxkills, false, color);
+		screen->DrawText(SmallFont, color, name_x, y + ypadding, player->userinfo.GetName(), DTA_CleanNoMove, true, TAG_DONE);
+		WI_drawPercent(SmallFont, kills_x, y + ypadding, cnt_kills[i], wbs->maxkills, false, color);
 		missed_kills -= cnt_kills[i];
 		if (ng_state >= 4)
 		{
-			WI_drawPercent(SmallFont, bonus_x, y, cnt_items[i], wbs->maxitems, false, color);
+			WI_drawPercent(SmallFont, bonus_x, y + ypadding, cnt_items[i], wbs->maxitems, false, color);
 			missed_items -= cnt_items[i];
 			if (ng_state >= 6)
 			{
-				WI_drawPercent(SmallFont, secret_x, y, cnt_secret[i], wbs->maxsecret, false, color);
+				WI_drawPercent(SmallFont, secret_x, y + ypadding, cnt_secret[i], wbs->maxsecret, false, color);
 				missed_secrets -= cnt_secret[i];
 			}
 		}
-		y += height + CleanYfac;
+		y += lineheight + CleanYfac;
 	}
 
 	// Draw "MISSED" line
 	y += 5 * CleanYfac;
-	screen->DrawText(SmallFont, CR_DARKGRAY, name_x, y, "MISSED", DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, CR_DARKGRAY, name_x, y, GStrings("SCORE_MISSED"), DTA_CleanNoMove, true, TAG_DONE);
 	WI_drawPercent(SmallFont, kills_x, y, missed_kills, wbs->maxkills, false, CR_DARKGRAY);
 	if (ng_state >= 4)
 	{
@@ -2168,7 +2256,7 @@ void WI_drawNetgameStats ()
 	// Draw "TOTAL" line
 	y += height + 5 * CleanYfac;
 	color = (gameinfo.gametype & GAME_Raven) ? CR_GREEN : CR_UNTRANSLATED;
-	screen->DrawText(SmallFont, color, name_x, y, "TOTAL", DTA_CleanNoMove, true, TAG_DONE);
+	screen->DrawText(SmallFont, color, name_x, y, GStrings("SCORE_TOTAL"), DTA_CleanNoMove, true, TAG_DONE);
 	WI_drawNum(SmallFont, kills_x, y, wbs->maxkills, 0, false, color);
 	if (ng_state >= 4)
 	{
@@ -2408,8 +2496,7 @@ void WI_checkForAccelerate(void)
 	player_t *player;
 
 	// [BC] Clients can't check for accelerate.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -2496,7 +2583,7 @@ void WI_Ticker(void)
 		else if (level.info->InterMusic.IsNotEmpty()) 
 			S_ChangeMusic(level.info->InterMusic, level.info->intermusicorder);
 		else
-			S_ChangeMusic (gameinfo.intermissionMusic.GetChars()); 
+			S_ChangeMusic (gameinfo.intermissionMusic.GetChars(), gameinfo.intermissionOrder); 
 
 	}
 	
@@ -2528,16 +2615,19 @@ void WI_Ticker(void)
 	}
 }
 
+
 void WI_loadData(void)
 {
 	// [BC] There's no need for servers to do this.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		return;
 
+	entering.Init(gameinfo.mStatscreenEnteringFont);
+	finished.Init(gameinfo.mStatscreenFinishedFont);
+	mapname.Init(gameinfo.mStatscreenMapNameFont);
+
 	if (gameinfo.gametype & GAME_DoomChex)
 	{
-		finished = TexMan["WIF"];		// "finished"
-		entering = TexMan["WIENTER"];	// "entering"
 		kills = TexMan["WIOSTK"];		// "kills"
 		secret = TexMan["WIOSTS"];		// "scrt"
 		sp_secret = TexMan["WISCRT2"];	// "secret"
@@ -2549,10 +2639,11 @@ void WI_loadData(void)
 		killers = TexMan["WIKILRS"];	// "killers" (vertical]
 		victims = TexMan["WIVCTMS"];	// "victims" (horiz]
 		total = TexMan["WIMSTT"];		// "total"
-		star = TexMan["STFST01"];		// your face
-		bstar = TexMan["STFDEAD0"];		// dead face
+//		star = TexMan["STFST01"];		// your face
+//		bstar = TexMan["STFDEAD0"];		// dead face
  		p = TexMan["STPBANY"];
 	}
+#if 0
 	else if (gameinfo.gametype & GAME_Raven)
 	{
 		if (gameinfo.gametype == GAME_Heretic)
@@ -2571,6 +2662,7 @@ void WI_loadData(void)
 		star = BigFont->GetChar('*', NULL);
 		bstar = star;
 	}
+#endif
 
 	// Use the local level structure which can be overridden by hubs
 	lnametexts[0] = level.LevelName;		

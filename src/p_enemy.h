@@ -2,6 +2,7 @@
 #define __P_ENEMY_H__
 
 #include "thingdef/thingdef.h"
+#include "tables.h"
 
 struct sector_t;
 class AActor;
@@ -32,6 +33,7 @@ enum LO_Flags
 	LOF_DONTCHASEGOAL = 4,
 	LOF_NOSEESOUND = 8,
 	LOF_FULLVOLSEESOUND = 16,
+    LOF_NOJUMP = 32,
 };
 
 struct FLookExParams
@@ -45,9 +47,8 @@ struct FLookExParams
 };
 
 void P_DaggerAlert (AActor *target, AActor *emitter);
-void P_RecursiveSound (sector_t *sec, AActor *soundtarget, bool splash, int soundblocks);
 bool P_HitFriend (AActor *self);
-void P_NoiseAlert (AActor *target, AActor *emmiter, bool splash=false);
+void P_NoiseAlert (AActor *target, AActor *emmiter, bool splash=false, fixed_t maxdist=0);
 bool P_CheckMeleeRange2 (AActor *actor);
 bool P_Move (AActor *actor);
 bool P_TryWalk (AActor *actor);
@@ -56,7 +57,7 @@ AInventory *P_DropItem (AActor *source, const PClass *type, int special, int cha
 void P_TossItem (AActor *item);
 bool P_LookForPlayers (AActor *actor, INTBOOL allaround, FLookExParams *params);
 void A_Weave(AActor *self, int xyspeed, int zspeed, fixed_t xydist, fixed_t zdist);
-void A_Unblock(AActor *self, bool drop);
+void A_Unblock(AActor *self, bool drop, bool okforclients = false); // [EP] Added 'okforclients'.
 
 DECLARE_ACTION(A_Look)
 DECLARE_ACTION(A_Wander)
@@ -70,7 +71,7 @@ DECLARE_ACTION(A_FreezeDeathChunks)
 DECLARE_ACTION(A_BossDeath)
 
 void A_Chase(AActor *self);
-void A_FaceTarget (AActor *actor, angle_t max_turn = 0);
+void A_FaceTarget (AActor *actor, angle_t max_turn = 0, angle_t max_pitch = ANGLE_270);
 
 bool A_RaiseMobj (AActor *, fixed_t speed);
 bool A_SinkMobj (AActor *, fixed_t speed);

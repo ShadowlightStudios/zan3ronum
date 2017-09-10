@@ -3,7 +3,7 @@
 ** Code to let ZDoom use Direct3D 9 as a simple framebuffer
 **
 **---------------------------------------------------------------------------
-** Copyright 1998-2009 Randy Heit
+** Copyright 1998-2011 Randy Heit
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,8 @@
 ** just a means of getting the pixel data to the screen in a more reliable
 ** method on modern hardware by copying the entire frame to a texture,
 ** drawing that to the screen, and presenting.
+**
+** That said, it does implement hardware-accelerated 2D rendering.
 */
 
 // HEADER FILES ------------------------------------------------------------
@@ -62,13 +64,14 @@
 #include "stats.h"
 #include "doomerrors.h"
 #include "r_main.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "f_wipe.h"
-#include "st_stuff.h"
+#include "sbar.h"
 #include "win32iface.h"
 #include "doomstat.h"
 #include "v_palette.h"
 #include "w_wad.h"
+#include "r_data/colormaps.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -222,7 +225,8 @@ const char *const D3DFB::ShaderNames[D3DFB::NUM_SHADERS] =
 
 CUSTOM_CVAR(Bool, vid_hw2d, true, CVAR_NOINITCALL)
 {
-	BorderNeedRefresh = SB_state = screen->GetPageCount();
+	V_SetBorderNeedRefresh();
+	ST_SetNeedRefresh();
 }
 
 CVAR(Bool, d3d_antilag, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -278,7 +282,7 @@ D3DFB::D3DFB (UINT adapter, int width, int height, bool fullscreen)
 	GatheringWipeScreen = false;
 	ScreenWipe = NULL;
 	InScene = false;
-	QuadExtra = new BufferedQuad[MAX_QUAD_BATCH];
+	QuadExtra = new BufferedTris[MAX_QUAD_BATCH];
 	Packs = NULL;
 	PixelDoubling = 0;
 	SkipAt = -1;
@@ -1029,11 +1033,6 @@ bool D3DFB::IsFullscreen ()
 //
 //==========================================================================
 
-bool D3DFB::Lock ()
-{
-	return Lock(true);
-}
-
 bool D3DFB::Lock (bool buffered)
 {
 	if (LockCount++ > 0)
@@ -1186,6 +1185,7 @@ void D3DFB::Flip()
 {
 	assert(InScene);
 
+	DrawLetterbox();
 	DoWindowedGamma();
 	D3DDevice->EndScene();
 
@@ -1203,6 +1203,11 @@ void D3DFB::Flip()
 			dummy = *(int *)lr.pBits;
 			BlockSurface[BlockNum]->UnlockRect();
 		}
+	}
+	// Limiting the frame rate is as simple as waiting for the timer to signal this event.
+	if (FPSLimitEvent != NULL)
+	{
+		WaitForSingleObject(FPSLimitEvent, 1000);
 	}
 	D3DDevice->Present(NULL, NULL, NULL, NULL);
 	InScene = false;
@@ -1297,7 +1302,7 @@ void D3DFB::Draw3DPart(bool copy3d)
 			SUCCEEDED(FBTexture->LockRect (0, &lockrect, NULL, D3DLOCK_DISCARD))) ||
 			SUCCEEDED(FBTexture->LockRect (0, &lockrect, &texrect, 0)))
 		{
-			if (lockrect.Pitch == Pitch)
+			if (lockrect.Pitch == Pitch && Pitch == Width)
 			{
 				memcpy (lockrect.pBits, MemBuffer, Width * Height);
 			}
@@ -1315,7 +1320,6 @@ void D3DFB::Draw3DPart(bool copy3d)
 			FBTexture->UnlockRect (0);
 		}
 	}
-	DrawLetterbox();
 	InScene = true;
 	D3DDevice->BeginScene();
 	D3DDevice->SetRenderState(D3DRS_ANTIALIASEDLINEENABLE, vid_hwaalines);
@@ -1337,7 +1341,7 @@ void D3DFB::Draw3DPart(bool copy3d)
 		}
 	}
 
-	SetTexture (0, FBTexture);
+	SetTexture(0, FBTexture);
 	SetPaletteTexture(PaletteTexture, 256, BorderColor);
 	D3DDevice->SetFVF (D3DFVF_FBVERTEX);
 	memset(Constant, 0, sizeof(Constant));
@@ -1481,10 +1485,10 @@ void D3DFB::DoOffByOneCheck ()
 	float texbot = 1.f / float(FBHeight);
 	FBVERTEX verts[4] =
 	{
-		{ -0.5f,  -0.5f, 0.5f, 1.f, 0, ~0,      0.f,    0.f },
-		{ 255.5f, -0.5f, 0.5f, 1.f, 0, ~0, texright,    0.f },
-		{ 255.5f,  0.5f, 0.5f, 1.f, 0, ~0, texright, texbot },
-		{ -0.5f,   0.5f, 0.5f, 1.f, 0, ~0,      0.f, texbot }
+		{ -0.5f,  -0.5f, 0.5f, 1.f, D3DCOLOR_RGBA(0,0,0,0), D3DCOLOR_RGBA(255,255,255,255),      0.f,    0.f },
+		{ 255.5f, -0.5f, 0.5f, 1.f, D3DCOLOR_RGBA(0,0,0,0), D3DCOLOR_RGBA(255,255,255,255), texright,    0.f },
+		{ 255.5f,  0.5f, 0.5f, 1.f, D3DCOLOR_RGBA(0,0,0,0), D3DCOLOR_RGBA(255,255,255,255), texright, texbot },
+		{ -0.5f,   0.5f, 0.5f, 1.f, D3DCOLOR_RGBA(0,0,0,0), D3DCOLOR_RGBA(255,255,255,255),      0.f, texbot }
 	};
 	int i, c;
 
@@ -1865,7 +1869,7 @@ void D3DFB::DrawPackedTextures(int packnum)
 
 		CheckQuadBatch();
 
-		BufferedQuad *quad = &QuadExtra[QuadBatchPos];
+		BufferedTris *quad = &QuadExtra[QuadBatchPos];
 		FBVERTEX *vert = &VertexData[VertexPos];
 
 		quad->Group1 = 0;
@@ -1881,6 +1885,8 @@ void D3DFB::DrawPackedTextures(int packnum)
 		}
 		quad->Palette = NULL;
 		quad->Texture = pack->Tex;
+		quad->NumVerts = 4;
+		quad->NumTris = 2;
 
 		float x0 = float(x) - 0.5f;
 		float y0 = float(y) - 0.5f;
@@ -2132,7 +2138,7 @@ D3DFB::PackedTexture *D3DFB::PackingTexture::GetBestFit(int w, int h, int &area)
 // requested dimensions and adding additional boxes to the empty list if
 // needed.
 //
-// The passed box *MUST* be in this packing textures empty list.
+// The passed box *MUST* be in this packing texture's empty list.
 //
 //==========================================================================
 
@@ -2761,7 +2767,7 @@ void D3DFB::Clear (int left, int top, int right, int bottom, int palcolor, uint3
 	{
 		return;
 	}
-	if (palcolor >= 0)
+	if (palcolor >= 0 && color == 0)
 	{
 		color = GPalette.BaseColors[palcolor];
 	}
@@ -2964,6 +2970,8 @@ void STACK_ARGS D3DFB::DrawTextureV (FTexture *img, double x, double y, uint32 t
 	float v1 = tex->Box->Bottom;
 	double uscale = 1.f / tex->Box->Owner->Width;
 	bool scissoring = false;
+	FBVERTEX *vert;
+	float yoffs;
 
 	if (parms.flipX)
 	{
@@ -2976,6 +2984,7 @@ void STACK_ARGS D3DFB::DrawTextureV (FTexture *img, double x, double y, uint32 t
 		x1 -= (parms.texwidth - parms.windowright) * xscale;
 		u1 = float(u1 - (parms.texwidth - parms.windowright) * uscale);
 	}
+
 #if 0
 	float vscale = 1.f / tex->Box->Owner->Height / yscale;
 	if (y0 < parms.uclip)
@@ -3021,18 +3030,22 @@ void STACK_ARGS D3DFB::DrawTextureV (FTexture *img, double x, double y, uint32 t
 	parms.bilinear = false;
 
 	D3DCOLOR color0, color1;
-	if (!SetStyle(tex, parms, color0, color1, QuadExtra[QuadBatchPos]))
+	BufferedTris *quad = &QuadExtra[QuadBatchPos];
+
+	if (!SetStyle(tex, parms, color0, color1, *quad))
 	{
-		return;
+		goto done;
 	}
 
-	QuadExtra[QuadBatchPos].Texture = tex->Box->Owner->Tex;
+	quad->Texture = tex->Box->Owner->Tex;
 	if (parms.bilinear)
 	{
-		QuadExtra[QuadBatchPos].Flags |= BQF_Bilinear;
+		quad->Flags |= BQF_Bilinear;
 	}
+	quad->NumTris = 2;
+	quad->NumVerts = 4;
 
-	float yoffs = GatheringWipeScreen ? 0.5f : 0.5f - LBOffset;
+	yoffs = GatheringWipeScreen ? 0.5f : 0.5f - LBOffset;
 
 #if 0
 	// Coordinates are truncated to integers, because that's effectively
@@ -3049,7 +3062,7 @@ void STACK_ARGS D3DFB::DrawTextureV (FTexture *img, double x, double y, uint32 t
 	y1 = y1 - yoffs;
 #endif
 
-	FBVERTEX *vert = &VertexData[VertexPos];
+	vert = &VertexData[VertexPos];
 
 	// Fill the vertex buffer.
 	vert[0].x = float(x0);
@@ -3100,7 +3113,7 @@ void STACK_ARGS D3DFB::DrawTextureV (FTexture *img, double x, double y, uint32 t
 	QuadBatchPos++;
 	VertexPos += 4;
 	IndexPos += 6;
-
+done:
 	if (scissoring)
 	{
 		EndQuadBatch();
@@ -3152,22 +3165,24 @@ void D3DFB::FlatFill(int left, int top, int right, int bottom, FTexture *src, bo
 
 	CheckQuadBatch();
 
-	BufferedQuad *quad = &QuadExtra[QuadBatchPos];
+	BufferedTris *quad = &QuadExtra[QuadBatchPos];
 	FBVERTEX *vert = &VertexData[VertexPos];
 
 	quad->Group1 = 0;
 	if (tex->GetTexFormat() == D3DFMT_L8 && !tex->IsGray)
 	{
-		quad->Flags = BQF_WrapUV | BQF_GamePalette | BQF_DisableAlphaTest;
+		quad->Flags = BQF_WrapUV | BQF_GamePalette; // | BQF_DisableAlphaTest;
 		quad->ShaderNum = BQS_PalTex;
 	}
 	else
 	{
-		quad->Flags = BQF_WrapUV | BQF_DisableAlphaTest;
+		quad->Flags = BQF_WrapUV; // | BQF_DisableAlphaTest;
 		quad->ShaderNum = BQS_Plain;
 	}
 	quad->Palette = NULL;
 	quad->Texture = tex->Box->Owner->Tex;
+	quad->NumVerts = 4;
+	quad->NumTris = 2;
 
 	vert[0].x = x0;
 	vert[0].y = y0;
@@ -3219,6 +3234,128 @@ void D3DFB::FlatFill(int left, int top, int right, int bottom, FTexture *src, bo
 
 //==========================================================================
 //
+// D3DFB :: FillSimplePoly
+//
+// Here, "simple" means that a simple triangle fan can draw it.
+//
+//==========================================================================
+
+void D3DFB::FillSimplePoly(FTexture *texture, FVector2 *points, int npoints,
+	double originx, double originy, double scalex, double scaley,
+	angle_t rotation, FDynamicColormap *colormap, int lightlevel)
+{
+	// Use an equation similar to player sprites to determine shade
+	fixed_t shade = LIGHT2SHADE(lightlevel) - 12*FRACUNIT;
+	BufferedTris *quad;
+	FBVERTEX *verts;
+	D3DTex *tex;
+	float yoffs, uscale, vscale;
+	int i, ipos;
+	D3DCOLOR color0, color1;
+	float ox, oy;
+	float cosrot, sinrot;
+	float rot = float(rotation * M_PI / float(1u << 31));
+	bool dorotate = rot != 0;
+
+	if (npoints < 3)
+	{ // This is no polygon.
+		return;
+	}
+	if (In2D < 2)
+	{
+		Super::FillSimplePoly(texture, points, npoints, originx, originy, scalex, scaley, rotation, colormap, lightlevel);
+		return;
+	}
+	if (!InScene)
+	{
+		return;
+	}
+	tex = static_cast<D3DTex *>(texture->GetNative(true));
+	if (tex == NULL)
+	{
+		return;
+	}
+
+	cosrot = (float)cos(rot);
+	sinrot = (float)sin(rot);
+
+	CheckQuadBatch(npoints - 2, npoints);
+	quad = &QuadExtra[QuadBatchPos];
+	verts = &VertexData[VertexPos];
+
+	color0 = 0;
+	color1 = 0xFFFFFFFF;
+
+	quad->Group1 = 0;
+	if (tex->GetTexFormat() == D3DFMT_L8 && !tex->IsGray)
+	{
+		quad->Flags = BQF_WrapUV | BQF_GamePalette | BQF_DisableAlphaTest;
+		quad->ShaderNum = BQS_PalTex;
+		if (colormap != NULL)
+		{
+			if (colormap->Desaturate != 0)
+			{
+				quad->Flags |= BQF_Desaturated;
+			}
+			quad->ShaderNum = BQS_InGameColormap;
+			quad->Desat = colormap->Desaturate;
+			color0 = D3DCOLOR_ARGB(255, colormap->Color.r, colormap->Color.g, colormap->Color.b);
+			double fadelevel = clamp(shade / (NUMCOLORMAPS * 65536.0), 0.0, 1.0);
+			color1 = D3DCOLOR_ARGB(DWORD((1 - fadelevel) * 255),
+				DWORD(colormap->Fade.r * fadelevel),
+				DWORD(colormap->Fade.g * fadelevel),
+				DWORD(colormap->Fade.b * fadelevel));
+		}
+	}
+	else
+	{
+		quad->Flags = BQF_WrapUV | BQF_DisableAlphaTest;
+		quad->ShaderNum = BQS_Plain;
+	}
+	quad->Palette = NULL;
+	quad->Texture = tex->Box->Owner->Tex;
+	quad->NumVerts = npoints;
+	quad->NumTris = npoints - 2;
+
+	yoffs = GatheringWipeScreen ? 0 : LBOffset;
+	uscale = float(1.f / (texture->GetScaledWidth() * scalex));
+	vscale = float(1.f / (texture->GetScaledHeight() * scaley));
+	ox = float(originx);
+	oy = float(originy);
+
+	for (i = 0; i < npoints; ++i)
+	{
+		verts[i].x = points[i].X;
+		verts[i].y = points[i].Y + yoffs;
+		verts[i].z = 0;
+		verts[i].rhw = 1;
+		verts[i].color0 = color0;
+		verts[i].color1 = color1;
+		float u = points[i].X - 0.5f - ox;
+		float v = points[i].Y - 0.5f - oy;
+		if (dorotate)
+		{
+			float t = u;
+			u = t * cosrot - v * sinrot;
+			v = v * cosrot + t * sinrot;
+		}
+		verts[i].tu = u * uscale;
+		verts[i].tv = v * vscale;
+	}
+	for (ipos = IndexPos, i = 2; i < npoints; ++i, ipos += 3)
+	{
+		IndexData[ipos    ] = VertexPos;
+		IndexData[ipos + 1] = VertexPos + i - 1;
+		IndexData[ipos + 2] = VertexPos + i;
+	}
+
+	QuadBatchPos++;
+	VertexPos += npoints;
+	IndexPos = ipos;
+}
+
+//==========================================================================
+//
 // D3DFB :: AddColorOnlyQuad
 //
 // Adds a single-color, untextured quad to the batch.
@@ -3227,7 +3364,7 @@ void D3DFB::FlatFill(int left, int top, int right, int bottom, FTexture *src, bo
 
 void D3DFB::AddColorOnlyQuad(int left, int top, int width, int height, D3DCOLOR color)
 {
-	BufferedQuad *quad;
+	BufferedTris *quad;
 	FBVERTEX *verts;
 
 	CheckQuadBatch();
@@ -3247,6 +3384,8 @@ void D3DFB::AddColorOnlyQuad(int left, int top, int width, int height, D3DCOLOR 
 	}
 	quad->Palette = NULL;
 	quad->Texture = NULL;
+	quad->NumVerts = 4;
+	quad->NumTris = 2;
 
 	verts[0].x = x;
 	verts[0].y = y;
@@ -3300,17 +3439,19 @@ void D3DFB::AddColorOnlyQuad(int left, int top, int width, int height, D3DCOLOR 
 //
 // D3DFB :: CheckQuadBatch
 //
-// Make sure there's enough room in the batch for one more quad.
+// Make sure there's enough room in the batch for one more set of triangles.
 //
 //==========================================================================
 
-void D3DFB::CheckQuadBatch()
+void D3DFB::CheckQuadBatch(int numtris, int numverts)
 {
 	if (BatchType == BATCH_Lines)
 	{
 		EndLineBatch();
 	}
-	else if (QuadBatchPos == MAX_QUAD_BATCH)
+	else if (QuadBatchPos == MAX_QUAD_BATCH ||
+		VertexPos + numverts > NUM_VERTS ||
+		IndexPos + numtris * 3 > NUM_INDEXES)
 	{
 		EndQuadBatch();
 	}
@@ -3371,23 +3512,37 @@ void D3DFB::EndQuadBatch()
 	D3DDevice->SetIndices(IndexBuffer);
 	bool uv_wrapped = false;
 	bool uv_should_wrap;
+	int indexpos, vertpos;
 
+	indexpos = vertpos = 0;
 	for (int i = 0; i < QuadBatchPos; )
 	{
-		const BufferedQuad *quad = &QuadExtra[i];
+		const BufferedTris *quad = &QuadExtra[i];
 		int j;
+
+		int startindex = indexpos;
+		int startvertex = vertpos;
+
+		indexpos += quad->NumTris * 3;
+		vertpos += quad->NumVerts;
 
 		// Quads with matching parameters should be done with a single
 		// DrawPrimitive call.
 		for (j = i + 1; j < QuadBatchPos; ++j)
 		{
-			const BufferedQuad *q2 = &QuadExtra[j];
+			const BufferedTris *q2 = &QuadExtra[j];
 			if (quad->Texture != q2->Texture ||
 				quad->Group1 != q2->Group1 ||
 				quad->Palette != q2->Palette)
 			{
 				break;
 			}
+			if (quad->ShaderNum == BQS_InGameColormap && (quad->Flags & BQF_Desaturated) && quad->Desat != q2->Desat)
+			{
+				break;
+			}
+			indexpos += q2->NumTris * 3;
+			vertpos += q2->NumVerts;
 		}
 
 		// Set the palette (if one)
@@ -3397,6 +3552,7 @@ void D3DFB::EndQuadBatch()
 		}
 		else if ((quad->Flags & BQF_Paletted) == BQF_CustomPalette)
 		{
+			assert(quad->Palette != NULL);
 			SetPaletteTexture(quad->Palette->Tex, quad->Palette->RoundedPaletteSize, quad->Palette->BorderColor);
 		}
 #if 0
@@ -3447,6 +3603,10 @@ void D3DFB::EndQuadBatch()
 			select = !!(quad->Flags & BQF_Desaturated);
 			select |= !!(quad->Flags & BQF_InvertSource) << 1;
 			select |= !!(quad->Flags & BQF_Paletted) << 2;
+			if (quad->Flags & BQF_Desaturated)
+			{
+				SetConstant(PSCONST_Desaturation, quad->Desat / 255.f, (255 - quad->Desat) / 255.f, 0, 0);
+			}
 			SetPixelShader(Shaders[SHADER_InGameColormap + select]);
 		}
 
@@ -3467,7 +3627,12 @@ void D3DFB::EndQuadBatch()
 		}
 
 		// Draw the quad
-		D3DDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 4 * i, 4 * (j - i), 6 * i, 2 * (j - i));
+		D3DDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0,
+			startvertex,					// MinIndex
+			vertpos - startvertex,			// NumVertices
+			startindex,						// StartIndex
+			(indexpos - startindex) / 3		// PrimitiveCount
+			/*4 * i, 4 * (j - i), 6 * i, 2 * (j - i)*/);
 		i = j;
 	}
 	if (uv_wrapped)
@@ -3508,7 +3673,7 @@ void D3DFB::EndBatch()
 //
 //==========================================================================
 
-bool D3DFB::SetStyle(D3DTex *tex, DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &color1, BufferedQuad &quad)
+bool D3DFB::SetStyle(D3DTex *tex, DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &color1, BufferedTris &quad)
 {
 	D3DFORMAT fmt = tex->GetTexFormat();
 	FRenderStyle style = parms.style;
@@ -3528,6 +3693,14 @@ bool D3DFB::SetStyle(D3DTex *tex, DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &
 		alpha = clamp<fixed_t> (parms.alpha, 0, FRACUNIT) / 65536.f;
 	}
 
+	style.CheckFuzz();
+	if (style.BlendOp == STYLEOP_Shadow)
+	{
+		style = LegacyRenderStyles[STYLE_TranslucentStencil];
+		alpha = 0.3f;
+		parms.fillcolor = 0;
+	}
+
 	// FIXME: Fuzz effect is not written
 	if (style.BlendOp == STYLEOP_FuzzOrAdd || style.BlendOp == STYLEOP_Fuzz)
 	{
@@ -3545,6 +3718,7 @@ bool D3DFB::SetStyle(D3DTex *tex, DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &
 	stencilling = false;
 	quad.Palette = NULL;
 	quad.Flags = 0;
+	quad.Desat = 0;
 
 	switch (style.BlendOp)
 	{
@@ -3653,7 +3827,8 @@ bool D3DFB::SetStyle(D3DTex *tex, DrawParms &parms, D3DCOLOR &color0, D3DCOLOR &
 				quad.Flags |= BQF_Desaturated;
 			}
 			quad.ShaderNum = BQS_InGameColormap;
-			color0 = D3DCOLOR_ARGB(parms.colormapstyle->Desaturate,
+			quad.Desat = parms.colormapstyle->Desaturate;
+			color0 = D3DCOLOR_ARGB(color1 >> 24,
 				parms.colormapstyle->Color.r,
 				parms.colormapstyle->Color.g,
 				parms.colormapstyle->Color.b);

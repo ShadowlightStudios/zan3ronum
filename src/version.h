@@ -44,21 +44,17 @@ unsigned int GetRevisionNumber();
 
 /** Lots of different version numbers **/
 
-#define GAME_MAJOR_VERSION 2
-#define GAME_MINOR_VERSION 2
-#define GAMEVER_STRING "2.2"
+#define GAME_MAJOR_VERSION 3
+#define GAME_MINOR_VERSION 1
+#define GAMEVER_STRING "3.1"
 #define DOTVERSIONSTR GAMEVER_STRING "-alpha"
 #define VERSIONSTR DOTVERSIONSTR
 
-#define ZDVER_STRING "2.5.0"
-#define ZD_SVN_REVISION_STRING "2560"
-#define ZD_SVN_REVISION_NUMBER 2560
-
 // [BB] The version string that includes revision / compatibility data.
-#define DOTVERSIONSTR_REV DOTVERSIONSTR "-r" SVN_REVISION_STRING
+#define DOTVERSIONSTR_REV DOTVERSIONSTR "-r" HG_TIME
 
 // [BC] What version of ZDoom is this based off of?
-#define	ZDOOMVERSIONSTR		ZDVER_STRING"-"ZD_SVN_REVISION_STRING
+#define	ZDOOMVERSIONSTR		"2.8pre-441-g458e1b1"
 
 /** Release code stuff */
 
@@ -97,44 +93,26 @@ unsigned int GetRevisionNumber();
 // Protocol version used in demos.
 // Bump it if you change existing DEM_ commands or add new ones.
 // Otherwise, it should be safe to leave it alone.
-#define DEMOGAMEVERSION 0x213
+#define DEMOGAMEVERSION 0x219
 
 // Minimum demo version we can play.
 // Bump it whenever you change or remove existing DEM_ commands.
-#define MINDEMOVERSION 0x213
+#define MINDEMOVERSION 0x215
 
 // SAVEVER is the version of the information stored in level snapshots.
 // Note that SAVEVER is not directly comparable to VERSION.
 // SAVESIG should match SAVEVER.
 
 // MINSAVEVER is the minimum level snapshot version that can be loaded.
-#define MINSAVEVER 1848
+#define MINSAVEVER	3100
 
-#if ZD_SVN_REVISION_NUMBER < MINSAVEVER
-// Never write a savegame with a version lower than what we need
-#define SAVEVER			MINSAVEVER
-#define SAVESIG			MakeSaveSig()
-static inline const char *MakeSaveSig()
-{
-	static char foo[] = { 'Z','D','O','O','M','S','A','V','E',
-#if SAVEVER > 9999
-		'0' + (SAVEVER / 10000),
-#endif
-#if SAVEVER > 999
-		'0' + ((SAVEVER / 1000) % 10),
-#endif
-		'0' + ((SAVEVER / 100) % 10),
-		'0' + ((SAVEVER / 10) % 10),
-		'0' + (SAVEVER % 10),
-		'\0'
-	};
-	return foo;
-}
-#else
-// savegame versioning is based on ZDoom revisions
-#define SAVEVER			ZD_SVN_REVISION_NUMBER
-#define SAVESIG			"ZDOOMSAVE"ZD_SVN_REVISION_STRING
-#endif
+// Use 4500 as the base git save version, since it's higher than the
+// SVN revision ever got.
+#define SAVEVER 4506
+
+#define SAVEVERSTRINGIFY2(x) #x
+#define SAVEVERSTRINGIFY(x) SAVEVERSTRINGIFY2(x)
+#define SAVESIG "ZDOOMSAVE" SAVEVERSTRINGIFY(SAVEVER)
 
 #define DYNLIGHT
 
@@ -146,19 +124,16 @@ static inline const char *MakeSaveSig()
 #define GAMENAME "Zandronum"
 #define GAMENAMELOWERCASE "zandronum"
 #define DOMAIN_NAME "zandronum.com"
-#define FORUM_URL "http://" DOMAIN_NAME "/forum/"
-#define BUGS_FORUM_URL	"http://" DOMAIN_NAME "/tracker/"
+#define FORUM_URL "https://" DOMAIN_NAME "/forum/"
+#define BUGS_FORUM_URL	"https://" DOMAIN_NAME "/tracker/"
 
 // [BC] This is what's displayed as the title for server windows.
 #define	SERVERCONSOLE_TITLESTRING	GAMENAME " v" DOTVERSIONSTR " Server"
 
-#ifdef unix
-#define HOME_DIR "~/." GAMENAMELOWERCASE
-#define GAME_DIR "." GAMENAMELOWERCASE
-#elif defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
 #define GAME_DIR GAMENAME
 #else
-#define CDROM_DIR "C:\\ZDOOMDAT"
+#define GAME_DIR ".config/" GAMENAMELOWERCASE
 #endif
 
 

@@ -14,8 +14,7 @@ static FRandom pr_stalker ("Stalker");
 DEFINE_ACTION_FUNCTION(AActor, A_StalkerChaseDecide)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -43,8 +42,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_StalkerLookInit)
 	FState *state;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -81,8 +79,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_StalkerDrop)
 DEFINE_ACTION_FUNCTION(AActor, A_StalkerAttack)
 {
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -102,8 +99,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_StalkerAttack)
 		{
 			int damage = (pr_stalker() & 7) * 2 + 2;
 
-			P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-			P_TraceBleed (damage, self->target, self);
+			int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+			P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
 		}
 	}
 }

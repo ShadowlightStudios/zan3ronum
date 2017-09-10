@@ -40,6 +40,10 @@
 #include "d_player.h"
 #include "doomstat.h"
 #include "v_font.h"
+#include "p_spec.h"
+// Zandronum stuff
+#include "network.h"
+#include "sv_commands.h"
 
 EXTERN_CVAR(String, secretmessage)
 
@@ -56,27 +60,22 @@ IMPLEMENT_CLASS (ASecretTrigger)
 void ASecretTrigger::PostBeginPlay ()
 {
 	Super::PostBeginPlay ();
-	level.total_secrets++;
+	// [Zandronum] Zandronum client musn't increment the total_secrets count
+	// (demo-)client-side because when map is loaded, client is already informed
+	// of the total secrets count by the server. This information includes
+	// the SecretTriggers spawned by the map.
+	if ( !NETWORK_InClientMode( ) )
+		level.total_secrets++;
+	// [Zandronum] However, when new SecretTrigger items are dynamically
+	// spawned, server must inform clients of the sudden change
+	// in total secrets count.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		SERVERCOMMANDS_SetMapNumTotalSecrets( level.total_secrets );
 }
 
 void ASecretTrigger::Activate (AActor *activator)
 {
-	if (activator != NULL)
-	{
-		if (activator->CheckLocalView (consoleplayer))
-		{
-			if (args[0] <= 1)
-			{
-				C_MidPrint (SmallFont, secretmessage);
-			}
-			if (args[0] == 0 || args[0] == 2)
-			{
-				S_Sound (activator, CHAN_AUTO, "misc/secret", 1, ATTN_NORM);
-			}
-		}
-		if (activator->player) activator->player->secretcount++;
-	}
-	level.found_secrets++;
+	P_GiveSecret(activator, args[0] <= 1, (args[0] == 0 || args[0] == 2));
 	Destroy ();
 }
 

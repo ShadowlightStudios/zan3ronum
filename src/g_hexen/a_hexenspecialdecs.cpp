@@ -61,9 +61,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_PotteryExplode)
 	for(i = (pr_pottery()&3)+3; i; i--)
 	{
 		mo = Spawn ("PotteryBit", self->x, self->y, self->z, ALLOW_REPLACE);
-		mo->SetState (mo->SpawnState + (pr_pottery()%5));
 		if (mo)
 		{
+			mo->SetState (mo->SpawnState + (pr_pottery()%5));
 			mo->velz = ((pr_pottery()&7)+5)*(3*FRACUNIT/4);
 			mo->velx = (pr_pottery.Random2())<<(FRACBITS-6);
 			mo->vely = (pr_pottery.Random2())<<(FRACBITS-6);
@@ -72,23 +72,20 @@ DEFINE_ACTION_FUNCTION(AActor, A_PotteryExplode)
 	S_Sound (mo, CHAN_BODY, "PotteryExplode", 1, ATTN_NORM);
 
 	// [BC] Don't spawn the item in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
-	if (self->args[0]>=0 && self->args[0]<=255 && SpawnableThings[self->args[0]])
-	{ // Spawn an item
+	// Spawn an item?
+	const PClass *type = P_GetSpawnableType(self->args[0]);
+	if (type != NULL)
+	{
 		if (!((level.flags2 & LEVEL2_NOMONSTERS) || (dmflags & DF_NO_MONSTERS))
-		|| !(GetDefaultByType (SpawnableThings[self->args[0]])->flags3 & MF3_ISMONSTER))
+		|| !(GetDefaultByType (type)->flags3 & MF3_ISMONSTER))
 		{ // Only spawn monsters if not -nomonsters
 			// [BC]
-			AActor	*pActor;
-
-			pActor = Spawn (SpawnableThings[self->args[0]],
-				self->x, self->y, self->z, ALLOW_REPLACE);
-
+			AActor	*pActor = Spawn (type, self->x, self->y, self->z, ALLOW_REPLACE);
 
 			// [BC] If we're the server, spawn the thing.
 			if (( pActor ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
@@ -124,14 +121,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_PotteryCheck)
 		if (playeringame[i])
 		{
 			AActor *pmo = players[i].mo;
-			if (P_CheckSight (self, pmo) && (abs (R_PointToAngle2 (pmo->x,
+			if (P_CheckSight (self, pmo) && (absangle(R_PointToAngle2 (pmo->x,
 				pmo->y, self->x, self->y) - pmo->angle) <= ANGLE_45))
 			{ // Previous state (pottery bit waiting state)
 				self->SetState (self->state - 1);
 				return;
 			}
 		}
-	}		
+	}
 }
 
 // Lynched corpse (no heart) ------------------------------------------------
@@ -219,6 +216,15 @@ DEFINE_ACTION_FUNCTION(AActor, A_LeafSpawn)
 			self->z + (pr_leaf()<<14), ALLOW_REPLACE);
 		if (mo)
 		{
+			// [BB] Clients spawn these on their own. In order to prevent the 
+			// server from printing warnings when the server calls P_ExplodeMissile,
+			// we also mark this as SERVERSIDEONLY.
+			if ( NETWORK_GetState () == NETSTATE_SERVER )
+			{
+				mo->ulNetworkFlags |= NETFL_SERVERSIDEONLY;
+				mo->FreeNetID ();
+			}
+
 			P_ThrustMobj (mo, self->angle, (pr_leaf()<<9)+3*FRACUNIT);
 			mo->target = self;
 			mo->special1 = 0;
@@ -304,20 +310,17 @@ DEFINE_ACTION_FUNCTION(AActor, A_SoAExplode)
 			mo->vely = pr_soaexplode.Random2()<<(FRACBITS-6);
 		}
 	}
-	if (self->args[0]>=0 && self->args[0]<=255 && SpawnableThings[self->args[0]])
-	{ // Spawn an item
+	// Spawn an item?
+	const PClass *type = P_GetSpawnableType(self->args[0]);
+	if (type != NULL)
+	{
 		if (!((level.flags2 & LEVEL2_NOMONSTERS) || (dmflags & DF_NO_MONSTERS))
-		|| !(GetDefaultByType (SpawnableThings[self->args[0]])->flags3 & MF3_ISMONSTER))
+		|| !(GetDefaultByType (type)->flags3 & MF3_ISMONSTER))
 		{ // Only spawn monsters if not -nomonsters
 			// [BC]
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
-				AActor	*pActor;
-
-				pActor = Spawn (SpawnableThings[self->args[0]],
-					self->x, self->y, self->z, ALLOW_REPLACE);
-
+				AActor	*pActor = Spawn (type, self->x, self->y, self->z, ALLOW_REPLACE);
 
 				// [BC] If we're the server, spawn the thing.
 				if (( pActor ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
@@ -360,7 +363,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BellReset1)
 	self->height <<= 2;
 	if (self->special)
 	{ // Initiate death action
-		LineSpecials[self->special] (NULL, NULL, false, self->args[0],
+		P_ExecuteSpecial(self->special, NULL, NULL, false, self->args[0],
 			self->args[1], self->args[2], self->args[3], self->args[4]);
 		self->special = 0;
 	}

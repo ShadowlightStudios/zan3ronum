@@ -32,6 +32,10 @@ static void BrainishExplosion (fixed_t x, fixed_t y, fixed_t z)
 	AActor *boom = Spawn("Rocket", x, y, z, NO_REPLACE);
 	if (boom != NULL)
 	{
+		// [BB] Clients spawn these on their own.
+		if ( NETWORK_GetState () == NETSTATE_SERVER )
+			boom->FreeNetID ();
+
 		boom->DeathSound = "misc/brainexplode";
 		boom->velz = pr_brainscream() << 9;
 
@@ -80,16 +84,22 @@ DEFINE_ACTION_FUNCTION(AActor, A_BrainDie)
 	// New dmflag: Kill all boss spawned monsters before ending the level.
 	if (dmflags2 & DF2_KILLBOSSMONST)
 	{
-		TThinkerIterator<AActor> it;
-		AActor *mo;
-		while ((mo = it.Next()))
+		int count;	// Repeat until we have no more boss-spawned monsters.
+		do			// (e.g. Pain Elementals can spawn more to kill upon death.)
 		{
-			if (mo->flags4 & MF4_BOSSSPAWNED)
+			TThinkerIterator<AActor> it;
+			AActor *mo;
+			count = 0;
+			while ((mo = it.Next()))
 			{
-				P_DamageMobj(mo, self, self, mo->health, NAME_None, 
-					DMG_NO_ARMOR|DMG_FORCED|DMG_THRUSTLESS|DMG_NO_FACTOR);
+				if (mo->health > 0 && mo->flags4 & MF4_BOSSSPAWNED)
+				{
+					P_DamageMobj(mo, self, self, mo->health, NAME_None, 
+						DMG_NO_ARMOR|DMG_FORCED|DMG_THRUSTLESS|DMG_NO_FACTOR);
+					count++;
+				}
 			}
-		}
+		} while (count != 0);
 	}
 
 	G_ExitLevel (0, false);
@@ -103,8 +113,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BrainSpit)
 	bool isdefault = false;
 
 	// [BC] Brain spitting is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -126,12 +135,12 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BrainSpit)
 		// spawn brain missile
 		spit = P_SpawnMissile (self, targ, spawntype);
 
-		// Boss cubes should move freely to their destination so it's
-		// probably best to disable all collision detection for them.
-		if (spit->flags & MF_NOCLIP) spit->flags5 |= MF5_NOINTERACTION;
-
 		if (spit != NULL)
 		{
+			// Boss cubes should move freely to their destination so it's
+			// probably best to disable all collision detection for them.
+			if (spit->flags & MF_NOCLIP) spit->flags5 |= MF5_NOINTERACTION;
+	
 			spit->target = targ;
 			spit->master = self;
 			// [RH] Do this correctly for any trajectory. Doom would divide by 0
@@ -150,6 +159,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BrainSpit)
 			}
 			// [GZ] Calculates when the projectile will have reached destination
 			spit->special2 += level.maptime;
+			spit->flags6 |= MF6_BOSSCUBE;
 
 			// [BC] If we're the server, tell clients to spawn the actor.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -185,8 +195,7 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 	int r;
 		
 	// [BC] Brain spitting is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -291,9 +300,14 @@ static void SpawnFly(AActor *self, const PClass *spawntype, FSoundID sound)
 			{
 				newmobj->CopyFriendliness (eye, false);
 			}
-			if (newmobj->SeeState != NULL && P_LookForPlayers (newmobj, true, NULL))
-				newmobj->SetState (newmobj->SeeState);
+			// Make it act as if it was around when the player first made noise
+			// (if the player has made noise).
+			newmobj->LastHeard = newmobj->Sector->SoundTarget;
 
+			if (newmobj->SeeState != NULL && P_LookForPlayers (newmobj, true, NULL))
+			{
+				newmobj->SetState (newmobj->SeeState);
+			}
 			if (!(newmobj->ObjectFlags & OF_EuthanizeMe))
 			{
 				// telefrag anything in this spot

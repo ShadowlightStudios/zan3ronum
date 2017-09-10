@@ -31,8 +31,8 @@ static int it_riff_dsmf_process_sample( IT_SAMPLE * sample, const unsigned char 
 	int flags;
 
 	memcpy( sample->filename, data, 13 );
-	sample->filename[ 14 ] = 0;
-	
+	sample->filename[ 13 ] = 0;
+
 	flags = data[ 13 ] | ( data[ 14 ] << 8 );
 	sample->default_volume = data[ 15 ];
 	sample->length = data[ 16 ] | ( data[ 17 ] << 8 ) | ( data[ 18 ] << 16 ) | ( data[ 19 ] << 24 );
@@ -265,6 +265,7 @@ static DUMB_IT_SIGDATA *it_riff_dsmf_load_sigdata( struct riff * stream )
 
 	sigdata->n_instruments = 0;
 	sigdata->n_orders = 0;
+	sigdata->restart_position = 0;
 
 	memset(sigdata->channel_volume, 64, DUMB_IT_N_CHANNELS);
 

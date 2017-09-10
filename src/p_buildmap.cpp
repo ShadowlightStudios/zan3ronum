@@ -9,14 +9,13 @@
 
 #include "p_local.h"
 #include "m_swap.h"
-#include "v_palette.h"
 #include "w_wad.h"
 #include "templates.h"
 #include "r_sky.h"
-#include "r_main.h"
 #include "r_defs.h"
 #include "p_setup.h"
 #include "g_level.h"
+#include "r_data/colormaps.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -176,14 +175,12 @@ bool P_IsBuildMap(MapData *map)
 		return true;
 	}
 
-	// [BB] This number is only used to check whether this is a build map,
-	// don't overwrite our global variable numsectors with it.
-	const int numsectors = LittleShort(*(WORD *)(data + 20));
+	const int numsec = LittleShort(*(WORD *)(data + 20));
 	int numwalls;
 
-	if (len < 26 + numsectors*sizeof(sectortype) ||
-		(numwalls = LittleShort(*(WORD *)(data + 22 + numsectors*sizeof(sectortype))),
-			len < 24 + numsectors*sizeof(sectortype) + numwalls*sizeof(walltype)) ||
+	if (len < 26 + numsec*sizeof(sectortype) ||
+		(numwalls = LittleShort(*(WORD *)(data + 22 + numsec*sizeof(sectortype))),
+			len < 24 + numsec*sizeof(sectortype) + numwalls*sizeof(walltype)) ||
 		LittleLong(*(DWORD *)data) != 7 ||
 		LittleShort(*(WORD *)(data + 16)) >= 2048)
 	{ // Can't possibly be a version 7 BUILD map
@@ -213,19 +210,20 @@ bool P_LoadBuildMap (BYTE *data, size_t len, FMapThing **sprites, int *numspr)
 		return P_LoadBloodMap (data, len, sprites, numspr);
 	}
 
-	numsectors = LittleShort(*(WORD *)(data + 20));
+	const int numsec = LittleShort(*(WORD *)(data + 20));
 	int numwalls;
 	int numsprites;
 
-	if (len < 26 + numsectors*sizeof(sectortype) ||
-		(numwalls = LittleShort(*(WORD *)(data + 22 + numsectors*sizeof(sectortype))),
-			len < 24 + numsectors*sizeof(sectortype) + numwalls*sizeof(walltype)) ||
+	if (len < 26 + numsec*sizeof(sectortype) ||
+		(numwalls = LittleShort(*(WORD *)(data + 22 + numsec*sizeof(sectortype))),
+			len < 24 + numsec*sizeof(sectortype) + numwalls*sizeof(walltype)) ||
 		LittleLong(*(DWORD *)data) != 7 ||
 		LittleShort(*(WORD *)(data + 16)) >= 2048)
 	{ // Can't possibly be a version 7 BUILD map
 		return false;
 	}
 
+	numsectors = numsec;
 	LoadSectors ((sectortype *)(data + 22));
 	LoadWalls ((walltype *)(data + 24 + numsectors*sizeof(sectortype)), numwalls,
 		(sectortype *)(data + 22));
@@ -657,11 +655,11 @@ static void LoadWalls (walltype *walls, int numwalls, sectortype *bsec)
 		int sidenum = int(intptr_t(lines[linenum].sidedef[1]));
 		if (bsec->floorstat & 64)
 		{ // floor is aligned to first wall
-			R_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
+			P_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
 		}
 		if (bsec->ceilingstat & 64)
 		{ // ceiling is aligned to first wall
-			R_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
+			P_AlignFlat (linenum, sidenum == bsec->wallptr, 0);
 		}
 	}
 	for (i = 0; i < numlines; i++)
@@ -700,6 +698,7 @@ static int LoadSprites (spritetype *sprites, Xsprite *xsprites, int numsprites,
 		mapthings[count].SkillFilter = 0xffff;
 		mapthings[count].flags = MTF_SINGLE|MTF_COOPERATIVE|MTF_DEATHMATCH;
 		mapthings[count].special = 0;
+		mapthings[count].gravity = FRACUNIT;
 
 		if (xsprites != NULL && sprites[i].lotag == 710)
 		{ // Blood ambient sound
@@ -768,8 +767,9 @@ static void CreateStartSpot (fixed_t *pos, FMapThing *start)
 	{
 		0, (LittleLong(pos[0])<<12), ((-LittleLong(pos[1]))<<12), 0,// tid, x, y, z
 		short(Scale ((2048-angle)&2047, 360, 2048)), 1,	// angle, type
-		7|MTF_SINGLE|224,										// flags
-		// special and args are 0
+		0, 0,							// Skillfilter, Classfilter
+		7|MTF_SINGLE|224,				// flags
+		0, {0}, 0 						// special is 0, args and Conversation are 0
 	};
 
 	*start = mt;

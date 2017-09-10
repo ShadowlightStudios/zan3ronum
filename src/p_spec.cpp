@@ -36,6 +36,7 @@
 #include "templates.h"
 #include "doomdef.h"
 #include "doomstat.h"
+#include "d_event.h"
 #include "gstrings.h"
 
 #include "i_system.h"
@@ -44,7 +45,6 @@
 #include "m_bbox.h"
 #include "w_wad.h"
 
-#include "r_local.h"
 #include "p_local.h"
 #include "p_lnspec.h"
 #include "p_terrain.h"
@@ -60,13 +60,15 @@
 #include "g_level.h"
 #include "v_font.h"
 #include "a_sharedglobal.h"
+#include "farchive.h"
+#include "a_keys.h"
 
 // State.
 #include "r_state.h"
 
 #include "c_console.h"
 
-#include "r_interpolate.h"
+#include "r_data/r_interpolate.h"
 // [BB] New #includes.
 #include "announcer.h"
 #include "deathmatch.h"
@@ -85,6 +87,7 @@
 #include "doomdata.h"
 #include "invasion.h"
 #include "unlagged.h"
+#include "network_enums.h"
 
 static FRandom pr_playerinspecialsector ("PlayerInSpecialSector");
 void P_SetupPortals();
@@ -109,6 +112,14 @@ void DPusher::UpdateToClient( ULONG ulClient )
 	SERVERCOMMANDS_DoPusher( m_Type, m_pLine, m_Magnitude, m_Angle, m_Source, m_Affectee, ulClient, SVCF_ONLYTHISCLIENT );
 }
 
+inline FArchive &operator<< (FArchive &arc, DScroller::EScrollType &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DScroller::EScrollType)val;
+	return arc;
+}
+
 DScroller::DScroller ()
 {
 }
@@ -131,6 +142,14 @@ void DScroller::Serialize (FArchive &arc)
 
 DPusher::DPusher ()
 {
+}
+
+inline FArchive &operator<< (FArchive &arc, DPusher::EPusher &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DPusher::EPusher)val;
+	return arc;
 }
 
 void DPusher::Serialize (FArchive &arc)
@@ -160,7 +179,7 @@ CUSTOM_CVAR ( Int, sv_killallmonsters_percentage, 100, CVAR_SERVERINFO )
 		self = 0;
 }
 
-FMapThing *SelectRandomCooperativeSpot( ULONG ulPlayer );
+FPlayerStart *SelectRandomCooperativeSpot( ULONG ulPlayer );
 
 // [RH] Check dmflags for noexit and respond accordingly
 bool CheckIfExitIsGood (AActor *self, level_info_t *info)
@@ -177,7 +196,7 @@ bool CheckIfExitIsGood (AActor *self, level_info_t *info)
 		// [BB] Refine this: Instead of needing to kill all monsters, only sv_killallmonsters_percentage percent have to be killed.
 		float fPercentKilled = 100 * ( static_cast<float>(level.killed_monsters) / static_cast<float>(level.total_monsters) );
 		// [BB] Use the flag only in cooperative game modes, doesn't make much sense otherwise.
-		if ( ( fPercentKilled < sv_killallmonsters_percentage ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE ) )
+		if ( ( fPercentKilled < sv_killallmonsters_percentage ) && ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) )
 		{
 			// [BB] We have to do something when a player passes a line that should exit the level, so we just
 			// teleport the player back to one of the player starts.
@@ -187,15 +206,11 @@ bool CheckIfExitIsGood (AActor *self, level_info_t *info)
 
 				// [BB] SelectRandomCooperativeSpot calls G_CheckSpot which removes the MF_SOLID flag, we need to work around this.
 				bool bSolidFlag = !!( players[ulPlayer].mo->flags & MF_SOLID );
-				FMapThing *pSpot = SelectRandomCooperativeSpot( ulPlayer );
+				FPlayerStart *pSpot = SelectRandomCooperativeSpot( ulPlayer );
 				if ( bSolidFlag )
 					players[ulPlayer].mo->flags |=  MF_SOLID;
 				P_Teleport (self, pSpot->x, pSpot->y, ONFLOORZ, ANG45 * (pSpot->angle/45), true, true, false);
-
-				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVER_PrintfPlayer( PRINT_HIGH, ulPlayer, "You need to kill %d percent of the monsters before exiting the level.\n", sv_killallmonsters_percentage.GetGenericRep( CVAR_Int ).Int );
-				else
-					Printf( "You need to kill %d percent of the monsters before exiting the level.\n", sv_killallmonsters_percentage.GetGenericRep( CVAR_Int ).Int );
+				NETWORK_Printf( "You need to kill %d percent of the monsters before exiting the level.\n", *sv_killallmonsters_percentage );
 
 			}
 			return false;
@@ -226,18 +241,14 @@ bool CheckIfExitIsGood (AActor *self, level_info_t *info)
 	// [BC] Instead of displaying this message in deathmatch only, display it any
 	// time we're not in single player mode (it can be annoying when people exit
 	// the map in cooperative, and it's nice to know who's doing it).
-//	if (deathmatch || teamgame)
-	if ( NETWORK_GetState( ) != NETSTATE_SINGLE )
+	if ( ( NETWORK_GetState( ) != NETSTATE_SINGLE ) && gameaction != ga_completed)
 	{
 		// [BB] It's possible, that a monster exits the level, so self->player can be 0.
 		// [TP] A voodoo doll may also exit.
 		if (( self->player != NULL ) && ( self->player->mo == self ))
 		{
 			// [K6/BB] The server should let the clients know who exited the level.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVER_Printf( PRINT_HIGH, "%s \\c-exited the level.\n", self->player->userinfo.netname);
-			else
-				Printf ("%s \\c-exited the level.\n", self->player->userinfo.netname);
+			NETWORK_Printf ("%s \\c-exited the level.\n", self->player->userinfo.GetName());
 		}
 	}
 	return true;
@@ -301,6 +312,8 @@ bool P_ActivateLine (line_t *line, AActor *mo, int side, int activationType)
 	{
 		return false;
 	}
+	bool remote = (line->special != 7 && line->special != 8 && (line->special < 11 || line->special > 14));
+	if (line->locknumber > 0 && !P_CheckKeys (mo, line->locknumber, remote)) return false;
 	lineActivation = line->activation;
 	repeat = line->flags & ML_REPEAT_SPECIAL;
 	buttonSuccess = false;
@@ -309,8 +322,8 @@ bool P_ActivateLine (line_t *line, AActor *mo, int side, int activationType)
 	// for the sectors to be in their actual (and not their unlagged) position.
 	UNLAGGED_SwapSectorUnlaggedStatus ( );
 
-	buttonSuccess = LineSpecials[line->special]
-					(line, mo, side == 1, line->args[0],
+	buttonSuccess = P_ExecuteSpecial(line->special,
+					line, mo, side == 1, line->args[0],
 					line->args[1], line->args[2],
 					line->args[3], line->args[4]);
 
@@ -354,7 +367,7 @@ bool P_ActivateLine (line_t *line, AActor *mo, int side, int activationType)
 // end of changed code
 	if (developer && buttonSuccess)
 	{
-		Printf ("Line special %d activated\n", special);
+		Printf ("Line special %d activated on line %i\n", special, int(line - lines));
 	}
 	return true;
 }
@@ -367,7 +380,7 @@ bool P_ActivateLine (line_t *line, AActor *mo, int side, int activationType)
 
 bool P_TestActivateLine (line_t *line, AActor *mo, int side, int activationType)
 {
-	int lineActivation = line->activation;
+ 	int lineActivation = line->activation;
 
 	if (line->flags & ML_FIRSTSIDEONLY && side == 1)
 	{
@@ -392,7 +405,7 @@ bool P_TestActivateLine (line_t *line, AActor *mo, int side, int activationType)
 	{
 		lineActivation |= SPAC_Cross|SPAC_MCross;
 	}
-	if (activationType ==SPAC_Use || activationType == SPAC_UseBack)
+	if (activationType == SPAC_Use || activationType == SPAC_UseBack)
 	{
 		if (!P_CheckSwitchRange(mo, line, side))
 		{
@@ -506,22 +519,8 @@ void P_PlayerInSpecialSector (player_t *player, sector_t * sector)
 	int special = sector->special & ~SECRET_MASK;
 
 	// [BC] Sector specials are server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
-		// Just do secret triggers, and get out.
-		if ( sector->special & SECRET_MASK )
-		{
-			if (player->mo->CheckLocalView (consoleplayer))
-			{
-				player->secretcount++;
-				level.found_secrets++;
-				sector->special &= ~SECRET_MASK;
-				C_MidPrint (SmallFont, secretmessage);
-				S_Sound (CHAN_AUTO, "misc/secret", 1, ATTN_NORM);
-			}
-		}
-
 		return;
 	}
 
@@ -595,7 +594,7 @@ void P_PlayerInSpecialSector (player_t *player, sector_t * sector)
 
 		case sDamage_Hellslime:
 			// [Dusk] Don't touch the hazard count as the client
-			if (ironfeet == NULL && ( NETWORK_InClientMode( ) == false ))
+			if (ironfeet == NULL && ( NETWORK_InClientMode() == false ))
 			{
 				player->hazardcount += 2;
 
@@ -607,7 +606,7 @@ void P_PlayerInSpecialSector (player_t *player, sector_t * sector)
 
 		case sDamage_SuperHellslime:
 			// [Dusk] Don't touch the hazard count as the client
-			if (ironfeet == NULL && ( NETWORK_InClientMode( ) == false ))
+			if (ironfeet == NULL && ( NETWORK_InClientMode() == false ))
 			{
 				player->hazardcount += 4;
 
@@ -702,15 +701,140 @@ void P_PlayerInSpecialSector (player_t *player, sector_t * sector)
 
 	if (sector->special & SECRET_MASK)
 	{
-		player->secretcount++;
-		level.found_secrets++;
 		sector->special &= ~SECRET_MASK;
-		if (player->mo->CheckLocalView (consoleplayer))
+		P_GiveSecret(player->mo, true, true);
+	}
+}
+
+//============================================================================
+//
+// P_SectorDamage
+//
+//============================================================================
+
+static void DoSectorDamage(AActor *actor, sector_t *sec, int amount, FName type, const PClass *protectClass, int flags)
+{
+	if (!(actor->flags & MF_SHOOTABLE))
+		return;
+
+	if (!(flags & DAMAGE_NONPLAYERS) && actor->player == NULL)
+		return;
+
+	if (!(flags & DAMAGE_PLAYERS) && actor->player != NULL)
+		return;
+
+	if (!(flags & DAMAGE_IN_AIR) && actor->z != sec->floorplane.ZatPoint(actor->x, actor->y) && !actor->waterlevel)
+		return;
+
+	if (protectClass != NULL)
+	{
+		if (actor->FindInventory(protectClass, !!(flags & DAMAGE_SUBCLASSES_PROTECT)))
+			return;
+	}
+
+	P_DamageMobj (actor, NULL, NULL, amount, type);
+}
+
+void P_SectorDamage(int tag, int amount, FName type, const PClass *protectClass, int flags)
+{
+	int secnum = -1;
+
+	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+	{
+		AActor *actor, *next;
+		sector_t *sec = &sectors[secnum];
+
+		// Do for actors in this sector.
+		for (actor = sec->thinglist; actor != NULL; actor = next)
 		{
-			C_MidPrint (SmallFont, secretmessage);
-			S_Sound (CHAN_AUTO, "misc/secret", 1, ATTN_NORM);
+			next = actor->snext;
+			DoSectorDamage(actor, sec, amount, type, protectClass, flags);
+		}
+		// If this is a 3D floor control sector, also do for anything in/on
+		// those 3D floors.
+		for (unsigned i = 0; i < sec->e->XFloor.attached.Size(); ++i)
+		{
+			sector_t *sec2 = sec->e->XFloor.attached[i];
+
+			for (actor = sec2->thinglist; actor != NULL; actor = next)
+			{
+				next = actor->snext;
+				// Only affect actors touching the 3D floor
+				fixed_t z1 = sec->floorplane.ZatPoint(actor->x, actor->y);
+				fixed_t z2 = sec->ceilingplane.ZatPoint(actor->x, actor->y);
+				if (z2 < z1)
+				{
+					// Account for Vavoom-style 3D floors
+					fixed_t zz = z1;
+					z1 = z2;
+					z2 = zz;
+				}
+				if (actor->z + actor->height > z1)
+				{
+					// If DAMAGE_IN_AIR is used, anything not beneath the 3D floor will be
+					// damaged (so, anything touching it or above it). Other 3D floors between
+					// the actor and this one will not stop this effect.
+					if ((flags & DAMAGE_IN_AIR) || actor->z <= z2)
+					{
+						// Here we pass the DAMAGE_IN_AIR flag to disable the floor check, since it
+						// only works with the real sector's floor. We did the appropriate height checks
+						// for 3D floors already.
+						DoSectorDamage(actor, NULL, amount, type, protectClass, flags | DAMAGE_IN_AIR);
+					}
+				}
+			}
 		}
 	}
+}
+
+//============================================================================
+//
+// P_GiveSecret
+//
+//============================================================================
+
+// [Zandronum] `allowclient` is Zandronum extension to prevent accidental execution
+// by clients unless explicitly allowed to do so.
+void P_GiveSecret(AActor *actor, bool printmessage, bool playsound, bool allowclient)
+{
+	// [Zandronum] client must bail out if not allowed to give secret.
+	if ( !allowclient && NETWORK_InClientMode() )
+		return;
+
+	if (actor != NULL)
+	{
+		if (actor->player != NULL)
+		{
+			actor->player->secretcount++;
+		}
+		// [Zandronum] The server needs to inform all clients (even foes) - ZDoom does so.
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		{
+			BYTE secretFlags = 0;
+			if ( printmessage )
+				secretFlags |= SECRETFOUND_MESSAGE;
+			if ( playsound )
+				secretFlags |= SECRETFOUND_SOUND;
+			// [Zandronum] Check if sector was secret but is not anymore.
+			// We can send this even if player triggers P_GiveSecret
+			// by picking up +COUNTSECRET actors in a secret sector
+			// as the client-side reaction is a no-op if client
+			// already knows that the sector was discovered.
+			if ( actor->Sector != NULL && (actor->Sector->special & SECRET_MASK) == 0 && actor->Sector->secretsector)
+				SERVERCOMMANDS_SecretMarkSectorFound( actor->Sector );
+			SERVERCOMMANDS_SecretFound( actor, secretFlags );
+		}
+		else if (actor->CheckLocalView (consoleplayer))
+		{
+			if (printmessage) C_MidPrint (SmallFont, secretmessage);
+			if (playsound) S_Sound (CHAN_AUTO | CHAN_UI, "misc/secret", 1, ATTN_NORM);
+		}
+	}
+	level.found_secrets++;
+
+	// [BB] Inform clients.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		SERVERCOMMANDS_SetMapNumFoundSecrets();
 }
 
 //============================================================================
@@ -765,9 +889,6 @@ void P_PlayerOnSpecialFlat (player_t *player, int floorType)
 //
 void P_UpdateSpecials ()
 {
-//	size_t j;
-//	int i;
-	
 	// LEVEL TIMER
 	// [BB] The gamemode decides whether the timelimit is used.
 	if ( GAMEMODE_IsTimelimitActive() )
@@ -786,7 +907,7 @@ void P_UpdateSpecials ()
 			ANNOUNCER_PlayEntry( cl_announcer, "OneMinuteWarning" );
 		}
 
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 		{
 			if (( level.time >= (int)( timelimit * TICRATE * 60 )) && ( GAME_GetEndLevelDelay( ) == 0 ))
 			{
@@ -797,15 +918,11 @@ void P_UpdateSpecials ()
 					LASTMANSTANDING_TimeExpired( );
 				else if ( possession || teampossession )
 					POSSESSION_TimeExpired( );
-				else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSONTEAMS )
+				else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 					TEAM_TimeExpired( );
 				else if ( cooperative )
 				{
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-					else
-						Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+					NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 					GAME_SetEndLevelDelay( 1 * TICRATE );
 				}
 				// End the level after one second.
@@ -817,11 +934,7 @@ void P_UpdateSpecials ()
 					bool				bTied;
 					char				szString[64];
 
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-					else
-						Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+					NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 					GAME_SetEndLevelDelay( 1 * TICRATE );
 
 					// Determine the winner.
@@ -852,7 +965,7 @@ void P_UpdateSpecials ()
 						if (( NETWORK_GetState( ) == NETSTATE_SINGLE_MULTIPLAYER ) && ( players[consoleplayer].mo->CheckLocalView( lWinner )))
 							sprintf( szString, "YOU WIN!" );
 						else
-							sprintf( szString, "%s \\c-WINS!", players[lWinner].userinfo.netname );
+							sprintf( szString, "%s \\c-WINS!", players[lWinner].userinfo.GetName() );
 					}
 					V_ColorizeString( szString );
 
@@ -908,12 +1021,12 @@ public:
 	void Tick ();
 
 protected:
-	static void DoTransfer (BYTE level, int target, bool floor);
+	static void DoTransfer (int level, int target, bool floor);
 
-	BYTE LastLight;
 	sector_t *Source;
 	int TargetTag;
 	bool CopyFloor;
+	short LastLight;
 };
 
 IMPLEMENT_CLASS (DLightTransfer)
@@ -921,7 +1034,17 @@ IMPLEMENT_CLASS (DLightTransfer)
 void DLightTransfer::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << LastLight << Source << TargetTag << CopyFloor;
+	if (SaveVersion < 3223)
+	{
+		BYTE bytelight;
+		arc << bytelight;
+		LastLight = bytelight;
+	}
+	else
+	{
+		arc << LastLight;
+	}
+	arc << Source << TargetTag << CopyFloor;
 }
 
 DLightTransfer::DLightTransfer (sector_t *srcSec, int target, bool copyFloor)
@@ -948,7 +1071,7 @@ DLightTransfer::DLightTransfer (sector_t *srcSec, int target, bool copyFloor)
 
 void DLightTransfer::Tick ()
 {
-	BYTE light = Source->lightlevel;
+	int light = Source->lightlevel;
 
 	if (light != LastLight)
 	{
@@ -957,7 +1080,7 @@ void DLightTransfer::Tick ()
 	}
 }
 
-void DLightTransfer::DoTransfer (BYTE level, int target, bool floor)
+void DLightTransfer::DoTransfer (int level, int target, bool floor)
 {
 	int secnum;
 
@@ -991,12 +1114,12 @@ public:
 	void Tick ();
 
 protected:
-	static void DoTransfer (BYTE level, int target, BYTE flags);
+	static void DoTransfer (short level, int target, BYTE flags);
 
-	BYTE LastLight;
-	BYTE Flags;
 	sector_t *Source;
 	int TargetID;
+	short LastLight;
+	BYTE Flags;
 };
 
 IMPLEMENT_CLASS (DWallLightTransfer)
@@ -1004,7 +1127,17 @@ IMPLEMENT_CLASS (DWallLightTransfer)
 void DWallLightTransfer::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << LastLight << Source << TargetID << Flags;
+	if (SaveVersion < 3223)
+	{
+		BYTE bytelight;
+		arc << bytelight;
+		LastLight = bytelight;
+	}
+	else
+	{
+		arc << LastLight;
+	}
+	arc << Source << TargetID << Flags;
 }
 
 DWallLightTransfer::DWallLightTransfer (sector_t *srcSec, int target, BYTE flags)
@@ -1015,10 +1148,16 @@ DWallLightTransfer::DWallLightTransfer (sector_t *srcSec, int target, BYTE flags
 	Source = srcSec;
 	TargetID = target;
 	Flags = flags;
-	DoTransfer (LastLight = srcSec->lightlevel, target, Flags);
+	DoTransfer (LastLight = srcSec->GetLightLevel(), target, Flags);
 
-	if (!(flags&WLF_NOFAKECONTRAST)) wallflags = WALLF_ABSLIGHTING;
-	else wallflags = WALLF_NOFAKECONTRAST|WALLF_ABSLIGHTING;
+	if (!(flags & WLF_NOFAKECONTRAST))
+	{
+		wallflags = WALLF_ABSLIGHTING;
+	}
+	else
+	{
+		wallflags = WALLF_ABSLIGHTING | WALLF_NOFAKECONTRAST;
+	}
 
 	for (linenum = -1; (linenum = P_FindLineFromID (target, linenum)) >= 0; )
 	{
@@ -1037,7 +1176,7 @@ DWallLightTransfer::DWallLightTransfer (sector_t *srcSec, int target, BYTE flags
 
 void DWallLightTransfer::Tick ()
 {
-	BYTE light = Source->lightlevel;
+	short light = sector_t::ClampLight(Source->lightlevel);
 
 	if (light != LastLight)
 	{
@@ -1046,13 +1185,13 @@ void DWallLightTransfer::Tick ()
 	}
 }
 
-void DWallLightTransfer::DoTransfer (BYTE lightlevel, int target, BYTE flags)
+void DWallLightTransfer::DoTransfer (short lightlevel, int target, BYTE flags)
 {
 	int linenum;
 
 	for (linenum = -1; (linenum = P_FindLineFromID (target, linenum)) >= 0; )
 	{
-		line_t * line = &lines[linenum];
+		line_t *line = &lines[linenum];
 
 		if (flags & WLF_SIDE1 && line->sidedef[0] != NULL)
 		{
@@ -1080,10 +1219,11 @@ static void SetupFloorPortal (AStackPoint *point)
 	NActorIterator it (NAME_LowerStackLookOnly, point->tid);
 	sector_t *Sector = point->Sector;
 	Sector->FloorSkyBox = static_cast<ASkyViewpoint*>(it.Next());
-	if (Sector->FloorSkyBox != NULL)
+	if (Sector->FloorSkyBox != NULL && Sector->FloorSkyBox->bAlways)
 	{
 		Sector->FloorSkyBox->Mate = point;
-		Sector->FloorSkyBox->PlaneAlpha = Scale (point->args[0], OPAQUE, 255);
+		if (Sector->GetAlpha(sector_t::floor) == OPAQUE)
+			Sector->SetAlpha(sector_t::floor, Scale (point->args[0], OPAQUE, 255));
 	}
 }
 
@@ -1092,11 +1232,45 @@ static void SetupCeilingPortal (AStackPoint *point)
 	NActorIterator it (NAME_UpperStackLookOnly, point->tid);
 	sector_t *Sector = point->Sector;
 	Sector->CeilingSkyBox = static_cast<ASkyViewpoint*>(it.Next());
-	if (Sector->CeilingSkyBox != NULL)
+	if (Sector->CeilingSkyBox != NULL && Sector->CeilingSkyBox->bAlways)
 	{
 		Sector->CeilingSkyBox->Mate = point;
-		Sector->CeilingSkyBox->PlaneAlpha = Scale (point->args[0], OPAQUE, 255);
+		if (Sector->GetAlpha(sector_t::ceiling) == OPAQUE)
+			Sector->SetAlpha(sector_t::ceiling, Scale (point->args[0], OPAQUE, 255));
 	}
+}
+
+static bool SpreadCeilingPortal(AStackPoint *pt, fixed_t alpha, sector_t *sector)
+{
+	bool fail = false;
+	sector->validcount = validcount;
+	for(int i=0; i<sector->linecount; i++)
+	{
+		line_t *line = sector->lines[i];
+		sector_t *backsector = sector == line->frontsector? line->backsector : line->frontsector;
+		if (line->backsector == line->frontsector) continue;
+		if (backsector == NULL) { fail = true; continue; }
+		if (backsector->validcount == validcount) continue;
+		if (backsector->CeilingSkyBox == pt) continue;
+
+		// Check if the backside would map to the same visplane
+		if (backsector->CeilingSkyBox != NULL) { fail = true; continue; }
+		if (backsector->ceilingplane != sector->ceilingplane) { fail = true; continue; }
+		if (backsector->lightlevel != sector->lightlevel) { fail = true; continue; }
+		if (backsector->GetTexture(sector_t::ceiling)		!= sector->GetTexture(sector_t::ceiling)) { fail = true; continue; }
+		if (backsector->GetXOffset(sector_t::ceiling)		!= sector->GetXOffset(sector_t::ceiling)) { fail = true; continue; }
+		if (backsector->GetYOffset(sector_t::ceiling)		!= sector->GetYOffset(sector_t::ceiling)) { fail = true; continue; }
+		if (backsector->GetXScale(sector_t::ceiling)		!= sector->GetXScale(sector_t::ceiling)) { fail = true; continue; }
+		if (backsector->GetYScale(sector_t::ceiling)		!= sector->GetYScale(sector_t::ceiling)) { fail = true; continue; }
+		if (backsector->GetAngle(sector_t::ceiling)		!= sector->GetAngle(sector_t::ceiling)) { fail = true; continue; }
+		if (SpreadCeilingPortal(pt, alpha, backsector)) { fail = true; continue; }
+	}
+	if (!fail) 
+	{
+		sector->CeilingSkyBox = pt;
+		sector->SetAlpha(sector_t::ceiling, alpha);
+	}
+	return fail;
 }
 
 void P_SetupPortals()
@@ -1119,45 +1293,28 @@ void P_SetupPortals()
 		pt->special1 = 0;
 		points.Push(pt);
 	}
-
-	for(unsigned i=0;i<points.Size(); i++)
-	{
-		if (points[i]->special1 == 0 && points[i]->Mate != NULL)
-		{
-			for(unsigned j=1;j<points.Size(); j++)
-			{
-				if (points[j]->special1 == 0 && points[j]->Mate != NULL && points[i]->GetClass() == points[j]->GetClass())
-				{
-					fixed_t deltax1 = points[i]->Mate->x - points[i]->x;
-					fixed_t deltay1 = points[i]->Mate->y - points[i]->y;
-					fixed_t deltax2 = points[j]->Mate->x - points[j]->x;
-					fixed_t deltay2 = points[j]->Mate->y - points[j]->y;
-					if (deltax1 == deltax2 && deltay1 == deltay2)
-					{
-						if (points[j]->Sector->FloorSkyBox == points[j]->Mate)
-							points[j]->Sector->FloorSkyBox = points[i]->Mate;
-
-						if (points[j]->Sector->CeilingSkyBox == points[j]->Mate)
-							points[j]->Sector->CeilingSkyBox = points[i]->Mate;
-
-						points[j]->special1 = 1;
-					}
-				}
-			}
-		}
-	}
 }
 
-inline void SetPortal(sector_t *sector, int plane, AStackPoint *portal)
+inline void SetPortal(sector_t *sector, int plane, AStackPoint *portal, fixed_t alpha)
 {
 	// plane: 0=floor, 1=ceiling, 2=both
 	if (plane > 0)
 	{
-		if (sector->CeilingSkyBox == NULL) sector->CeilingSkyBox = portal;
+		if (sector->CeilingSkyBox == NULL || !sector->CeilingSkyBox->bAlways) 
+		{
+			sector->CeilingSkyBox = portal;
+			if (sector->GetAlpha(sector_t::ceiling) == OPAQUE)
+				sector->SetAlpha(sector_t::ceiling, alpha);
+		}
 	}
 	if (plane == 2 || plane == 0)
 	{
-		if (sector->FloorSkyBox == NULL) sector->FloorSkyBox = portal;
+		if (sector->FloorSkyBox == NULL || !sector->FloorSkyBox->bAlways) 
+		{
+			sector->FloorSkyBox = portal;
+		}
+		if (sector->GetAlpha(sector_t::floor) == OPAQUE)
+			sector->SetAlpha(sector_t::floor, alpha);
 	}
 }
 
@@ -1177,6 +1334,7 @@ void P_SpawnPortal(line_t *line, int sectortag, int plane, int alpha)
 			fixed_t y1 = (line->v1->y + line->v2->y) >> 1;
 			fixed_t x2 = (lines[i].v1->x + lines[i].v2->x) >> 1;
 			fixed_t y2 = (lines[i].v1->y + lines[i].v2->y) >> 1;
+			fixed_t alpha = Scale (lines[i].args[4], OPAQUE, 255);
 
 			AStackPoint *anchor = Spawn<AStackPoint>(x1, y1, 0, NO_REPLACE);
 			AStackPoint *reference = Spawn<AStackPoint>(x2, y2, 0, NO_REPLACE);
@@ -1191,27 +1349,27 @@ void P_SpawnPortal(line_t *line, int sectortag, int plane, int alpha)
 
 		    for (int s=-1; (s = P_FindSectorFromTag(sectortag,s)) >= 0;)
 			{
-				SetPortal(&sectors[s], plane, reference);
+				SetPortal(&sectors[s], plane, reference, alpha);
 			}
 
 			for (int j=0;j<numlines;j++)
 			{
 				// Check if this portal needs to be copied to other sectors
 				// This must be done here to ensure that it gets done only after the portal is set up
-				if (lines[i].special == Sector_SetPortal &&
-					lines[i].args[1] == 1 &&
-					lines[i].args[2] == plane &&
-					lines[i].args[3] == sectortag)
+				if (lines[j].special == Sector_SetPortal &&
+					lines[j].args[1] == 1 &&
+					lines[j].args[2] == plane &&
+					lines[j].args[3] == sectortag)
 				{
-					if (lines[i].args[0] == 0)
+					if (lines[j].args[0] == 0)
 					{
-						SetPortal(lines[i].frontsector, plane, reference);
+						SetPortal(lines[j].frontsector, plane, reference, alpha);
 					}
 					else
 					{
-						for (int s=-1; (s = P_FindSectorFromTag(lines[i].args[0],s)) >= 0;)
+						for (int s=-1; (s = P_FindSectorFromTag(lines[j].args[0],s)) >= 0;)
 						{
-							SetPortal(&sectors[s], plane, reference);
+							SetPortal(&sectors[s], plane, reference, alpha);
 						}
 					}
 				}
@@ -1256,8 +1414,7 @@ void P_SpawnSpecials (void)
 			// FLICKERING LIGHTS
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DLightFlash (sector);
 			}
@@ -1268,8 +1425,7 @@ void P_SpawnSpecials (void)
 			// STROBE FAST
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DStrobe (sector, STROBEBRIGHT, FASTDARK, false);
 			}
@@ -1280,8 +1436,7 @@ void P_SpawnSpecials (void)
 			// STROBE SLOW
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DStrobe (sector, STROBEBRIGHT, SLOWDARK, false);
 			}
@@ -1293,8 +1448,7 @@ void P_SpawnSpecials (void)
 			// STROBE FAST/DEATH SLIME
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DStrobe (sector, STROBEBRIGHT, FASTDARK, false);
 			}
@@ -1304,8 +1458,7 @@ void P_SpawnSpecials (void)
 			// GLOWING LIGHT
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DGlow (sector);
 			}
@@ -1321,8 +1474,7 @@ void P_SpawnSpecials (void)
 			// SYNC STROBE SLOW
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DStrobe (sector, STROBEBRIGHT, SLOWDARK, true);
 			}
@@ -1347,8 +1499,7 @@ void P_SpawnSpecials (void)
 			// fire flickering
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DFireFlicker (sector);
 			}
@@ -1357,16 +1508,14 @@ void P_SpawnSpecials (void)
 
 		case dFriction_Low:
 			// [BC] In client mode, let the server tell us about sectors' friction level.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				sector->friction = FRICTION_LOW;
 				sector->movefactor = 0x269;
 			}
 			sector->special &= 0xff00;
 			// [BC] In client mode, let the server tell us about sectors' friction level.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				sector->special |= FRICTION_MASK;
 			}
@@ -1377,8 +1526,7 @@ void P_SpawnSpecials (void)
 
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DPhased (sector);
 			}
@@ -1388,8 +1536,7 @@ void P_SpawnSpecials (void)
 
 			// [BC] In client mode, light specials may have been shut off by the server.
 			// Therefore, we can't spawn them on our end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 			{
 				new DPhased (sector, 48, 63 - (sector->lightlevel & 63));
 			}
@@ -1402,21 +1549,25 @@ void P_SpawnSpecials (void)
 		case dScroll_EastLavaDamage:
 
 			// [BC] Damage is server-side.
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				break;
 			}
 
+			new DStrobe (sector, STROBEBRIGHT, FASTDARK, false);
 			new DScroller (DScroller::sc_floor, (-FRACUNIT/2)<<3,
 				0, -1, int(sector-sectors), 0);
+			break;
+
+		case Sector_Hidden:
+			sector->MoreFlags |= SECF_HIDDEN;
+			sector->special &= 0xff00;
 			break;
 
 		default:
 
 			// [BC] Don't run any other specials in client mode.
-			if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-				( CLIENTDEMO_IsPlaying( )))
+			if ( NETWORK_InClientMode() )
 			{
 				break;
 			}
@@ -1554,8 +1705,7 @@ void P_SpawnSpecials (void)
 			case Init_Gravity:
 
 				// [BC] The server will give us gravity updates.
-				if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-					( CLIENTDEMO_IsPlaying( )))
+				if ( NETWORK_InClientMode() )
 				{
 					break;
 				}
@@ -1573,8 +1723,7 @@ void P_SpawnSpecials (void)
 			case Init_Damage:
 
 				// [BC] Damage is server-side.
-				if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-					( CLIENTDEMO_IsPlaying( )))
+				if ( NETWORK_InClientMode() )
 				{
 					break;
 				}
@@ -1643,15 +1792,14 @@ void P_SpawnSpecials (void)
 		sectors[i].SavedSpecial = sectors[i].special;
 		sectors[i].SavedDamage = sectors[i].damage;
 		sectors[i].SavedMOD = sectors[i].mod;
-		sectors[i].SavedCeilingReflect = sectors[i].ceiling_reflect;
-		sectors[i].SavedFloorReflect = sectors[i].floor_reflect;
+		sectors[i].SavedCeilingReflect = sectors[i].reflect[sector_t::ceiling];
+		sectors[i].SavedFloorReflect = sectors[i].reflect[sector_t::floor];
 	}
 
 	// [RH] Start running any open scripts on this map
 	// [BC] Clients don't run scripts.
 	// [BB] Clients only run the client side open scripts.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		FBehavior::StaticStartTypedScripts (SCRIPT_Open, NULL, false);
 	}
@@ -1680,9 +1828,29 @@ void P_SpawnSpecials (void)
 // This is the main scrolling code
 // killough 3/7/98
 
+// [RH] Compensate for rotated sector textures by rotating the scrolling
+// in the opposite direction.
+static void RotationComp(const sector_t *sec, int which, fixed_t dx, fixed_t dy, fixed_t &tdx, fixed_t &tdy)
+{
+	angle_t an = sec->GetAngle(which);
+	if (an == 0)
+	{
+		tdx = dx;
+		tdy = dy;
+	}
+	else
+	{
+		an = an >> ANGLETOFINESHIFT;
+		fixed_t ca = -finecosine[an];
+		fixed_t sa = -finesine[an];
+		tdx = DMulScale16(dx, ca, -dy, sa);
+		tdy = DMulScale16(dy, ca,  dx, sa);
+	}
+}
+
 void DScroller::Tick ()
 {
-	fixed_t dx = m_dx, dy = m_dy;
+	fixed_t dx = m_dx, dy = m_dy, tdx, tdy;
 
 	if (m_Control != -1)
 	{	// compute scroll amounts based on a sector's height changes
@@ -1726,13 +1894,15 @@ void DScroller::Tick ()
 			break;
 
 		case sc_floor:						// killough 3/7/98: Scroll floor texture
-			sectors[m_Affectee].AddXOffset(sector_t::floor, dx);
-			sectors[m_Affectee].AddYOffset(sector_t::floor, dy);
+			RotationComp(&sectors[m_Affectee], sector_t::floor, dx, dy, tdx, tdy);
+			sectors[m_Affectee].AddXOffset(sector_t::floor, tdx);
+			sectors[m_Affectee].AddYOffset(sector_t::floor, tdy);
 			break;
 
 		case sc_ceiling:					// killough 3/7/98: Scroll ceiling texture
-			sectors[m_Affectee].AddXOffset(sector_t::ceiling, dx);
-			sectors[m_Affectee].AddYOffset(sector_t::ceiling, dy);
+			RotationComp(&sectors[m_Affectee], sector_t::ceiling, dx, dy, tdx, tdy);
+			sectors[m_Affectee].AddXOffset(sector_t::ceiling, tdx);
+			sectors[m_Affectee].AddYOffset(sector_t::ceiling, tdy);
 			break;
 
 		// [RH] Don't actually carry anything here. That happens later.
@@ -1986,7 +2156,7 @@ static void P_SpawnScrollers(void)
 		case Scroll_Ceiling:
 
 			// [BC] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
 			for (s=-1; (s = P_FindSectorFromTag (l->args[0],s)) >= 0;)
@@ -2007,7 +2177,7 @@ static void P_SpawnScrollers(void)
 		case Scroll_Floor:
 
 			// [BC] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
 			if (l->args[2] != 1)
@@ -2050,7 +2220,7 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Model:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
 			for (s=-1; (s = P_FindLineFromID (l->args[0],s)) >= 0;)
@@ -2061,7 +2231,7 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Offsets:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
 			// killough 3/2/98: scroll according to sidedef offsets
@@ -2073,9 +2243,10 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Left:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
+			l->special = special;	// Restore the special, for compat_useblocking's benefit.
 			s = int(lines[i].sidedef[0] - sides);
 			new DScroller (DScroller::sc_side, l->args[0] * (FRACUNIT/64), 0,
 						   -1, s, accel, SCROLLTYPE(l->args[1]));
@@ -2084,9 +2255,10 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Right:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
+			l->special = special;
 			s = int(lines[i].sidedef[0] - sides);
 			new DScroller (DScroller::sc_side, l->args[0] * (-FRACUNIT/64), 0,
 						   -1, s, accel, SCROLLTYPE(l->args[1]));
@@ -2095,9 +2267,10 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Up:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
+			l->special = special;
 			s = int(lines[i].sidedef[0] - sides);
 			new DScroller (DScroller::sc_side, 0, l->args[0] * (FRACUNIT/64),
 						   -1, s, accel, SCROLLTYPE(l->args[1]));
@@ -2106,9 +2279,10 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Down:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
+			l->special = special;
 			s = int(lines[i].sidedef[0] - sides);
 			new DScroller (DScroller::sc_side, 0, l->args[0] * (-FRACUNIT/64),
 						   -1, s, accel, SCROLLTYPE(l->args[1]));
@@ -2117,7 +2291,7 @@ static void P_SpawnScrollers(void)
 		case Scroll_Texture_Both:
 
 			// [WS] The server will update these for us.
-			if ( NETWORK_InClientMode( ) )
+			if ( NETWORK_InClientMode() )
 				break;
 
 			s = int(lines[i].sidedef[0] - sides);
@@ -2198,8 +2372,7 @@ static void P_SpawnFriction(void)
 
 	// [BC] Don't do this in client mode, because the friction for the sector could
 	// have changed at some point on the server end.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -2374,6 +2547,15 @@ DPusher::DPusher (DPusher::EPusher type, line_t *l, int magnitude, int angle,
 	m_Affectee = affectee;
 }
 
+int DPusher::CheckForSectorMatch (EPusher type, int tag)
+{
+	if (m_Type == type && sectors[m_Affectee].tag == tag)
+		return m_Affectee;
+	else
+		return -1;
+}
+
+
 /////////////////////////////
 //
 // T_Pusher looks for all objects that are inside the radius of
@@ -2428,7 +2610,7 @@ void DPusher::Tick ()
 		while ((thing = it.Next()))
 		{
 			// [BB] While predicting, only handle the body of the predicted player.
-			if ( CLIENT_PREDICT_IsPredicting() && ( ( thing->player == false ) || ( static_cast<int>( thing->player - players ) != consoleplayer ) ) )
+			if ( CLIENT_PREDICT_IsPredicting() && ( ( thing->player == NULL ) || ( static_cast<int>( thing->player - players ) != consoleplayer ) ) )
 				continue;
 
 			// [BB] Don't affect spectators.
@@ -2479,7 +2661,7 @@ void DPusher::Tick ()
 			continue;
 
 		// [BB] While predicting, only handle the body of the predicted player.
-		if ( CLIENT_PREDICT_IsPredicting() && ( ( thing->player == false ) || ( static_cast<int>( thing->player - players ) != consoleplayer ) ) )
+		if ( CLIENT_PREDICT_IsPredicting() && ( ( thing->player == NULL ) || ( static_cast<int>( thing->player - players ) != consoleplayer ) ) )
 			continue;
 
 		// [BB] Don't affect spectators.

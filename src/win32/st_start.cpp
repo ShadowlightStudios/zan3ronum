@@ -52,6 +52,7 @@
 #include "w_wad.h"
 #include "s_sound.h"
 #include "m_argv.h"
+#include "d_main.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -245,7 +246,7 @@ static const RGBQUAD TextModePalette[16] =
 	{ MD, MD,  0, 0 },		// 3 cyan
 	{  0,  0, MD, 0 },		// 4 red
 	{ MD,  0, MD, 0 },		// 5 magenta
-	{  0, MD, MD, 0 },		// 6 brown
+	{  0, LO, MD, 0 },		// 6 brown
 	{ MD, MD, MD, 0 },		// 7 light gray
 
 	{ LO, LO, LO, 0 },		// 8 dark gray
@@ -276,15 +277,18 @@ FStartupScreen *FStartupScreen::CreateInstance(int max_progress)
 
 	if (!Args->CheckParm("-nostartup"))
 	{
-		if (gameinfo.gametype == GAME_Hexen)
+		if (DoomStartupInfo.Type == FStartupInfo::HexenStartup ||
+			(gameinfo.gametype == GAME_Hexen && DoomStartupInfo.Type == FStartupInfo::DefaultStartup))
 		{
 			scr = new FHexenStartupScreen(max_progress, hr);
 		}
-		else if (gameinfo.gametype == GAME_Heretic)
+		else if (DoomStartupInfo.Type == FStartupInfo::HereticStartup ||
+			(gameinfo.gametype == GAME_Heretic && DoomStartupInfo.Type == FStartupInfo::DefaultStartup))
 		{
 			scr = new FHereticStartupScreen(max_progress, hr);
 		}
-		else if (gameinfo.gametype == GAME_Strife)
+		else if (DoomStartupInfo.Type == FStartupInfo::StrifeStartup ||
+			(gameinfo.gametype == GAME_Strife && DoomStartupInfo.Type == FStartupInfo::DefaultStartup))
 		{
 			scr = new FStrifeStartupScreen(max_progress, hr);
 		}
@@ -656,23 +660,23 @@ FHexenStartupScreen::FHexenStartupScreen(int max_progress, HRESULT &hr)
 	{
 		RGBQUAD color;
 		DWORD	quad;
-	};
+	} c;
 
 	Wads.ReadLump (startup_lump, startup_screen);
 
-	color.rgbReserved = 0;
+	c.color.rgbReserved = 0;
 
 	StartupBitmap = ST_Util_CreateBitmap (640, 480, 4);
 
 	// Initialize the bitmap palette.
 	for (int i = 0; i < 16; ++i)
 	{
-		color.rgbRed = startup_screen[i*3+0];
-		color.rgbGreen = startup_screen[i*3+1];
-		color.rgbBlue = startup_screen[i*3+2];
+		c.color.rgbRed = startup_screen[i*3+0];
+		c.color.rgbGreen = startup_screen[i*3+1];
+		c.color.rgbBlue = startup_screen[i*3+2];
 		// Convert from 6-bit per component to 8-bit per component.
-		quad = (quad << 2) | ((quad >> 4) & 0x03030303);
-		StartupBitmap->bmiColors[i] = color;
+		c.quad = (c.quad << 2) | ((c.quad >> 4) & 0x03030303);
+		StartupBitmap->bmiColors[i] = c.color;
 	}
 
 	// Fill in the bitmap data. Convert to chunky, because I can't figure out
@@ -684,8 +688,14 @@ FHexenStartupScreen::FHexenStartupScreen(int max_progress, HRESULT &hr)
 	LayoutMainWindow (Window, NULL);
 	InvalidateRect (StartupScreen, NULL, TRUE);
 
-	S_ChangeMusic ("orb", true, true);
-
+	if (DoomStartupInfo.Song.IsNotEmpty())
+	{
+		S_ChangeMusic(DoomStartupInfo.Song.GetChars(), true, true);
+	}
+	else
+	{
+		S_ChangeMusic ("orb", true, true);
+	}
 	hr = S_OK;
 }
 
@@ -1569,7 +1579,7 @@ void ST_Util_DrawChar (BITMAPINFO *screen, const BYTE *font, int x, int y, BYTE 
 	const BYTE fg      = attrib & 0x0F;
 	const BYTE fg_left = fg << 4;
 	const BYTE bg      = bg_left >> 4;
-	const BYTE color_array[4] = { bg_left | bg, attrib & 0x7F, fg_left | bg, fg_left | fg };
+	const BYTE color_array[4] = { (BYTE)(bg_left | bg), (BYTE)(attrib & 0x7F), (BYTE)(fg_left | bg), (BYTE)(fg_left | fg) };
 	const BYTE *src = font + 1 + charnum * font[0];
 	int pitch = screen->bmiHeader.biWidth >> 1;
 	BYTE *dest = ST_Util_BitsForBitmap(screen) + x*4 + y * font[0] * pitch;

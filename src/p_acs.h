@@ -3,7 +3,7 @@
 ** ACS script stuff
 **
 **---------------------------------------------------------------------------
-** Copyright 1998-2008 Randy Heit
+** Copyright 1998-2012 Randy Heit
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,8 @@
 #include "dobject.h"
 #include "dthinker.h"
 #include "doomtype.h"
+// [BB] New #includes.
+#include "r_data/r_translate.h"
 
 #define LOCAL_SIZE				20
 #define NUM_MAPVARS				128
@@ -75,6 +77,12 @@ extern FWorldGlobalArray ACS_GlobalArrays[NUM_GLOBALVARS];
 // Global ACS string table
 #define STRPOOL_LIBRARYID		(INT_MAX >> LIBRARYID_SHIFT)
 #define STRPOOL_LIBRARYID_OR	(STRPOOL_LIBRARYID << LIBRARYID_SHIFT)
+
+// [TP]
+namespace ServerCommands
+{
+	class ReplaceTextures;
+};
 
 class ACSStringPool
 {
@@ -123,22 +131,44 @@ void P_CollectACSGlobalStrings(const SDWORD *stack, int stackdepth);
 void P_ReadACSVars(PNGHandle *);
 void P_WriteACSVars(FILE*);
 void P_ClearACSVars(bool);
+void P_SerializeACSScriptNumber(FArchive &arc, int &scriptnum, bool was2byte);
+
+struct ACSProfileInfo
+{
+	unsigned long long TotalInstr;
+	unsigned int NumRuns;
+	unsigned int MinInstrPerRun;
+	unsigned int MaxInstrPerRun;
+
+	ACSProfileInfo();
+	void AddRun(unsigned int num_instr);
+	void Reset();
+};
+
+struct ProfileCollector
+{
+	ACSProfileInfo *ProfileData;
+	class FBehavior *Module;
+	int Index;
+};
 
 // The in-memory version
 struct ScriptPtr
 {
-	WORD Number;
+	int Number;
+	DWORD Address;
 	BYTE Type;
 	BYTE ArgCount;
 	WORD VarCount;
 	WORD Flags;
-	DWORD Address;
+
+	ACSProfileInfo ProfileData;
 };
 
 // The present ZDoom version
 struct ScriptPtr3
 {
-	WORD Number;
+	SWORD Number;
 	BYTE Type;
 	BYTE ArgCount;
 	DWORD Address;
@@ -147,7 +177,7 @@ struct ScriptPtr3
 // The intermediate ZDoom version
 struct ScriptPtr1
 {
-	WORD Number;
+	SWORD Number;
 	WORD Type;
 	DWORD Address;
 	DWORD ArgCount;
@@ -193,6 +223,7 @@ enum
 	SCRIPT_Disconnect	= 14,
 	SCRIPT_Return		= 15,
 	SCRIPT_Event		= 16, // [BB]
+	SCRIPT_Kill			= 17, // [JM]
 };
 
 // Script flags
@@ -233,6 +264,22 @@ enum
 	APROP_Notrigger		= 23,
 	APROP_DamageFactor	= 24,
 	APROP_MasterTID     = 25,
+	APROP_TargetTID		= 26,
+	APROP_TracerTID		= 27,
+	APROP_WaterLevel	= 28,
+	APROP_ScaleX        = 29,
+	APROP_ScaleY        = 30,
+	APROP_Dormant		= 31,
+	APROP_Mass			= 32,
+	APROP_Accuracy      = 33,
+	APROP_Stamina       = 34,
+	APROP_Height		= 35,
+	APROP_Radius		= 36,
+	APROP_ReactionTime  = 37,
+	APROP_MeleeRange	= 38,
+	APROP_ViewHeight	= 39,
+	APROP_AttackZOffset	= 40,
+	APROP_StencilColor	= 41,
 };	
 
 // [Dusk] Enumeration for GetTeamProperty
@@ -284,7 +331,12 @@ public:
 	int FindMapArray (const char *arrayname) const;
 	int GetLibraryID () const { return LibraryID; }
 	int *GetScriptAddress (const ScriptPtr *ptr) const { return (int *)(ptr->Address + Data); }
-
+	int GetScriptIndex (const ScriptPtr *ptr) const { ptrdiff_t index = ptr - Scripts; return index >= NumScripts ? -1 : (int)index; }
+	ScriptPtr *GetScriptPtr(int index) const { return index >= 0 && index < NumScripts ? &Scripts[index] : NULL; }
+	int GetLumpNum() const { return LumpNum; }
+	const char *GetModuleName() const { return ModuleName; }
+	ACSProfileInfo *GetFunctionProfileData(int index) { return index >= 0 && index < NumFunctions ? &FunctionProfileData[index] : NULL; }
+	ACSProfileInfo *GetFunctionProfileData(ScriptFunction *func) { return GetFunctionProfileData((int)(func - (ScriptFunction *)Functions)); }
 	const char *LookupString (DWORD index) const;
 
 	SDWORD *MapVars[NUM_MAPVARS];
@@ -305,6 +357,10 @@ public:
 	static void StaticStopMyScripts (AActor *actor);
 	static int StaticCountTypedScripts( WORD type );
 
+	// [TP]
+	static FString RepresentScript ( int script );
+	static TArray<FName> StaticGetAllScriptNames();
+
 private:
 	struct ArrayInfo;
 
@@ -317,6 +373,7 @@ private:
 	ScriptPtr *Scripts;
 	int NumScripts;
 	BYTE *Functions;
+	ACSProfileInfo *FunctionProfileData;
 	int NumFunctions;
 	ArrayInfo *ArrayStore;
 	int NumArrays;
@@ -335,14 +392,18 @@ private:
 
 	static int STACK_ARGS SortScripts (const void *a, const void *b);
 	void UnencryptStrings ();
+	void UnescapeStringTable(BYTE *chunkstart, BYTE *datastart, bool haspadding);
 	int FindStringInChunk (DWORD *chunk, const char *varname) const;
 
 	void SerializeVars (FArchive &arc);
 	void SerializeVarSet (FArchive &arc, SDWORD *vars, int max);
+
 	void MarkMapVarStrings() const;
 	void LockMapVarStrings() const;
 	void UnlockMapVarStrings() const;
 
+	friend void ArrangeScriptProfiles(TArray<ProfileCollector> &profiles);
+	friend void ArrangeFunctionProfiles(TArray<ProfileCollector> &profiles);
 };
 
 class DLevelScript : public DObject
@@ -715,13 +776,17 @@ public:
 		PCD_STRCPYTOMAPCHRANGE,	// [FDARI] input range (copy string to all/part of array)
 		PCD_STRCPYTOWORLDCHRANGE,
 		PCD_STRCPYTOGLOBALCHRANGE,
-
+		PCD_PUSHFUNCTION,		// from Eternity
+/*360*/	PCD_CALLSTACK,			// from Eternity
+		PCD_SCRIPTWAITNAMED,
+		PCD_TRANSLATIONRANGE3,
 		PCD_GOTOSTACK,
+
 		// [BB] We need to fix the number for the new commands!
 		// [CW] Begin team additions.
 		PCD_GETTEAMPLAYERCOUNT,
 		// [CW] End team additions.
-/*359*/	PCODE_COMMAND_COUNT
+/*363*/	PCODE_COMMAND_COUNT
 	};
 
 	// Some constants used by ACS scripts
@@ -784,7 +849,9 @@ public:
 		PLAYERINFO_NEVERSWITCH,
 		PLAYERINFO_MOVEBOB,
 		PLAYERINFO_STILLBOB,
-		PLAYERINFO_PLAYERCLASS
+		PLAYERINFO_PLAYERCLASS,
+		PLAYERINFO_FOV,
+		PLAYERINFO_DESIREDFOV,
 	};
 
 	enum EScriptState
@@ -802,7 +869,7 @@ public:
 	};
 
 	DLevelScript (AActor *who, line_t *where, int num, const ScriptPtr *code, FBehavior *module,
-		bool backSide, int arg0, int arg1, int arg2, int always);
+		const int *args, int argcount, int flags);
 	~DLevelScript ();
 
 	void Serialize (FArchive &arc);
@@ -839,7 +906,10 @@ protected:
 	bool			backSide;
 	FFont			*activefont;
 	int				hudwidth, hudheight;
+	int				ClipRectLeft, ClipRectTop, ClipRectWidth, ClipRectHeight;
+	int				WrapWidth;
 	FBehavior	    *activeBehavior;
+	int				InModuleScriptNumber;
 	FString			activefontname; // [TP]
 
 	void Link ();
@@ -852,6 +922,8 @@ protected:
 	static int CountPlayers ();
 	static void SetLineTexture (int lineid, int side, int position, int name);
 	static void ReplaceTextures (int fromname, int toname, int flags);
+	// [BB]
+	static void ReplaceTextures (const char *fromname, const char *toname, int flags);
 	static int DoSpawn (int type, fixed_t x, fixed_t y, fixed_t z, int tid, int angle, bool force);
 	static bool DoCheckActorTexture(int tid, AActor *activator, int string, bool floor);
 	int DoSpawnSpot (int type, int spot, int tid, int angle, bool forced);
@@ -877,17 +949,9 @@ private:
 
 	friend class DACSThinker;
 
-	// [BB] The clients need to call some of the static functions from DLevelScript.
-	friend class STClient;
+	// [BB/TP] The client needs to call DLevelScript::ReplaceTextures.
+	friend class ServerCommands::ReplaceTextures;
 };
-
-inline FArchive &operator<< (FArchive &arc, DLevelScript::EScriptState &state)
-{
-	BYTE val = (BYTE)state;
-	arc << val;
-	state = (DLevelScript::EScriptState)val;
-	return arc;
-}
 
 class DACSThinker : public DThinker
 {
@@ -900,9 +964,8 @@ public:
 	void Serialize (FArchive &arc);
 	void Tick ();
 
-	// [BB]
-	static const int MaxScripNum = 65536; 
-	DLevelScript *RunningScripts[MaxScripNum];	// Array of all synchronous scripts
+	typedef TMap<int, DLevelScript *> ScriptMap;
+	ScriptMap RunningScripts;	// Array of all synchronous scripts
 	static TObjPtr<DACSThinker> ActiveThinker;
 
 	void DumpScriptStatus();
@@ -931,7 +994,7 @@ struct acsdefered_t
 		defterminate
 	} type;
 	int script;
-	int arg0, arg1, arg2;
+	int args[3];
 	int playernum;
 };
 
@@ -941,14 +1004,13 @@ FArchive &operator<< (FArchive &arc, acsdefered_t *&defer);
 //	PROTOTYPES
 
 bool	ACS_IsCalledFromConsoleCommand( void );
-bool	ACS_IsScriptClientSide( ULONG ulScript );
+bool	ACS_IsScriptClientSide( int script );
 bool	ACS_IsScriptClientSide( const ScriptPtr *pScriptData );
 bool	ACS_IsScriptPukeable( ULONG ulScript );
 int		ACS_GetTranslationIndex( FRemapTable *pTranslation );
 int		ACS_PushAndReturnDynamicString ( const FString &Work, const SDWORD *stack, int stackdepth );
+bool	ACS_ExistsScript( int script );
 
-// [BL] Export DoClearInv
-void	DoClearInv(AActor *actor);
 // [BB] Export DoGiveInv
 bool	DoGiveInv(AActor *actor, const PClass *info, int amount);
 

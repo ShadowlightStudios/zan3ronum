@@ -91,7 +91,7 @@ static const BYTE CtrlTranslate[15] =
 //
 //==========================================================================
 
-MUSSong2::MUSSong2 (FILE *file, BYTE *musiccache, int len, EMIDIDevice type)
+MUSSong2::MUSSong2 (FILE *file, BYTE *musiccache, int len, EMidiDevice type)
 : MIDIStreamer(type), MusHeader(0), MusBuffer(0)
 {
 #ifdef _WIN32
@@ -125,7 +125,7 @@ MUSSong2::MUSSong2 (FILE *file, BYTE *musiccache, int len, EMIDIDevice type)
 
 	// Read the remainder of the song.
 	len = int(len - start);
-	if (len < sizeof(MusHeader))
+	if (len < (int)sizeof(MusHeader))
 	{ // It's too short.
 		return;
 	}
@@ -283,9 +283,9 @@ DWORD *MUSSong2::MakeEvents(DWORD *events, DWORD *max_event_p, DWORD max_time)
 		switch (event & 0x70)
 		{
 		case MUS_NOTEOFF:
-			status |= MIDI_NOTEOFF;
+			status |= MIDI_NOTEON;
 			mid1 = t;
-			mid2 = 64;
+			mid2 = 0;
 			break;
 			
 		case MUS_NOTEON:
@@ -323,8 +323,9 @@ DWORD *MUSSong2::MakeEvents(DWORD *events, DWORD *max_event_p, DWORD max_time)
 				mid1 = CtrlTranslate[t];
 				mid2 = MusBuffer[MusP++];
 				if (mid1 == 7)
-				{
-					mid2 = VolumeControllerChange(channel, mid2);
+				{ // Clamp volume to 127, since DMX apparently allows 8-bit volumes.
+				  // Fix courtesy of Gez, courtesy of Ben Ryves.
+					mid2 = VolumeControllerChange(channel, MIN<int>(mid2, 0x7F));
 				}
 			}
 			break;
@@ -371,7 +372,7 @@ end:
 
 MusInfo *MUSSong2::GetOPLDumper(const char *filename)
 {
-	return new MUSSong2(this, filename, MIDI_OPL);
+	return new MUSSong2(this, filename, MDEV_OPL);
 }
 
 //==========================================================================
@@ -382,7 +383,7 @@ MusInfo *MUSSong2::GetOPLDumper(const char *filename)
 
 MusInfo *MUSSong2::GetWaveDumper(const char *filename, int rate)
 {
-	return new MUSSong2(this, filename, MIDI_Timidity);
+	return new MUSSong2(this, filename, MDEV_GUS);
 }
 
 //==========================================================================
@@ -391,7 +392,7 @@ MusInfo *MUSSong2::GetWaveDumper(const char *filename, int rate)
 //
 //==========================================================================
 
-MUSSong2::MUSSong2(const MUSSong2 *original, const char *filename, EMIDIDevice type)
+MUSSong2::MUSSong2(const MUSSong2 *original, const char *filename, EMidiDevice type)
 : MIDIStreamer(filename, type)
 {
 	int songstart = LittleShort(original->MusHeader->SongStart);

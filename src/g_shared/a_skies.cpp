@@ -36,6 +36,7 @@
 #include "a_sharedglobal.h"
 #include "p_local.h"
 #include "p_lnspec.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "network.h"
 
@@ -46,34 +47,22 @@ IMPLEMENT_POINTY_CLASS (ASkyViewpoint)
 END_POINTERS
 
 // If this actor has no TID, make it the default sky box
-// [BB] The clients don't know the TIDs yet when calling
-// BeginPlay, so we have to do the following in PostBeginPlay.
-void ASkyViewpoint::PostBeginPlay ()
+void ASkyViewpoint::BeginPlay ()
 {
-	Super::PostBeginPlay ();
+	Super::BeginPlay ();
 
-	if (tid == 0)
+	// [BB] At this point, the client doesn't know the TID. The server
+	// will inform the client about the default skybox during a full update instead.
+	if (tid == 0 && level.DefaultSkybox == NULL && (NETWORK_InClientModeAndActorNotClientHandled( this ) == false) )
 	{
-		int i;
-
-		for (i = 0; i <numsectors; i++)
-		{
-			if (sectors[i].FloorSkyBox == NULL)
-			{
-				sectors[i].FloorSkyBox = this;
-			}
-			if (sectors[i].CeilingSkyBox == NULL)
-			{
-				sectors[i].CeilingSkyBox = this;
-			}
-		}
+		level.DefaultSkybox = this;
 	}
 }
 
 void ASkyViewpoint::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc << bInSkybox << bAlways << Mate << PlaneAlpha;
+	arc << bInSkybox << bAlways << Mate;
 }
 
 void ASkyViewpoint::Destroy ()
@@ -89,6 +78,10 @@ void ASkyViewpoint::Destroy ()
 		{
 			sectors[i].CeilingSkyBox = NULL;
 		}
+	}
+	if (level.DefaultSkybox == this)
+	{
+		level.DefaultSkybox = NULL;
 	}
 	Super::Destroy();
 }
@@ -195,10 +188,12 @@ void ASkyPicker::PostBeginPlay ()
 		if (0 == (args[1] & 2))
 		{
 			Sector->CeilingSkyBox = box;
+			if (box == NULL) Sector->MoreFlags |= SECF_NOCEILINGSKYBOX;	// sector should ignore the level's default skybox
 		}
 		if (0 == (args[1] & 1))
 		{
 			Sector->FloorSkyBox = box;
+			if (box == NULL) Sector->MoreFlags |= SECF_NOFLOORSKYBOX;	// sector should ignore the level's default skybox
 		}
 	}
 	// [BB] The server may not destroy the SkyPicker, otherwise he can't

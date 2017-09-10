@@ -46,6 +46,7 @@
 #include "doomstat.h"
 #include "a_sharedglobal.h"
 
+#include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/renderer/gl_lightdata.h"
@@ -83,13 +84,11 @@ int GLPortal::renderdepth;
 int GLPortal::PlaneMirrorMode;
 GLuint GLPortal::QueryObject;
 
-bool	 GLPortal::inupperstack;
-bool	 GLPortal::inlowerstack;
+int		 GLPortal::instack[2];
 bool	 GLPortal::inskybox;
 
 UniqueList<GLSkyInfo> UniqueSkies;
 UniqueList<GLHorizonInfo> UniqueHorizons;
-UniqueList<GLSectorStackInfo> UniqueStacks;
 UniqueList<secplane_t> UniquePlaneMirrors;
 
 
@@ -104,7 +103,6 @@ void GLPortal::BeginScene()
 {
 	UniqueSkies.Clear();
 	UniqueHorizons.Clear();
-	UniqueStacks.Clear();
 	UniquePlaneMirrors.Clear();
 }
 
@@ -115,19 +113,19 @@ void GLPortal::BeginScene()
 //==========================================================================
 void GLPortal::ClearScreen()
 {
-	bool multi = !!gl.IsEnabled(GL_MULTISAMPLE);
-	gl.MatrixMode(GL_MODELVIEW);
-	gl.PushMatrix();
-	gl.MatrixMode(GL_PROJECTION);
-	gl.PushMatrix();
+	bool multi = !!glIsEnabled(GL_MULTISAMPLE);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
 	screen->Begin2D(false);
 	screen->Dim(0, 1.f, 0, 0, SCREENWIDTH, SCREENHEIGHT);
-	gl.Enable(GL_DEPTH_TEST);
-	gl.MatrixMode(GL_PROJECTION);
-	gl.PopMatrix();
-	gl.MatrixMode(GL_MODELVIEW);
-	gl.PopMatrix();
-	if (multi) gl.Enable(GL_MULTISAMPLE);
+	glEnable(GL_DEPTH_TEST);
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix();
+	if (multi) glEnable(GL_MULTISAMPLE);
 	gl_RenderState.Set2DMode(false);
 }
 
@@ -149,18 +147,18 @@ void GLPortal::DrawPortalStencil()
 	{
 		// Cap the stencil at the top and bottom 
 		// (cheap ass version)
-		gl.Begin(GL_TRIANGLE_FAN);
-		gl.Vertex3f(-32767.0f,32767.0f,-32767.0f);
-		gl.Vertex3f(-32767.0f,32767.0f, 32767.0f);
-		gl.Vertex3f( 32767.0f,32767.0f, 32767.0f);
-		gl.Vertex3f( 32767.0f,32767.0f,-32767.0f);
-		gl.End();
-		gl.Begin(GL_TRIANGLE_FAN);
-		gl.Vertex3f(-32767.0f,-32767.0f,-32767.0f);
-		gl.Vertex3f(-32767.0f,-32767.0f, 32767.0f);
-		gl.Vertex3f( 32767.0f,-32767.0f, 32767.0f);
-		gl.Vertex3f( 32767.0f,-32767.0f,-32767.0f);
-		gl.End();
+		glBegin(GL_TRIANGLE_FAN);
+		glVertex3f(-32767.0f,32767.0f,-32767.0f);
+		glVertex3f(-32767.0f,32767.0f, 32767.0f);
+		glVertex3f( 32767.0f,32767.0f, 32767.0f);
+		glVertex3f( 32767.0f,32767.0f,-32767.0f);
+		glEnd();
+		glBegin(GL_TRIANGLE_FAN);
+		glVertex3f(-32767.0f,-32767.0f,-32767.0f);
+		glVertex3f(-32767.0f,-32767.0f, 32767.0f);
+		glVertex3f( 32767.0f,-32767.0f, 32767.0f);
+		glVertex3f( 32767.0f,-32767.0f,-32767.0f);
+		glEnd();
 	}
 }
 
@@ -185,27 +183,27 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 		}
 	
 		// Create stencil 
-		gl.StencilFunc(GL_EQUAL,recursion,~0);		// create stencil
-		gl.StencilOp(GL_KEEP,GL_KEEP,GL_INCR);		// increment stencil of valid pixels
-		gl.ColorMask(0,0,0,0);						// don't write to the graphics buffer
+		glStencilFunc(GL_EQUAL,recursion,~0);		// create stencil
+		glStencilOp(GL_KEEP,GL_KEEP,GL_INCR);		// increment stencil of valid pixels
+		glColorMask(0,0,0,0);						// don't write to the graphics buffer
 		gl_RenderState.EnableTexture(false);
-		gl.Color3f(1,1,1);
-		gl.DepthFunc(GL_LESS);
-		gl_RenderState.Apply(true);
+		glColor3f(1,1,1);
+		glDepthFunc(GL_LESS);
+		gl_RenderState.Apply();
 
 		if (NeedDepthBuffer())
 		{
-			gl.DepthMask(false);							// don't write to Z-buffer!
+			glDepthMask(false);							// don't write to Z-buffer!
 			if (!NeedDepthBuffer()) doquery = false;		// too much overhead and nothing to gain.
 			else if (gl_noquery) doquery = false;
 			
 			// If occlusion query is supported let's use it to avoid rendering portals that aren't visible
 			if (doquery && gl.flags&RFL_OCCLUSION_QUERY)
 			{
-				if (!QueryObject) gl.GenQueries(1, &QueryObject);
+				if (!QueryObject) glGenQueries(1, &QueryObject);
 				if (QueryObject) 
 				{
-					gl.BeginQuery(GL_SAMPLES_PASSED_ARB, QueryObject);
+					glBeginQuery(GL_SAMPLES_PASSED_ARB, QueryObject);
 				}
 				else doquery = false;	// some kind of error happened
 					
@@ -215,34 +213,34 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 
 			if (doquery && gl.flags&RFL_OCCLUSION_QUERY)
 			{
-				gl.EndQuery(GL_SAMPLES_PASSED_ARB);
+				glEndQuery(GL_SAMPLES_PASSED_ARB);
 			}
 
 			// Clear Z-buffer
-			gl.StencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
-			gl.StencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
-			gl.DepthMask(true);							// enable z-buffer again
-			gl.DepthRange(1,1);
-			gl.DepthFunc(GL_ALWAYS);
+			glStencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
+			glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
+			glDepthMask(true);							// enable z-buffer again
+			glDepthRange(1,1);
+			glDepthFunc(GL_ALWAYS);
 			DrawPortalStencil();
 
 			// set normal drawing mode
 			gl_RenderState.EnableTexture(true);
-			gl.DepthFunc(GL_LESS);
-			gl.ColorMask(1,1,1,1);
-			gl.DepthRange(0,1);
+			glDepthFunc(GL_LESS);
+			glColorMask(1,1,1,1);
+			glDepthRange(0,1);
 
 			if (doquery && gl.flags&RFL_OCCLUSION_QUERY)
 			{
 				GLuint sampleCount;
 
-				gl.GetQueryObjectuiv(QueryObject, GL_QUERY_RESULT_ARB, &sampleCount);
+				glGetQueryObjectuiv(QueryObject, GL_QUERY_RESULT_ARB, &sampleCount);
 
 				if (sampleCount==0) 	// not visible
 				{
 					// restore default stencil op.
-					gl.StencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
-					gl.StencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
+					glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
+					glStencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
 					PortalAll.Unclock();
 					return false;
 				}
@@ -256,14 +254,14 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 			// than the benefit.
 			// Note: We must draw the stencil with z-write enabled here because there is no second pass!
 
-			gl.DepthMask(true);
+			glDepthMask(true);
 			DrawPortalStencil();
-			gl.StencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
-			gl.StencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
+			glStencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
+			glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
 			gl_RenderState.EnableTexture(true);
-			gl.ColorMask(1,1,1,1);
-			gl.Disable(GL_DEPTH_TEST);
-			gl.DepthMask(false);							// don't write to Z-buffer!
+			glColorMask(1,1,1,1);
+			glDisable(GL_DEPTH_TEST);
+			glDepthMask(false);							// don't write to Z-buffer!
 		}
 		recursion++;
 
@@ -277,13 +275,13 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 		}
 		else
 		{
-			gl.DepthMask(false);
-			gl.Disable(GL_DEPTH_TEST);
+			glDepthMask(false);
+			glDisable(GL_DEPTH_TEST);
 		}
 	}
 	// The clip plane from the previous portal must be deactivated for this one.
-	clipsave = gl.IsEnabled(GL_CLIP_PLANE0+renderdepth-1);
-	if (clipsave) gl.Disable(GL_CLIP_PLANE0+renderdepth-1);
+	clipsave = glIsEnabled(GL_CLIP_PLANE0+renderdepth-1);
+	if (clipsave) glDisable(GL_CLIP_PLANE0+renderdepth-1);
 
 	// save viewpoint
 	savedviewx=viewx;
@@ -292,6 +290,9 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 	savedviewactor=GLRenderer->mViewActor;
 	savedviewangle=viewangle;
 	savedviewarea=in_area;
+
+	NextPortal = GLRenderer->mCurrentPortal;
+	GLRenderer->mCurrentPortal = NULL;	// Portals which need this have to set it themselves
 	PortalAll.Unclock();
 	return true;
 }
@@ -325,6 +326,8 @@ inline void GLPortal::ClearClipper()
 	angle_t a1 = GLRenderer->FrustumAngle();
 	if (a1<ANGLE_180) clipper.SafeAddClipRangeRealAngles(viewangle+a1, viewangle-a1);
 
+	// lock the parts that have just been clipped out.
+	clipper.SetSilhouette();
 }
 
 //-----------------------------------------------------------------------------
@@ -337,7 +340,8 @@ void GLPortal::End(bool usestencil)
 	bool needdepth = NeedDepthBuffer();
 
 	PortalAll.Clock();
-	if (clipsave) gl.Enable (GL_CLIP_PLANE0+renderdepth-1);
+	GLRenderer->mCurrentPortal = NextPortal;
+	if (clipsave) glEnable (GL_CLIP_PLANE0+renderdepth-1);
 	if (usestencil)
 	{
 		if (needdepth) FDrawInfo::EndDrawInfo();
@@ -351,52 +355,52 @@ void GLPortal::End(bool usestencil)
 		in_area=savedviewarea;
 		GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
-		gl.Color4f(1,1,1,1);
-		gl.ColorMask(0,0,0,0);						// no graphics
-		gl.Color3f(1,1,1);
+		glColor4f(1,1,1,1);
+		glColorMask(0,0,0,0);						// no graphics
+		glColor3f(1,1,1);
 		gl_RenderState.EnableTexture(false);
-		gl_RenderState.Apply(true);
+		gl_RenderState.Apply();
 
 		if (needdepth) 
 		{
 			// first step: reset the depth buffer to max. depth
-			gl.DepthRange(1,1);							// always
-			gl.DepthFunc(GL_ALWAYS);						// write the farthest depth value
+			glDepthRange(1,1);							// always
+			glDepthFunc(GL_ALWAYS);						// write the farthest depth value
 			DrawPortalStencil();
 		}
 		else
 		{
-			gl.Enable(GL_DEPTH_TEST);
+			glEnable(GL_DEPTH_TEST);
 		}
 		
 		// second step: restore the depth buffer to the previous values and reset the stencil
-		gl.DepthFunc(GL_LEQUAL);
-		gl.DepthRange(0,1);
-		gl.StencilOp(GL_KEEP,GL_KEEP,GL_DECR);
-		gl.StencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
+		glDepthFunc(GL_LEQUAL);
+		glDepthRange(0,1);
+		glStencilOp(GL_KEEP,GL_KEEP,GL_DECR);
+		glStencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
 		DrawPortalStencil();
-		gl.DepthFunc(GL_LESS);
+		glDepthFunc(GL_LESS);
 
 
 		gl_RenderState.EnableTexture(true);
-		gl.ColorMask(1,1,1,1);
+		glColorMask(1,1,1,1);
 		recursion--;
 
 		// restore old stencil op.
-		gl.StencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
-		gl.StencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
+		glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
+		glStencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
 	}
 	else
 	{
 		if (needdepth) 
 		{
 			FDrawInfo::EndDrawInfo();
-			gl.Clear(GL_DEPTH_BUFFER_BIT);
+			glClear(GL_DEPTH_BUFFER_BIT);
 		}
 		else
 		{
-			gl.Enable(GL_DEPTH_TEST);
-			gl.DepthMask(true);
+			glEnable(GL_DEPTH_TEST);
+			glDepthMask(true);
 		}
 		// Restore the old view
 		viewx=savedviewx;
@@ -410,15 +414,15 @@ void GLPortal::End(bool usestencil)
 		// This draws a valid z-buffer into the stencil's contents to ensure it
 		// doesn't get overwritten by the level's geometry.
 
-		gl.Color4f(1,1,1,1);
-		gl.DepthFunc(GL_LEQUAL);
-		gl.DepthRange(0,1);
-		gl.ColorMask(0,0,0,0);						// no graphics
+		glColor4f(1,1,1,1);
+		glDepthFunc(GL_LEQUAL);
+		glDepthRange(0,1);
+		glColorMask(0,0,0,0);						// no graphics
 		gl_RenderState.EnableTexture(false);
 		DrawPortalStencil();
 		gl_RenderState.EnableTexture(true);
-		gl.ColorMask(1,1,1,1);
-		gl.DepthFunc(GL_LESS);
+		glColorMask(1,1,1,1);
+		glDepthFunc(GL_LESS);
 	}
 	PortalAll.Unclock();
 }
@@ -435,7 +439,8 @@ void GLPortal::StartFrame()
 	portals.Push(p);
 	if (renderdepth==0)
 	{
-		inskybox=inupperstack=inlowerstack=false;
+		inskybox=false;
+		instack[sector_t::floor]=instack[sector_t::ceiling]=0;
 	}
 	renderdepth++;
 }
@@ -475,7 +480,7 @@ void GLPortal::EndFrame()
 	// Only use occlusion query if there are more than 2 portals. 
 	// Otherwise there's too much overhead.
 	// (And don't forget to consider the separating NULL pointers!)
-	bool usequery = portals.Size() > 2 + renderdepth;
+	bool usequery = portals.Size() > 2 + (unsigned)renderdepth;
 
 	while (portals.Pop(p) && p)
 	{
@@ -483,8 +488,10 @@ void GLPortal::EndFrame()
 		{
 			Printf("%sProcessing %s, depth = %d, query = %d\n", indent.GetChars(), p->GetName(), renderdepth, usequery);
 		}
-
-		p->RenderPortal(true, usequery);
+		if (p->lines.Size() > 0)
+		{
+			p->RenderPortal(true, usequery);
+		}
 		delete p;
 	}
 	renderdepth--;
@@ -514,10 +521,10 @@ bool GLPortal::RenderFirstSkyPortal(int recursion)
 	// Find the one with the highest amount of lines.
 	// Normally this is also the one that saves the largest amount
 	// of time by drawing it before the scene itself.
-	for(unsigned i=portals.Size()-1;i>=0 && portals[i]!=NULL;i--)
+	for(int i = portals.Size()-1; i >= 0 && portals[i] != NULL; --i)
 	{
 		p=portals[i];
-		if (p->IsSky())
+		if (p->lines.Size() > 0 && p->IsSky())
 		{
 			// Cannot clear the depth buffer inside a portal recursion
 			if (recursion && p->NeedDepthBuffer()) continue;
@@ -532,9 +539,8 @@ bool GLPortal::RenderFirstSkyPortal(int recursion)
 
 	if (best)
 	{
-		best->RenderPortal(false, false);
 		portals.Delete(bestindex);
-
+		best->RenderPortal(false, false);
 		delete best;
 		return true;
 	}
@@ -547,6 +553,7 @@ bool GLPortal::RenderFirstSkyPortal(int recursion)
 // FindPortal
 //
 //-----------------------------------------------------------------------------
+
 GLPortal * GLPortal::FindPortal(const void * src)
 {
 	int i=portals.Size()-1;
@@ -556,6 +563,23 @@ GLPortal * GLPortal::FindPortal(const void * src)
 }
 
 
+//-----------------------------------------------------------------------------
+//
+// 
+//
+//-----------------------------------------------------------------------------
+
+void GLPortal::SaveMapSection()
+{
+	savedmapsection.Resize(currentmapsection.Size());
+	memcpy(&savedmapsection[0], &currentmapsection[0], currentmapsection.Size());
+	memset(&currentmapsection[0], 0, currentmapsection.Size());
+}
+
+void GLPortal::RestoreMapSection()
+{
+	memcpy(&currentmapsection[0], &savedmapsection[0], currentmapsection.Size());
+}
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -590,7 +614,7 @@ void GLSkyboxPortal::DrawContents()
 
 	PlaneMirrorMode=0;
 
-	gl.Disable(GL_DEPTH_CLAMP_NV);
+	glDisable(GL_DEPTH_CLAMP_NV);
 
 	viewx = origin->PrevX + FixedMul(r_TicFrac, origin->x - origin->PrevX);
 	viewy = origin->PrevY + FixedMul(r_TicFrac, origin->y - origin->PrevY);
@@ -611,14 +635,81 @@ void GLSkyboxPortal::DrawContents()
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	GLRenderer->SetViewArea();
 	ClearClipper();
+
+	int mapsection = R_PointInSubsector(viewx, viewy)->mapsection;
+
+	SaveMapSection();
+	currentmapsection[mapsection>>3] |= 1 << (mapsection & 7);
+
 	GLRenderer->DrawScene();
 	origin->flags&=~MF_JUSTHIT;
 	inskybox=false;
-	gl.Enable(GL_DEPTH_CLAMP_NV);
+	glEnable(GL_DEPTH_CLAMP_NV);
 	skyboxrecursion--;
 
 	PlaneMirrorMode=old_pm;
 	extralight = saved_extralight;
+
+	RestoreMapSection();
+}
+
+//-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+//
+//
+// Sector stack Portal
+//
+//
+//-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+GLSectorStackPortal::~GLSectorStackPortal()
+{
+	if (origin != NULL && origin->glportal == this)
+	{
+		origin->glportal = NULL;
+	}
+}
+
+//-----------------------------------------------------------------------------
+//
+// GLSectorStackPortal::SetupCoverage
+//
+//-----------------------------------------------------------------------------
+
+static BYTE SetCoverage(void *node)
+{
+	if (numnodes == 0)
+	{
+		return 0;
+	}
+	if (!((size_t)node & 1))  // Keep going until found a subsector
+	{
+		node_t *bsp = (node_t *)node;
+		BYTE coverage = SetCoverage(bsp->children[0]) | SetCoverage(bsp->children[1]);
+		gl_drawinfo->no_renderflags[bsp-nodes] = coverage;
+		return coverage;
+	}
+	else
+	{
+		subsector_t *sub = (subsector_t *)((BYTE *)node - 1);
+		return gl_drawinfo->ss_renderflags[sub-subsectors] & SSRF_SEEN;
+	}
+}
+
+void GLSectorStackPortal::SetupCoverage()
+{
+	for(unsigned i=0; i<subsectors.Size(); i++)
+	{
+		subsector_t *sub = subsectors[i];
+		int plane = origin->plane;
+		for(int j=0;j<sub->portalcoverage[plane].sscount; j++)
+		{
+			subsector_t *dsub = &::subsectors[sub->portalcoverage[plane].subsectors[j]];
+			currentmapsection[dsub->mapsection>>3] |= 1 << (dsub->mapsection&7);
+			gl_drawinfo->ss_renderflags[dsub-::subsectors] |= SSRF_SEEN;
+		}
+	}
+	SetCoverage(&nodes[numnodes-1]);
 }
 
 //-----------------------------------------------------------------------------
@@ -628,11 +719,10 @@ void GLSkyboxPortal::DrawContents()
 //-----------------------------------------------------------------------------
 void GLSectorStackPortal::DrawContents()
 {
-	FPortal *portal = &::portals[origin->origin->special1];
-	portal->UpdateClipAngles();
+	FPortal *portal = origin;
 
-	viewx += origin->origin->x - origin->origin->Mate->x;
-	viewy += origin->origin->y - origin->origin->Mate->y;
+	viewx += origin->xDisplacement;
+	viewy += origin->yDisplacement;
 	GLRenderer->mViewActor = NULL;
 	GLRenderer->mCurrentPortal = this;
 
@@ -640,153 +730,34 @@ void GLSectorStackPortal::DrawContents()
 	validcount++;
 
 	// avoid recursions!
-	if (origin->isupper) inupperstack=true;
-	else inlowerstack=true;
+	if (origin->plane != -1) instack[origin->plane]++;
 
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	SaveMapSection();
+	SetupCoverage();
 	ClearClipper();
 	GLRenderer->DrawScene();
+	RestoreMapSection();
+
+	if (origin->plane != -1) instack[origin->plane]--;
 }
 
 //-----------------------------------------------------------------------------
-//
-// GLSectorStackPortal::ClipSeg
-//
-//-----------------------------------------------------------------------------
-int GLSectorStackPortal::ClipSeg(seg_t *seg) 
-{ 
-	FPortal *portal = &::portals[origin->origin->special1];
-	angle_t *angles = &portal->ClipAngles[0];
-	unsigned numpoints = portal->ClipAngles.Size()-1;
-	angle_t clipangle = seg->v1->GetClipAngle();
-	unsigned i, j;
-	int relation;
-
-	// Check the front side of the portal. Anything in front of the shape must be discarded by the clipper.
-	for(i=0;i<numpoints; i++)
-	{
-		if (angles[i+1] - clipangle <= ANGLE_180 && angles[i] - clipangle > ANGLE_180 && angles[i+1] - angles[i] < ANGLE_180)
-		{
-			relation = DMulScale32(seg->v1->y - portal->Shape[i]->y - portal->yDisplacement, portal->Shape[i+1]->x - portal->Shape[i]->x,
-				portal->Shape[i]->x - seg->v1->x + portal->xDisplacement, portal->Shape[i+1]->y - portal->Shape[i]->y);
-			if (relation > 0) 
-			{
-				return PClip_InFront;
-			}
-			else if (relation == 0)
-			{
-				// If this vertex is on the boundary we need to check the second one, too. The line may be partially inside the shape
-				// but outside the portal. We can use the same boundary line for this
-				relation = DMulScale32(seg->v2->y - portal->Shape[i]->y - portal->yDisplacement, portal->Shape[i+1]->x - portal->Shape[i]->x,
-					portal->Shape[i]->x - seg->v2->x + portal->xDisplacement, portal->Shape[i+1]->y - portal->Shape[i]->y);
-				if (relation >= 0) return PClip_InFront;
-			}
-			return PClip_Inside;
-		}
-	}
-	
-	// The first vertex did not yield any useful result. Check the second one.
-	clipangle = seg->v2->GetClipAngle();
-	for(j=0;j<numpoints; j++)
-	{
-		if (angles[j+1] - clipangle <= ANGLE_180 && angles[j] - clipangle > ANGLE_180 && angles[j+1] - angles[j] < ANGLE_180)
-		{
-			relation = DMulScale32(seg->v2->y - portal->Shape[j]->y - portal->yDisplacement, portal->Shape[j+1]->x - portal->Shape[j]->x,
-				portal->Shape[j]->x - seg->v1->x + portal->xDisplacement, portal->Shape[j+1]->y - portal->Shape[j]->y);
-			if (relation > 0) 
-			{
-				return PClip_InFront;
-			}
-			else if (relation == 0)
-			{
-				// If this vertex is on the boundary we need to check the second one, too. The line may be partially inside the shape
-				// but outside the portal. We can use the same boundary line for this
-				relation = DMulScale32(seg->v2->y - portal->Shape[j]->y - portal->yDisplacement, portal->Shape[j+1]->x - portal->Shape[j]->x,
-					portal->Shape[j]->x - seg->v2->x + portal->xDisplacement, portal->Shape[j+1]->y - portal->Shape[j]->y);
-				if (relation >= 0) return PClip_InFront;
-			}
-			return PClip_Inside;
-		}
-	}
-	return PClip_Inside;	// The viewpoint is inside the portal
-
-#if 0
-	// Check backside of portal
-	for(i=0;i<numpoints; i++)
-	{
-		if (angles[i+1] - clipangle > ANGLE_180 && angles[i] - clipangle <= ANGLE_180)
-		{
-			relation1 = DMulScale32(seg->v1->y - portal->Shape[i]->y - portal->yDisplacement, portal->Shape[i+1]->x - portal->Shape[i]->x,
-				portal->Shape[i]->x - seg->v1->x + portal->xDisplacement, portal->Shape[i+1]->y - portal->Shape[i]->y);
-			if (relation1 < 0) return PClip_Inside;
-			// If this vertex is inside we need to check the second one, too. The line may be partially inside the shape
-			// but outside the portal.
-			break;
-		}
-	}
-
-	clipangle = seg->v2->GetClipAngle();
-	for(j=0;j<numpoints; j++)
-	{
-		if (angles[j+1] - clipangle > ANGLE_180 && angles[j] - clipangle <= ANGLE_180)
-		{
-			relation2 = DMulScale32(seg->v2->y - portal->Shape[j]->y - portal->yDisplacement, portal->Shape[j+1]->x - portal->Shape[j]->x,
-				portal->Shape[j]->x - seg->v2->x + portal->xDisplacement, portal->Shape[j+1]->y - portal->Shape[j]->y);
-			if (relation2 < 0) return PClip_Inside;
-			break;
-		}
-	}
-	return PClip_Behind;
-#endif
-}
-
-
 //-----------------------------------------------------------------------------
 //
-// GLSectorStackPortal::ClipPoint
+//
+// Plane Mirror Portal
+//
 //
 //-----------------------------------------------------------------------------
-int GLSectorStackPortal::ClipPoint(fixed_t x, fixed_t y) 
-{ 
-	FPortal *portal = &::portals[origin->origin->special1];
-	angle_t *angles = &portal->ClipAngles[0];
-	unsigned numpoints = portal->ClipAngles.Size()-1;
-	angle_t clipangle = R_PointToPseudoAngle(viewx, viewy, x, y);
-	unsigned i;
-
-	for(i=0;i<numpoints; i++)
-	{
-		if (angles[i+1] - clipangle <= ANGLE_180 && angles[i] - clipangle > ANGLE_180 && angles[i+1] - angles[i] < ANGLE_180)
-		{
-			int relation = DMulScale32(y - portal->Shape[i]->y - portal->yDisplacement, portal->Shape[i+1]->x - portal->Shape[i]->x,
-				portal->Shape[i]->x - x + portal->xDisplacement, portal->Shape[i+1]->y - portal->Shape[i]->y);
-			if (relation > 0) return PClip_InFront;
-			return PClip_Inside;
-		}
-	}
-	return PClip_Inside;
-
-	/*
-	for(i=0;i<numpoints; i++)
-	{
-		if (clipangle >= angles[i] && clipangle < angles[i+1])
-		{
-			int relation = DMulScale32(y - portal->Shape[i]->y, portal->Shape[i+1]->x - portal->Shape[i]->x,
-				portal->Shape[i]->x - x, portal->Shape[i+1]->y - portal->Shape[i]->y);
-			if (relation > 0) return PClip_InFront;
-			return PClip_Inside;
-		}
-	}
-	*/
-	return PClip_Inside;
-}
-
+//-----------------------------------------------------------------------------
 
 //-----------------------------------------------------------------------------
 //
 // GLPlaneMirrorPortal::DrawContents
 //
 //-----------------------------------------------------------------------------
+
 void GLPlaneMirrorPortal::DrawContents()
 {
 	if (renderdepth>r_mirror_recursions) 
@@ -808,17 +779,24 @@ void GLPlaneMirrorPortal::DrawContents()
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	ClearClipper();
 
-	gl.Enable(GL_CLIP_PLANE0+renderdepth);
+	glEnable(GL_CLIP_PLANE0+renderdepth);
 	// This only works properly for non-sloped planes so don't bother with the math.
 	//double d[4]={origin->a/65536., origin->c/65536., origin->b/65536., FIXED2FLOAT(origin->d)};
-	double d[4]={0, PlaneMirrorMode, 0, FIXED2FLOAT(origin->d)};
-	gl.ClipPlane(GL_CLIP_PLANE0+renderdepth, d);
+	double d[4]={0, static_cast<double>(PlaneMirrorMode), 0, FIXED2FLOAT(origin->d)};
+	glClipPlane(GL_CLIP_PLANE0+renderdepth, d);
 
 	GLRenderer->DrawScene();
-	gl.Disable(GL_CLIP_PLANE0+renderdepth);
+	glDisable(GL_CLIP_PLANE0+renderdepth);
 	PlaneMirrorFlag--;
 	PlaneMirrorMode=old_pm;
 }
+
+//-----------------------------------------------------------------------------
+//
+// GLPlaneMirrorPortal::DrawContents
+//
+//-----------------------------------------------------------------------------
+
 
 
 //-----------------------------------------------------------------------------
@@ -999,7 +977,7 @@ void GLHorizonPortal::DrawContents()
 	}
 	else 
 	{
-		int rel = extralight * gl_weaponlight;
+		int rel = getExtraLight();
 		gl_SetColor(origin->lightlevel, rel, &origin->colormap, 1.0f);
 		gl_SetFog(origin->lightlevel, rel, &origin->colormap, false);
 	}
@@ -1022,21 +1000,21 @@ void GLHorizonPortal::DrawContents()
 	{
 		for(float y=-32768+vy; y<32768+vy;y+=4096)
 		{
-			gl.Begin(GL_TRIANGLE_FAN);
+			glBegin(GL_TRIANGLE_FAN);
 
-			gl.TexCoord2f(x/64, -y/64);
-			gl.Vertex3f(x, z, y);
+			glTexCoord2f(x/64, -y/64);
+			glVertex3f(x, z, y);
 
-			gl.TexCoord2f(x/64 + 64, -y/64);
-			gl.Vertex3f(x + 4096, z, y);
+			glTexCoord2f(x/64 + 64, -y/64);
+			glVertex3f(x + 4096, z, y);
 
-			gl.TexCoord2f(x/64 + 64, -y/64 - 64);
-			gl.Vertex3f(x + 4096, z, y + 4096);
+			glTexCoord2f(x/64 + 64, -y/64 - 64);
+			glVertex3f(x + 4096, z, y + 4096);
 
-			gl.TexCoord2f(x/64, -y/64 - 64);
-			gl.Vertex3f(x, z, y + 4096);
+			glTexCoord2f(x/64, -y/64 - 64);
+			glVertex3f(x, z, y + 4096);
 
-			gl.End();
+			glEnd();
 
 		}
 	}
@@ -1048,39 +1026,39 @@ void GLHorizonPortal::DrawContents()
 	// Since I can't draw into infinity there can always be a
 	// small gap
 
-	gl.Begin(GL_TRIANGLE_STRIP);
+	glBegin(GL_TRIANGLE_STRIP);
 
-	gl.TexCoord2f(512.f, 0);
-	gl.Vertex3f(-32768+vx, z, -32768+vy);
-	gl.TexCoord2f(512.f, tz);
-	gl.Vertex3f(-32768+vx, vz, -32768+vy);
+	glTexCoord2f(512.f, 0);
+	glVertex3f(-32768+vx, z, -32768+vy);
+	glTexCoord2f(512.f, tz);
+	glVertex3f(-32768+vx, vz, -32768+vy);
 
-	gl.TexCoord2f(-512.f, 0);
-	gl.Vertex3f(-32768+vx, z,  32768+vy);
-	gl.TexCoord2f(-512.f, tz);
-	gl.Vertex3f(-32768+vx, vz,  32768+vy);
+	glTexCoord2f(-512.f, 0);
+	glVertex3f(-32768+vx, z,  32768+vy);
+	glTexCoord2f(-512.f, tz);
+	glVertex3f(-32768+vx, vz,  32768+vy);
 
-	gl.TexCoord2f(512.f, 0);
-	gl.Vertex3f( 32768+vx, z,  32768+vy);
-	gl.TexCoord2f(512.f, tz);
-	gl.Vertex3f( 32768+vx, vz,  32768+vy);
+	glTexCoord2f(512.f, 0);
+	glVertex3f( 32768+vx, z,  32768+vy);
+	glTexCoord2f(512.f, tz);
+	glVertex3f( 32768+vx, vz,  32768+vy);
 
-	gl.TexCoord2f(-512.f, 0);
-	gl.Vertex3f( 32768+vx, z, -32768+vy);
-	gl.TexCoord2f(-512.f, tz);
-	gl.Vertex3f( 32768+vx, vz, -32768+vy);
+	glTexCoord2f(-512.f, 0);
+	glVertex3f( 32768+vx, z, -32768+vy);
+	glTexCoord2f(-512.f, tz);
+	glVertex3f( 32768+vx, vz, -32768+vy);
 
-	gl.TexCoord2f(512.f, 0);
-	gl.Vertex3f(-32768+vx, z, -32768+vy);
-	gl.TexCoord2f(512.f, tz);
-	gl.Vertex3f(-32768+vx, vz, -32768+vy);
+	glTexCoord2f(512.f, 0);
+	glVertex3f(-32768+vx, z, -32768+vy);
+	glTexCoord2f(512.f, tz);
+	glVertex3f(-32768+vx, vz, -32768+vy);
 
-	gl.End();
+	glEnd();
 
 	if (pushed)
 	{
-		gl.PopMatrix();
-		gl.MatrixMode(GL_MODELVIEW);
+		glPopMatrix();
+		glMatrixMode(GL_MODELVIEW);
 	}
 
 	PortalAll.Unclock();

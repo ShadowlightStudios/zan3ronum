@@ -8,6 +8,8 @@
 #include "s_sound.h"
 #include "a_sharedglobal.h"
 #include "statnums.h"
+#include "farchive.h"
+// [BB] New #includes.
 #include "network.h"
 #include "sv_commands.h"
 
@@ -62,16 +64,8 @@ void DEarthquake::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
 	arc << m_Spot << m_Intensity << m_Countdown
-		<< m_TremorRadius << m_DamageRadius;
-
-	if (SaveVersion >= 1912)
-	{
-		arc << m_QuakeSFX;
-	}
-	else
-	{
-		m_QuakeSFX = "world/quake";
-	}
+		<< m_TremorRadius << m_DamageRadius
+		<< m_QuakeSFX;
 }
 
 //==========================================================================

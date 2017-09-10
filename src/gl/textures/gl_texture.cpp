@@ -38,16 +38,17 @@
 #include "gl/system/gl_system.h"
 #include "c_cvars.h"
 #include "w_wad.h"
-#include "r_data.h"
 #include "templates.h"
 #include "colormatcher.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "c_dispatch.h"
 #ifdef _WIN32
 #include "win32gliface.h"
 #endif
 #include "v_palette.h"
+#include "sc_man.h"
 
+#include "gl/system/gl_interface.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/textures/gl_texture.h"
 #include "gl/textures/gl_material.h"
@@ -57,6 +58,7 @@
 // Texture CVARs
 //
 //==========================================================================
+// [BB] Changed default
 CUSTOM_CVAR(Float,gl_texture_filter_anisotropic,1.0f,CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
 {
 	if (GLRenderer != NULL) GLRenderer->FlushTextures();
@@ -67,6 +69,7 @@ CCMD(gl_flush)
 	if (GLRenderer != NULL) GLRenderer->FlushTextures();
 }
 
+// [BB] Changed default
 CUSTOM_CVAR(Int, gl_texture_filter, 0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
 {
 	if (self < 0 || self > 5) self=4;
@@ -132,6 +135,7 @@ FRemapTable GlobalBrightmap;
 
 void gl_GenerateGlobalBrightmapFromColormap()
 {
+	HasGlobalBrightmap = false;
 	int lump = Wads.CheckNumForName("COLORMAP");
 	if (lump == -1) lump = Wads.CheckNumForName("COLORMAP", ns_colormaps);
 	if (lump == -1) return;
@@ -232,6 +236,9 @@ FTexture::MiscGLInfo::MiscGLInfo() throw()
 	bBrightmapChecked = false;
 	bBrightmap = false;
 	bBrightmapDisablesFullbright = false;
+	bNoFilter = false;
+	bNoCompress = false;
+	mExpanded = false;
 	areas = NULL;
 	areacount = 0;
 	mIsTransparent = -1;
@@ -516,7 +523,7 @@ void FTexture::CheckTrans(unsigned char * buffer, int size, int trans)
 //
 //===========================================================================
 
-#ifdef __BIG_ENDIAN__
+#ifdef WORDS_BIGENDIAN
 #define MSB 0
 #define SOME_MASK 0xffffff00
 #else
@@ -553,7 +560,7 @@ bool FTexture::SmoothEdges(unsigned char * buffer,int w, int h)
 		l1+=4;
 		for(x=1;x<w-1;x++, l1+=4)
 		{
-			if (l1[MSB]==0 &&  !CHKPIX(-w) && !CHKPIX(-1) && !CHKPIX(1)) CHKPIX(w);
+			if (l1[MSB]==0 &&  !CHKPIX(-w) && !CHKPIX(-1) && !CHKPIX(1) && !CHKPIX(-w-1) && !CHKPIX(-w+1) && !CHKPIX(w-1) && !CHKPIX(w+1)) CHKPIX(w);
 		}
 		if (l1[MSB]==0 && !CHKPIX(-w) && !CHKPIX(-1)) CHKPIX(w);
 		l1+=4;

@@ -46,17 +46,18 @@
 #include "i_system.h"
 #include "doomerrors.h"
 #include "v_palette.h"
+#include "sc_man.h"
+#include "cmdlib.h"
 
+#include "gl/system/gl_interface.h"
+#include "gl/data/gl_data.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
 
-// [EP] New #includes.
 #include "gl/data/gl_data.h"
-#include "gl/gl_functions.h"
-
 // these will only have an effect on SM3 cards.
 // For SM4 they are always on and for SM2 always off
 CVAR(Bool, gl_warp_shader, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
@@ -76,11 +77,6 @@ extern long gl_frameMS;
 
 bool FShader::Load(const char * name, const char * vert_prog_lump, const char * frag_prog_lump, const char * proc_prog_lump, const char * defines)
 {
-	// [BB/EP] Take care of gl_fogmode and ZADF_FORCE_GL_DEFAULTS.
-	OVERRIDE_FOGMODE_IF_NECESSARY
-	// [BB/EP] Take care of gl_lightmode and ZADF_FORCE_GL_DEFAULTS.
-	OVERRIDE_LIGHTMODE_IF_NECESSARY
-
 	static char buffer[10000];
 	FString error;
 
@@ -101,8 +97,6 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 		if (gl.shadermodel < 4) 
 		{
 			vp_comb << "#define NO_SM4\n";
-			if (gl_fogmode == 2) vp_comb << "#define FOG_RADIAL\n";
-			if (gl_lightmode == 2) vp_comb << "#define DOOMLIGHT\n";
 		}
 
 		fp_comb = vp_comb;
@@ -127,8 +121,8 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 			}
 		}
 
-		hVertProg = gl.CreateShader(GL_VERTEX_SHADER);
-		hFragProg = gl.CreateShader(GL_FRAGMENT_SHADER);	
+		hVertProg = glCreateShader(GL_VERTEX_SHADER);
+		hFragProg = glCreateShader(GL_FRAGMENT_SHADER);	
 
 
 		int vp_size = (int)vp_comb.Len();
@@ -137,66 +131,68 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 		const char *vp_ptr = vp_comb.GetChars();
 		const char *fp_ptr = fp_comb.GetChars();
 
-		gl.ShaderSource(hVertProg, 1, &vp_ptr, &vp_size);
-		gl.ShaderSource(hFragProg, 1, &fp_ptr, &fp_size);
+		glShaderSource(hVertProg, 1, &vp_ptr, &vp_size);
+		glShaderSource(hFragProg, 1, &fp_ptr, &fp_size);
 
-		gl.CompileShader(hVertProg);
-		gl.CompileShader(hFragProg);
+		glCompileShader(hVertProg);
+		glCompileShader(hFragProg);
 
-		hShader = gl.CreateProgram();
+		hShader = glCreateProgram();
 
-		gl.AttachShader(hShader, hVertProg);
-		gl.AttachShader(hShader, hFragProg);
+		glAttachShader(hShader, hVertProg);
+		glAttachShader(hShader, hFragProg);
 
-		gl.BindAttribLocation(hShader, VATTR_GLOWDISTANCE, "glowdistance");
-		gl.BindAttribLocation(hShader, VATTR_FOGPARAMS, "fogparams");
+		glBindAttribLocation(hShader, VATTR_GLOWDISTANCE, "glowdistance");
+		glBindAttribLocation(hShader, VATTR_FOGPARAMS, "fogparams");
+		glBindAttribLocation(hShader, VATTR_LIGHTLEVEL, "lightlevel_in"); // Korshun.
 
-		gl.LinkProgram(hShader);
+		glLinkProgram(hShader);
 
-		gl.GetShaderInfoLog(hVertProg, 10000, NULL, buffer);
+		glGetShaderInfoLog(hVertProg, 10000, NULL, buffer);
 		if (*buffer) 
 		{
 			error << "Vertex shader:\n" << buffer << "\n";
 		}
-		gl.GetShaderInfoLog(hFragProg, 10000, NULL, buffer);
+		glGetShaderInfoLog(hFragProg, 10000, NULL, buffer);
 		if (*buffer) 
 		{
-			error << "Vertex shader:\n" << buffer << "\n";
+			error << "Fragment shader:\n" << buffer << "\n";
 		}
 
-		gl.GetProgramInfoLog(hShader, 10000, NULL, buffer);
+		glGetProgramInfoLog(hShader, 10000, NULL, buffer);
 		if (*buffer) 
 		{
 			error << "Linking:\n" << buffer << "\n";
 		}
 		int linked;
-		gl.GetObjectParameteriv(hShader, GL_LINK_STATUS, &linked);
+		glGetObjectParameteriv(hShader, GL_LINK_STATUS, &linked);
 		if (linked == 0)
 		{
 			// only print message if there's an error.
 			Printf("Init Shader '%s':\n%s\n", name, error.GetChars());
 		}
-		timer_index = gl.GetUniformLocation(hShader, "timer");
-		desaturation_index = gl.GetUniformLocation(hShader, "desaturation_factor");
-		fogenabled_index = gl.GetUniformLocation(hShader, "fogenabled");
-		texturemode_index = gl.GetUniformLocation(hShader, "texturemode");
-		camerapos_index = gl.GetUniformLocation(hShader, "camerapos");
-		lightparms_index = gl.GetUniformLocation(hShader, "lightparms");
-		colormapstart_index = gl.GetUniformLocation(hShader, "colormapstart");
-		colormaprange_index = gl.GetUniformLocation(hShader, "colormaprange");
-		lightrange_index = gl.GetUniformLocation(hShader, "lightrange");
-		fogcolor_index = gl.GetUniformLocation(hShader, "fogcolor");
-		lights_index = gl.GetUniformLocation(hShader, "lights");
+		timer_index = glGetUniformLocation(hShader, "timer");
+		desaturation_index = glGetUniformLocation(hShader, "desaturation_factor");
+		fogenabled_index = glGetUniformLocation(hShader, "fogenabled");
+		texturemode_index = glGetUniformLocation(hShader, "texturemode");
+		camerapos_index = glGetUniformLocation(hShader, "camerapos");
+		lightparms_index = glGetUniformLocation(hShader, "lightparms");
+		colormapstart_index = glGetUniformLocation(hShader, "colormapstart");
+		colormaprange_index = glGetUniformLocation(hShader, "colormaprange");
+		lightrange_index = glGetUniformLocation(hShader, "lightrange");
+		fogcolor_index = glGetUniformLocation(hShader, "fogcolor");
+		lights_index = glGetUniformLocation(hShader, "lights");
+		dlightcolor_index = glGetUniformLocation(hShader, "dlightcolor");
 
-		glowbottomcolor_index = gl.GetUniformLocation(hShader, "bottomglowcolor");
-		glowtopcolor_index = gl.GetUniformLocation(hShader, "topglowcolor");
+		glowbottomcolor_index = glGetUniformLocation(hShader, "bottomglowcolor");
+		glowtopcolor_index = glGetUniformLocation(hShader, "topglowcolor");
 		
-		gl.UseProgram(hShader);
+		glUseProgram(hShader);
 
-		int texture_index = gl.GetUniformLocation(hShader, "texture2");
-		if (texture_index > 0) gl.Uniform1i(texture_index, 1);
+		int texture_index = glGetUniformLocation(hShader, "texture2");
+		if (texture_index > 0) glUniform1i(texture_index, 1);
 
-		gl.UseProgram(0);
+		glUseProgram(0);
 		return !!linked;
 	}
 	return false;
@@ -210,9 +206,9 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 
 FShader::~FShader()
 {
-	gl.DeleteProgram(hShader);
-	gl.DeleteShader(hVertProg);
-	gl.DeleteShader(hFragProg);
+	glDeleteProgram(hShader);
+	glDeleteShader(hVertProg);
+	glDeleteShader(hFragProg);
 }
 
 
@@ -225,7 +221,7 @@ FShader::~FShader()
 bool FShader::Bind(float Speed)
 {
 	GLRenderer->mShaderManager->SetActiveShader(this);
-	if (timer_index >=0 && Speed > 0.f) gl.Uniform1f(timer_index, gl_frameMS*Speed/1000.f);
+	if (timer_index >=0 && Speed > 0.f) glUniform1f(timer_index, gl_frameMS*Speed/1000.f);
 	return true;
 }
 
@@ -245,7 +241,15 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 		"#define NO_GLOW\n#define NO_DESATURATE\n#define DYNLIGHT\n",
 		"#define NO_DESATURATE\n#define DYNLIGHT\n",
 		"#define NO_GLOW\n#define DYNLIGHT\n",
-		"\n#define DYNLIGHT\n"
+		"\n#define DYNLIGHT\n",
+		"#define NO_GLOW\n#define NO_DESATURATE\n#define SOFTLIGHT\n",
+		"#define NO_DESATURATE\n#define SOFTLIGHT\n",
+		"#define NO_GLOW\n#define SOFTLIGHT\n",
+		"\n#define SOFTLIGHT\n",
+		"#define NO_GLOW\n#define NO_DESATURATE\n#define DYNLIGHT\n#define SOFTLIGHT\n",
+		"#define NO_DESATURATE\n#define DYNLIGHT\n#define SOFTLIGHT\n",
+		"#define NO_GLOW\n#define DYNLIGHT\n#define SOFTLIGHT\n",
+		"\n#define DYNLIGHT\n#define SOFTLIGHT\n"
 	};
 
 	const char * shaderdesc[] = {
@@ -257,6 +261,14 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 		"::glow+dynlight",
 		"::desaturate+dynlight",
 		"::glow+desaturate+dynlight",
+		"::softlight",
+		"::glow+softlight",
+		"::desaturate+softlight",
+		"::glow+desaturate+softlight",
+		"::default+dynlight+softlight",
+		"::glow+dynlight+softlight",
+		"::desaturate+dynlight+softlight",
+		"::glow+desaturate+dynlight+softlight",
 	};
 
 	FString name;
@@ -275,8 +287,24 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 	catch(CRecoverableError &err)
 	{
 		shader_cm = NULL;
-		Printf("Unable to load shader %s:\n%s\n", name.GetChars(), err.GetMessage());
-		I_Error("");
+		I_Error("Unable to load shader %s:\n%s\n", name.GetChars(), err.GetMessage());
+	}
+
+	name << ShaderName << "::foglayer";
+
+	try
+	{
+		shader_fl = new FShader;
+		if (!shader_fl->Load(name, "shaders/glsl/main.vp", "shaders/glsl/main_foglayer.fp", ShaderPath, "#define NO_GLOW\n"))
+		{
+			delete shader_fl;
+			shader_fl = NULL;
+		}
+	}
+	catch (CRecoverableError &err)
+	{
+		shader_fl = NULL;
+		I_Error("Unable to load shader %s:\n%s\n", name.GetChars(), err.GetMessage());
 	}
 
 	if (gl.shadermodel > 2)
@@ -290,11 +318,24 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 			try
 			{
 				FString str;
-				if (i>3)
+				if ((i&4) != 0)
 				{
+					if (gl.maxuniforms < 1024 || gl.shadermodel != 4)
+					{
+						shader[i] = NULL;
+						continue;
+					}
 					// this can't be in the shader code due to ATI strangeness.
 					str = "#version 120\n#extension GL_EXT_gpu_shader4 : enable\n";
 					if (gl.MaxLights() == 128) str += "#define MAXLIGHTS128\n";
+				}
+				if ((i&8) == 0)
+				{
+					if (gl.shadermodel != 4)
+					{
+						shader[i] = NULL;
+						continue;
+					}
 				}
 				str += shaderdefines[i];
 				shader[i] = new FShader;
@@ -307,13 +348,7 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 			catch(CRecoverableError &err)
 			{
 				shader[i] = NULL;
-				Printf("Unable to load shader %s:\n%s\n", name.GetChars(), err.GetMessage());
-				I_Error("");
-			}
-			if (i==3 && gl.maxuniforms < 1024)
-			{
-				shader[4] = shader[5] = shader[6] = shader[7] = 0;
-				break;
+				I_Error("Unable to load shader %s:\n%s\n", name.GetChars(), err.GetMessage());
 			}
 		}
 	}
@@ -327,8 +362,9 @@ FShaderContainer::FShaderContainer(const char *ShaderName, const char *ShaderPat
 //==========================================================================
 FShaderContainer::~FShaderContainer()
 {
-	delete shader_cm;
-	for(int i = 0;i < NUM_SHADERS; i++)
+	if (shader_cm != NULL) delete shader_cm;
+	if (shader_fl != NULL) delete shader_fl;
+	for (int i = 0; i < NUM_SHADERS; i++)
 	{
 		if (shader[i] != NULL)
 		{
@@ -348,7 +384,15 @@ FShader *FShaderContainer::Bind(int cm, bool glowing, float Speed, bool lights)
 {
 	FShader *sh=NULL;
 
-	if (cm >= CM_FIRSTSPECIALCOLORMAP && cm < CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size())
+	if (cm == CM_FOGLAYER)
+	{
+		if (shader_fl)
+		{
+			shader_fl->Bind(Speed);
+		}
+		return shader_fl;
+	}
+	else if (cm >= CM_FIRSTSPECIALCOLORMAP && cm < CM_MAXCOLORMAP)
 	{
 		// these are never used with any kind of lighting or fog
 		sh = shader_cm;
@@ -360,21 +404,21 @@ FShader *FShaderContainer::Bind(int cm, bool glowing, float Speed, bool lights)
 			float m[3]= {map->ColorizeEnd[0] - map->ColorizeStart[0], 
 				map->ColorizeEnd[1] - map->ColorizeStart[1], map->ColorizeEnd[2] - map->ColorizeStart[2]};
 
-			gl.Uniform3fv(sh->colormapstart_index, 1, map->ColorizeStart);
-			gl.Uniform3fv(sh->colormaprange_index, 1, m);
+			glUniform3fv(sh->colormapstart_index, 1, map->ColorizeStart);
+			glUniform3fv(sh->colormaprange_index, 1, m);
 		}
 	}
 	else
 	{
 		bool desat = cm>=CM_DESAT1 && cm<=CM_DESAT31;
-		sh = shader[glowing + 2*desat + 4*lights];
+		sh = shader[glowing + 2*desat + 4*lights + (glset.lightmode & 8)];
 		// [BB] If there was a problem when loading the shader, sh is NULL here.
 		if( sh )
 		{
 			sh->Bind(Speed);
 			if (desat)
 			{
-				gl.Uniform1f(sh->desaturation_index, 1.f-float(cm-CM_DESAT0)/(CM_DESAT31-CM_DESAT0));
+				glUniform1f(sh->desaturation_index, 1.f-float(cm-CM_DESAT0)/(CM_DESAT31-CM_DESAT0));
 			}
 		}
 	}
@@ -393,6 +437,8 @@ struct FDefaultShader
 	const char * gettexelfunc;
 };
 
+// Note: the FIRST_USER_SHADER constant in gl_shader.h needs 
+// to be updated whenever the size of this array is modified.
 static const FDefaultShader defaultshaders[]=
 {	
 	{"Default",	"shaders/glsl/func_normal.fp"},
@@ -400,6 +446,13 @@ static const FDefaultShader defaultshaders[]=
 	{"Warp 2",	"shaders/glsl/func_warp2.fp"},
 	{"Brightmap","shaders/glsl/func_brightmap.fp"},
 	{"No Texture", "shaders/glsl/func_notexture.fp"},
+	{"Basic Fuzz", "shaders/glsl/fuzz_standard.fp"},
+	{"Smooth Fuzz", "shaders/glsl/fuzz_smooth.fp"},
+	{"Swirly Fuzz", "shaders/glsl/fuzz_swirly.fp"},
+	{"Translucent Fuzz", "shaders/glsl/fuzz_smoothtranslucent.fp"},
+	{"Jagged Fuzz", "shaders/glsl/fuzz_jagged.fp"},
+	{"Noise Fuzz", "shaders/glsl/fuzz_noise.fp"},
+	{"Smooth Noise Fuzz", "shaders/glsl/fuzz_smoothnoise.fp"},
 	{NULL,NULL}
 };
 
@@ -553,7 +606,7 @@ void FShaderManager::SetActiveShader(FShader *sh)
 	// shadermodel needs to be tested here because without it UseProgram will be NULL.
 	if (gl.shadermodel > 0 && mActiveShader != sh)
 	{
-		gl.UseProgram(sh == NULL? 0 : sh->GetHandle());
+		glUseProgram(sh == NULL? 0 : sh->GetHandle());
 		mActiveShader = sh;
 	}
 }
@@ -574,6 +627,17 @@ FShader *FShaderManager::BindEffect(int effect)
 	return NULL;
 }
 
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void gl_DestroyUserShaders()
+{
+	// todo
+}
 
 //==========================================================================
 //

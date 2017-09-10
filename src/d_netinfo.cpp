@@ -43,19 +43,20 @@
 #include "d_netinf.h"
 #include "d_net.h"
 #include "d_protocol.h"
+#include "d_player.h"
 #include "c_dispatch.h"
 #include "v_palette.h"
 #include "v_video.h"
 #include "i_system.h"
-#include "r_draw.h"
 #include "r_state.h"
 #include "sbar.h"
 #include "gi.h"
 #include "m_random.h"
 #include "teaminfo.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "templates.h"
 #include "cmdlib.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "network.h"
 #include "cl_commands.h"
@@ -64,6 +65,7 @@
 #include "deathmatch.h"
 #include "gamemode.h"
 #include "team.h"
+#include "menu/menu.h"
 
 static FRandom pr_pickteam ("PickRandomTeam");
 
@@ -81,9 +83,10 @@ CVAR (String,	skin,					"base",		CVAR_USERINFO | CVAR_ARCHIVE);
 //CVAR (Int,		team,					TEAM_NONE,	CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	gender,					"male",		CVAR_USERINFO | CVAR_ARCHIVE);
 // [BC] Changed "neverswitchonpickup" to allow it to be set 3 different ways, instead of "on/off".
-CVAR (Int,		switchonpickup,			1,			CVAR_USERINFO | CVAR_ARCHIVE);
-CVAR (Float,	movebob,				0.25f,		CVAR_USERINFO | CVAR_ARCHIVE);
-CVAR (Float,	stillbob,				0.f,		CVAR_USERINFO | CVAR_ARCHIVE);
+// [TP] switchonpickup, movebob and stillbob are not synced to other clients.
+CVAR (Int,		switchonpickup,			1,			CVAR_USERINFO | CVAR_UNSYNCED_USERINFO | CVAR_ARCHIVE);
+CVAR (Float,	movebob,				0.25f,		CVAR_USERINFO | CVAR_UNSYNCED_USERINFO | CVAR_ARCHIVE);
+CVAR (Float,	stillbob,				0.f,		CVAR_USERINFO | CVAR_UNSYNCED_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	playerclass,			"Fighter",	CVAR_USERINFO | CVAR_ARCHIVE);
 // [BC] New userinfo entries for Skulltag.
 CVAR (Int,		railcolor,				0,			CVAR_USERINFO | CVAR_ARCHIVE);
@@ -100,6 +103,9 @@ CVAR (Int,		cl_ticsperupdate,			3,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Int,		cl_connectiontype,			1,		CVAR_USERINFO | CVAR_ARCHIVE);
 // [CK] Let the user control if they want clientside puffs or not.
 CVAR (Flag,		cl_clientsidepuffs,			cl_clientflags, CLIENTFLAGS_CLIENTSIDEPUFFS );
+
+// [TP] Userinfo changes yet to be sent.
+static UserInfoChanges PendingUserinfoChanges;
 
 // [CK] CVARs that affect cl_clientflags
 CUSTOM_CVAR ( Int, cl_clientflags, CLIENTFLAGS_DEFAULT, CVAR_USERINFO | CVAR_ARCHIVE )
@@ -163,7 +169,7 @@ bool D_ShouldOverridePlayerColors()
 	if ( NETWORK_GetState() == NETSTATE_SERVER )
 		return false;
 
-	bool withteams = GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS;
+	bool withteams = !!( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS );
 
 	switch ( OverridePlayerColorsValue ( (int) cl_overrideplayercolors ))
 	{
@@ -229,27 +235,6 @@ enum
 };
 
 const char *GenderNames[3] = { "male", "female", "other" };
-
-static const char *UserInfoStrings[] =
-{
-	"name",
-	"autoaim",
-	"color",
-	"skin",
-	//"team",
-	"gender",
-	"switchonpickup",
-	"railcolor",
-	"handicap",
-	"movebob",
-	"stillbob",
-	"playerclass",
-	"colorset",
-
-	// [Spleen] The player's unlagged preference.
-	"unlagged",
-	NULL
-};
 
 // Replace \ with %/ and % with %%
 FString D_EscapeUserInfo (const char *str)
@@ -342,11 +327,13 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 {
 	userinfo_t *info = &players[player].userinfo;
 	FPlayerColorSet *colorset = NULL;
-	int color;
+	uint32 color;
+	// [BB] New team code by Karate Chris. Currently not used in ST.
+	//int team;
 
 	if (players[player].mo != NULL)
 	{
-		colorset = P_GetPlayerColorSet(players[player].mo->GetClass()->TypeName, info->colorset);
+		colorset = P_GetPlayerColorSet(players[player].mo->GetClass()->TypeName, info->GetColorSet());
 	}
 	if (colorset != NULL)
 	{
@@ -354,26 +341,29 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 	}
 	else
 	{
-		color = info->color;
+		color = info->GetColor();
 	}
 
 	RGBtoHSV (RPART(color)/255.f, GPART(color)/255.f, BPART(color)/255.f,
 		h, s, v);
 
 /* [BB] New team code by Karate Chris. Currently not used in ST.
-	if (teamplay && TeamLibrary.IsValidTeam(info->team) && !Teams[info->team].GetAllowCustomPlayerColor ())
+	if (teamplay && TeamLibrary.IsValidTeam((team = info->GetTeam())) && !Teams[team].GetAllowCustomPlayerColor())
 	{
 		// In team play, force the player to use the team's hue
 		// and adjust the saturation and value so that the team
 		// hue is visible in the final color.
 		float ts, tv;
-		int tcolor = Teams[info->team].GetPlayerColor ();
+		int tcolor = Teams[team].GetPlayerColor ();
 
 		RGBtoHSV (RPART(tcolor)/255.f, GPART(tcolor)/255.f, BPART(tcolor)/255.f,
 			h, &ts, &tv);
 
 		*s = clamp(ts + *s * 0.15f - 0.075f, 0.f, 1.f);
 		*v = clamp(tv + *v * 0.5f - 0.25f, 0.f, 1.f);
+
+		// Make sure not to pass back any colorset in teamplay.
+		colorset = NULL;
 	}
 */
 	if (set != NULL)
@@ -381,7 +371,7 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 		*set = colorset;
 	}
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		if ( players[player].bOnTeam && ( TEAM_IsCustomPlayerColorAllowed ( players[player].ulTeam ) == false ) )
 		{
@@ -394,27 +384,6 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 			RGBtoHSV( RPART( nColor ) / 255.f, GPART( nColor ) / 255.f, BPART( nColor ) / 255.f,
 				h, s, v );
 		}
-	}
-
-	if (teamplay && players[player].userinfo.team < (signed)teams.Size ())
-	{
-/*
-		// In team play, force the player to use the team's hue
-		// and adjust the saturation and value so that the team
-		// hue is visible in the final color.
-		*h = TeamHues[players[player].userinfo.team];
-		if (gameinfo.gametype == GAME_Doom)
-		{
-			*s = *s*0.15f+0.8f;
-			*v = *v*0.5f+0.4f;
-		}
-		else
-		{
-			// I'm not really happy with the red team color in Heretic...
-			*s = team == 0 ? 0.6f : 0.8f;
-			*v = *v*0.4f+0.3f;
-		}
-*/
 	}
 
 	// [Dusk] The user can override these colors.
@@ -463,9 +432,10 @@ int D_PickRandomTeam ()
 	{
 		if (playeringame[i])
 		{
-			if (TeamLibrary.IsValidTeam (players[i].userinfo.team))
+			team = players[i].userinfo.GetTeam();
+			if (TeamLibrary.IsValidTeam(team))
 			{
-				if (Teams[players[i].userinfo.team].m_iPresent++ == 0)
+				if (Teams[team].m_iPresent++ == 0)
 				{
 					numTeams++;
 				}
@@ -477,7 +447,7 @@ int D_PickRandomTeam ()
 	{
 		do
 		{
-			team = pr_pickteam() % Teams.Size ();
+			team = pr_pickteam() % Teams.Size();
 		} while (Teams[team].m_iPresent != 0);
 	}
 	else
@@ -518,7 +488,7 @@ static void UpdateTeam (int pnum, int team, bool update)
 {
 	userinfo_t *info = &players[pnum].userinfo;
 
-	if ((dmflags2 & DF2_NO_TEAM_SWITCH) && (alwaysapplydmflags || deathmatch) && TeamLibrary.IsValidTeam (info->team))
+	if ((dmflags2 & DF2_NO_TEAM_SWITCH) && (alwaysapplydmflags || deathmatch) && TeamLibrary.IsValidTeam (info->GetTeam()))
 	{
 		Printf ("Team changing has been disabled!\n");
 		return;
@@ -530,19 +500,15 @@ static void UpdateTeam (int pnum, int team, bool update)
 	{
 		team = TEAM_NONE;
 	}
-	oldteam = info->team;
-	info->team = team;
+	oldteam = info->GetTeam();
+	team = info->TeamChanged(team);
 
-	if (teamplay && !TeamLibrary.IsValidTeam (info->team))
-	{ // Force players onto teams in teamplay mode
-		info->team = D_PickRandomTeam ();
-	}
-	if (update && oldteam != info->team)
+	if (update && oldteam != team)
 	{
-		if (TeamLibrary.IsValidTeam (info->team))
-			Printf ("%s joined the %s team\n", info->netname, Teams[info->team].GetName ());
+		if (TeamLibrary.IsValidTeam (team))
+			Printf ("%s joined the %s team\n", info->GetName(), Teams[team].GetName ());
 		else
-			Printf ("%s is now a loner\n", info->netname);
+			Printf ("%s is now a loner\n", info->GetName());
 	}
 	// Let the player take on the team's color
 	R_BuildPlayerTranslation (pnum);
@@ -550,26 +516,29 @@ static void UpdateTeam (int pnum, int team, bool update)
 	{
 		StatusBar->AttachToPlayer (&players[pnum]);
 	}
-	if (!TeamLibrary.IsValidTeam (info->team))
-		info->team = TEAM_NONE;
+	// Double-check
+	if (!TeamLibrary.IsValidTeam (team))
+	{
+		*static_cast<FIntCVar *>((*info)[NAME_Team]) = TEAM_NONE;
+	}
 }
 */
 int D_GetFragCount (player_t *player)
 {
 /* [BB] New team code by Karate Chris. Currently not used in ST.
-	if (!teamplay || !TeamLibrary.IsValidTeam (player->userinfo.team))
+	const int team = player->userinfo.GetTeam();
+	if (!teamplay || !TeamLibrary.IsValidTeam(team))
 	{
 		return player->fragcount;
 	}
 	else
 	{
 		// Count total frags for this player's team
-		const int team = player->userinfo.team;
 		int count = 0;
 
 		for (int i = 0; i < MAXPLAYERS; ++i)
 		{
-			if (playeringame[i] && players[i].userinfo.team == team)
+			if (playeringame[i] && players[i].userinfo.GetTeam() == team)
 			{
 				count += players[i].fragcount;
 			}
@@ -590,8 +559,7 @@ int D_GetFragCount (player_t *player)
 void D_SetupUserInfo ()
 {
 	int i;
-	ULONG	ulIdx;
-	userinfo_t *coninfo = &players[consoleplayer].userinfo;
+	userinfo_t *coninfo;
 
 	// [BC] Servers and client demos don't do this.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) ||
@@ -600,69 +568,255 @@ void D_SetupUserInfo ()
 		return;
 	}
 
+	// Reset everybody's userinfo to a default state.
 	// [BC] Don't reset everyone's userinfo in multiplayer games, since we don't want to
 	// erase EVERYONE'S userinfo if we change ours.
 	if ( NETWORK_GetState( ) == NETSTATE_SINGLE )
 	{
 		for (i = 0; i < MAXPLAYERS; i++)
-			memset (&players[i].userinfo, 0, sizeof(userinfo_t));
+		{
+			players[i].userinfo.Reset();
+		}
 	}
-
-	strncpy (coninfo->netname, name, MAXPLAYERNAME);
-/* [BB] New team code by Karate Chris. Currently not used in ST.
-	if (teamplay && !TeamLibrary.IsValidTeam (team))
-	{
-		coninfo->team = D_PickRandomTeam ();
-	}
+	// [BB] We rebuild coninfo, so better reset it first.
 	else
+		players[consoleplayer].userinfo.Reset();
+	// Initialize the console player's user info
+	coninfo = &players[consoleplayer].userinfo;
+
+	for (FBaseCVar *cvar = CVars; cvar != NULL; cvar = cvar->GetNext())
 	{
-		coninfo->team = team;
+		if ((cvar->GetFlags() & (CVAR_USERINFO|CVAR_IGNORE)) == CVAR_USERINFO)
+		{
+			FBaseCVar **newcvar;
+			FName cvarname(cvar->GetName());
+
+			switch (cvarname.GetIndex())
+			{
+			// Some cvars don't copy their original value directly.
+			// [BB] Zandronum still uses its own team code.
+			//case NAME_Team:			coninfo->TeamChanged(team); break;
+			case NAME_Skin:			coninfo->SkinChanged(skin, players[consoleplayer].CurrentPlayerClass); break;
+			case NAME_Gender:		coninfo->GenderChanged(gender); break;
+			case NAME_PlayerClass:	coninfo->PlayerClassChanged(playerclass); break;
+			// [BB]
+			case NAME_RailColor:			coninfo->RailColorChanged(railcolor); break;
+			case NAME_Handicap:				coninfo->HandicapChanged(handicap); break;
+			case NAME_CL_TicsPerUpdate:		coninfo->TicsPerUpdateChanged(cl_ticsperupdate); break;
+			case NAME_CL_ConnectionType:	coninfo->ConnectionTypeChanged(cl_connectiontype); break;
+			case NAME_CL_ClientFlags:		coninfo->ClientFlagsChanged(cl_clientflags); break;
+
+			// The rest do.
+			default:
+				newcvar = coninfo->CheckKey(cvarname);
+				(*newcvar)->SetGenericRep(cvar->GetGenericRep(CVAR_String), CVAR_String);
+				break;
+			}
+		}
 	}
+	R_BuildPlayerTranslation(consoleplayer);
+}
+
+void userinfo_t::Reset()
+{
+	// Clear this player's userinfo.
+	TMapIterator<FName, FBaseCVar *> it(*this);
+	TMap<FName, FBaseCVar *>::Pair *pair;
+
+	while (it.NextPair(pair))
+	{
+		delete pair->Value;
+	}
+	Clear();
+
+	// Create userinfo vars for this player, initialized to their defaults.
+	for (FBaseCVar *cvar = CVars; cvar != NULL; cvar = cvar->GetNext())
+	{
+		if ((cvar->GetFlags() & (CVAR_USERINFO|CVAR_IGNORE)) == CVAR_USERINFO)
+		{
+			ECVarType type;
+			FName cvarname(cvar->GetName());
+			FBaseCVar *newcvar;
+
+			// Some cvars have different types for their shadow copies.
+			switch (cvarname.GetIndex())
+			{
+			case NAME_Skin:			type = CVAR_Int; break;
+			case NAME_Gender:		type = CVAR_Int; break;
+			case NAME_PlayerClass:	type = CVAR_Int; break;
+			default:				type = cvar->GetRealType(); break;
+			}
+			// [TP] Also respect CVAR_UNSYNCED_USERINFO
+			newcvar = C_CreateCVar(NULL, type, cvar->GetFlags() & ( CVAR_MOD | CVAR_UNSYNCED_USERINFO ));
+			newcvar->SetGenericRepDefault(cvar->GetGenericRepDefault(CVAR_String), CVAR_String);
+			Insert(cvarname, newcvar);
+		}
+	}
+}
+
+/* [BB] Zandronum still uses its own team code.
+int userinfo_t::TeamChanged(int team)
+{
+	if (teamplay && !TeamLibrary.IsValidTeam(team))
+	{ // Force players onto teams in teamplay mode
+		team = D_PickRandomTeam();
+	}
+	*static_cast<FIntCVar *>((*this)[NAME_Team]) = team;
+	return team;
+}
 */
-	// [BC] Remove % signs from names.
-	for ( ulIdx = 0; ulIdx < strlen( coninfo->netname ); ulIdx++ )
+
+int userinfo_t::SkinChanged(const char *skinname, int playerclass)
+{
+	int skinnum = R_FindSkin(skinname, playerclass);
+	*static_cast<FIntCVar *>((*this)[NAME_Skin]) = skinnum;
+	return skinnum;
+}
+
+int userinfo_t::SkinNumChanged(int skinnum)
+{
+	*static_cast<FIntCVar *>((*this)[NAME_Skin]) = skinnum;
+	return skinnum;
+}
+
+int userinfo_t::GenderChanged(const char *gendername)
+{
+	int gendernum = D_GenderToInt(gendername);
+	*static_cast<FIntCVar *>((*this)[NAME_Gender]) = gendernum;
+	return gendernum;
+}
+
+int userinfo_t::PlayerClassChanged(const char *classname)
+{
+	int classnum = D_PlayerClassToInt(classname);
+	*static_cast<FIntCVar *>((*this)[NAME_PlayerClass]) = classnum;
+	return classnum;
+}
+
+int userinfo_t::PlayerClassNumChanged(int classnum)
+{
+	*static_cast<FIntCVar *>((*this)[NAME_PlayerClass]) = classnum;
+	return classnum;
+}
+
+int userinfo_t::ColorSetChanged(int setnum)
+{
+	*static_cast<FIntCVar *>((*this)[NAME_ColorSet]) = setnum;
+	return setnum;
+}
+
+uint32 userinfo_t::ColorChanged(const char *colorname)
+{
+	FColorCVar *color = static_cast<FColorCVar *>((*this)[NAME_Color]);
+	assert(color != NULL);
+	UCVarValue val;
+	val.String = const_cast<char *>(colorname);
+	color->SetGenericRep(val, CVAR_String);
+	// [BB] For now Zandronum doesn't let the player use the color sets.
+	//*static_cast<FIntCVar *>((*this)[NAME_ColorSet]) = -1;
+	return *color;
+}
+
+uint32 userinfo_t::ColorChanged(uint32 colorval)
+{
+	FColorCVar *color = static_cast<FColorCVar *>((*this)[NAME_Color]);
+	assert(color != NULL);
+	UCVarValue val;
+	val.Int = colorval;
+	color->SetGenericRep(val, CVAR_Int);
+	// This version is called by the menu code. Do not implicitly set colorset.
+	return colorval;
+}
+
+// [BB]
+void userinfo_t::NameChanged(const char *name)
+{
+	FString cleanedName = name;
+	// [BB] Don't allow the CVAR to be longer than MAXPLAYERNAME, userinfo_t::netname
+	// can't be longer anyway. Note: The length limit needs to be applied in colorized form.
+	cleanedName = cleanedName.Left(MAXPLAYERNAME);
+	V_CleanPlayerName ( cleanedName );
+	*static_cast<FStringCVar *>((*this)[NAME_Name]) = cleanedName;
+}
+
+// [BB]
+int userinfo_t::SwitchOnPickupChanged(int switchonpickup)
+{
+	switchonpickup = clamp ( switchonpickup, 0, 3 );
+	*static_cast<FIntCVar *>((*this)[NAME_SwitchOnPickup]) = switchonpickup;
+	return switchonpickup;
+}
+
+// [BB]
+int userinfo_t::GenderNumChanged(int gendernum)
+{
+	// [BB] Make sure that the gender is valid.
+	gendernum = clamp ( gendernum, 0, 2 );
+	*static_cast<FIntCVar *>((*this)[NAME_Gender]) = gendernum;
+	return gendernum;
+}
+
+// [BB]
+int userinfo_t::RailColorChanged(int railcolor)
+{
+	if ( (*this)[NAME_RailColor] == NULL )
 	{
-		if ( coninfo->netname[ulIdx] == '%' )
-			coninfo->netname[ulIdx] = ' ';
+		Printf ( "Error: No RailColor key found!\n" );
+		return 0;
 	}
+	*static_cast<FIntCVar *>((*this)[NAME_RailColor]) = railcolor;
+	return railcolor;
+}
 
-	if (autoaim > 35.f || autoaim < 0.f)
+// [BB]
+int userinfo_t::HandicapChanged(int handicap)
+{
+	if ( (*this)[NAME_Handicap] == NULL )
 	{
-		coninfo->aimdist = ANGLE_1*35;
+		Printf ( "Error: No Handicap key found!\n" );
+		return 0;
 	}
-	else
+	handicap = clamp ( handicap, 0, deh.MaxSoulsphere );
+	*static_cast<FIntCVar *>((*this)[NAME_Handicap]) = handicap;
+	return handicap;
+}
+
+// [BB]
+int userinfo_t::TicsPerUpdateChanged(int ticsperupdate)
+{
+	if ( (*this)[NAME_CL_TicsPerUpdate] == NULL )
 	{
-		coninfo->aimdist = abs ((int)(autoaim * (float)ANGLE_1));
+		Printf ( "Error: No TicsPerUpdate key found!\n" );
+		return 0;
 	}
-	coninfo->color = color;
-	coninfo->colorset = colorset;
-	// [BB] We need to take into account CurrentPlayerClass when determining the skin.
-	coninfo->skin = R_FindSkin (skin, players[consoleplayer].CurrentPlayerClass);
-	coninfo->gender = D_GenderToInt (gender);
-	coninfo->switchonpickup = switchonpickup;
+	ticsperupdate = clamp ( ticsperupdate, 1, 3 );
+	*static_cast<FIntCVar *>((*this)[NAME_CL_TicsPerUpdate]) = ticsperupdate;
+	return ticsperupdate;
+}
 
-	coninfo->MoveBob = (fixed_t)(65536.f * movebob);
-	coninfo->StillBob = (fixed_t)(65536.f * stillbob);
-	coninfo->PlayerClass = D_PlayerClassToInt (playerclass);
+// [BB]
+int userinfo_t::ConnectionTypeChanged(int connectiontype)
+{
+	if ( (*this)[NAME_CL_ConnectionType] == NULL )
+	{
+		Printf ( "Error: No ConnectionType key found!\n" );
+		return 0;
+	}
+	connectiontype = clamp ( connectiontype, 0, 1 );
+	*static_cast<FIntCVar *>((*this)[NAME_CL_ConnectionType]) = connectiontype;
+	return connectiontype;
+}
 
-	// [BC] Handle new ST userinfo entries.
-	coninfo->lRailgunTrailColor = railcolor;
-	coninfo->lHandicap = handicap;
-	if ( coninfo->lHandicap < 0 )
-		coninfo->lHandicap = 0;
-	else if ( coninfo->lHandicap > deh.MaxSoulsphere )
-		coninfo->lHandicap = deh.MaxSoulsphere;
-
-	// [BB]
-	coninfo->ulTicsPerUpdate = cl_ticsperupdate;
-
-	// [BB]
-	coninfo->ulConnectionType = cl_connectiontype;
-
-	// [CK] Client booleans are used here.
-	coninfo->clientFlags = cl_clientflags;
-
-	R_BuildPlayerTranslation (consoleplayer);
+// [BB]
+int userinfo_t::ClientFlagsChanged(int flags)
+{
+	if ( (*this)[NAME_CL_ClientFlags] == NULL )
+	{
+		Printf ( "Error: No ClientFlags key found!\n" );
+		return 0;
+	}
+	*static_cast<FIntCVar *>((*this)[NAME_CL_ClientFlags]) = flags;
+	return flags;
 }
 
 void D_UserInfoChanged (FBaseCVar *cvar)
@@ -670,13 +824,11 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 	UCVarValue val;
 	FString escaped_val;
 	char foo[256];
-	ULONG	ulUpdateFlags;
 
 	// Server doesn't do this.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		return;
 
-	ulUpdateFlags = 0;
 	if (cvar == &autoaim)
 	{
 		if (autoaim < 0.0f)
@@ -689,8 +841,6 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			autoaim = 5000.f;
 			return;
 		}
-
-		ulUpdateFlags |= USERINFO_AIMDISTANCE;
 	}
 	// Allow users to colorize their name.
 	else if ( cvar == &name )
@@ -716,14 +866,20 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 		// [BB] Get rid of this cast.
 		V_ColorizeString( const_cast<char *> ( val.String ) );
 
-		ulUpdateFlags |= USERINFO_NAME;
-
 		// [BB] We don't want clients to change their name too often.
 		if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
 		{
 			// [BB] The name was not actually changed, so no need to do anything.
 			if ( strcmp ( g_oldPlayerName.GetChars(), val.String ) == 0 )
-				ulUpdateFlags &= ~USERINFO_NAME;
+			{
+				// [BB] The client insists on changing to a name already in use.
+				if ( stricmp ( val.String, players[consoleplayer].userinfo.GetName() ) != 0 )
+				{
+					Printf ( "The server already reported that this name is in use!\n" );
+					g_oldPlayerName = players[consoleplayer].userinfo.GetName();
+					return;
+				}
+			}
 			// [BB] The client recently changed its name, don't allow to change it again yet.
 			// [TP] Made conditional with sv_limitcommands
 			else if (( sv_limitcommands ) && ( g_ulLastNameChangeTime > 0 ) && ( (ULONG)gametic < ( g_ulLastNameChangeTime + ( TICRATE * 30 ))))
@@ -740,14 +896,6 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			}
 		}
 	}
-	else if ( cvar == &gender )
-		ulUpdateFlags |= USERINFO_GENDER;
-	else if ( cvar == &color )
-		ulUpdateFlags |= USERINFO_COLOR;
-	else if ( cvar == &skin )
-		ulUpdateFlags |= USERINFO_SKIN;
-	else if ( cvar == &railcolor )
-		ulUpdateFlags |= USERINFO_RAILCOLOR;
 	else if ( cvar == &handicap )
 	{
 		if ( handicap < 0 )
@@ -760,11 +908,7 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			handicap = 200;
 			return;
 		}
-
-		ulUpdateFlags |= USERINFO_HANDICAP;
 	}
-	else if (( cvar == &playerclass ) && ( (gameinfo.gametype == GAME_Hexen) || (PlayerClasses.Size() > 1) ))
-		ulUpdateFlags |= USERINFO_PLAYERCLASS;
 	// [BB] Negative movebob values cause graphic glitches.
 	else if ( cvar == &movebob )
 	{
@@ -788,11 +932,6 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			return;
 		}
 	}
-	// [CK] Multiple CVARs are controlled by this now.
-	else if ( cvar == &cl_clientflags )
-	{
-		ulUpdateFlags |= USERINFO_CLIENTFLAGS;
-	}
 	// [BB]
 	else if ( cvar == &cl_ticsperupdate )
 	{
@@ -806,8 +945,6 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			cl_ticsperupdate = 3;
 			return;
 		}
-
-		ulUpdateFlags |= USERINFO_TICSPERUPDATE;
 	}
 	// [BB]
 	else if ( cvar == &cl_connectiontype )
@@ -822,8 +959,6 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			cl_connectiontype = 1;
 			return;
 		}
-
-		ulUpdateFlags |= USERINFO_CONNECTIONTYPE;
 	}
 
 	val = cvar->GetGenericRep (CVAR_String);
@@ -835,8 +970,7 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 
 	// [BC] In client mode, we don't execute DEM_* commands, so we need to execute it
 	// here.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsRecording( )))
+	if ( NETWORK_InClientMode() )
 	{
 		BYTE	*pStream;
 
@@ -855,23 +989,27 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 		Net_WriteString (foo);
 	}
 
-	// [BB] D_SetupUserInfo has to be executed in any case, if we are
-	// not the server. If we for example are not connected to a server,
-	// change our name in the console and connect to a server then,
-	// we won't tell the new name to the server.
-	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-	{
-		if ( gamestate != GS_STARTUP )
-			D_SetupUserInfo( );
-	}
+	if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
+		PendingUserinfoChanges.insert( FName ( cvar->GetName() ) );
 
+	// [TP] Send pending changes but only if we're not in a menu
+	if ( DMenu::CurrentMenu == NULL )
+		D_SendPendingUserinfoChanges();
+}
+
+void D_SendPendingUserinfoChanges()
+{
 	// Send updated userinfo to the server.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && ( CLIENT_GetConnectionState( ) >= CTS_REQUESTINGSNAPSHOT ) && ( ulUpdateFlags > 0 ))
+	if (( NETWORK_GetState() == NETSTATE_CLIENT )
+		&& ( CLIENT_GetConnectionState() >= CTS_REQUESTINGSNAPSHOT )
+		&& ( PendingUserinfoChanges.size() > 0 ))
 	{
-		CLIENTCOMMANDS_UserInfo( ulUpdateFlags );
+		CLIENTCOMMANDS_UserInfo( PendingUserinfoChanges );
 
 		if ( CLIENTDEMO_IsRecording( ))
 			CLIENTDEMO_WriteUserInfo( );
+
+		PendingUserinfoChanges.clear();
 	}
 }
 
@@ -933,7 +1071,7 @@ static const char *SetServerVar (char *name, ECVarType type, BYTE **stream, bool
 		{
 			if (playeringame[i])
 			{
-				UpdateTeam (i, players[i].userinfo.team, true);
+				UpdateTeam (i, players[i].userinfo.GetTeam(), true);
 			}
 		}
 	}
@@ -1010,141 +1148,131 @@ void D_DoServerInfoChange (BYTE **stream, bool singlebit)
 	}
 }
 
-void D_WriteUserInfoStrings (int i, BYTE **stream, bool compact)
+static int STACK_ARGS userinfosortfunc(const void *a, const void *b)
 {
-	if (i >= MAXPLAYERS)
-	{
-		WriteByte (0, stream);
-	}
-	else
-	{
-		userinfo_t *info = &players[i].userinfo;
-
-		const PClass *type = PlayerClasses[info->PlayerClass].Type;
-
-		if (!compact)
-		{
-			sprintf (*((char **)stream),
-					 "\\name\\%s"
-					 "\\autoaim\\%g"
-					 "\\color\\%x %x %x"
-					 "\\colorset\\%d"
-					 "\\skin\\%s"
-					 //"\\team\\%d"
-					 "\\gender\\%s"
-					 "\\switchonpickup\\%d"
-					 "\\railcolor\\%d"
-					 "\\handicap\\%d"
-					 "\\movebob\\%g"
-					 "\\stillbob\\%g"
-					 "\\playerclass\\%s"
-					 "\\ticsperupdate\\%lu" // [BB]
-					 "\\connectiontype\\%lu" // [BB]
-					 "\\clientflags\\%u" // [CK]
-					 ,
-					 D_EscapeUserInfo(info->netname).GetChars(),
-					 (double)info->aimdist / (float)ANGLE_1,
-					 info->colorset,
-					 RPART(info->color), GPART(info->color), BPART(info->color),
-					 D_EscapeUserInfo(skins[info->skin].name).GetChars(),
-					 //info->team,
-					 info->gender == GENDER_FEMALE ? "female" :
-						info->gender == GENDER_NEUTER ? "other" : "male",
-					 info->switchonpickup,
-					 static_cast<int> (info->lRailgunTrailColor),
-					 static_cast<int> (info->lHandicap),
-					 (float)(info->MoveBob) / 65536.f,
-					 (float)(info->StillBob) / 65536.f,
-					 info->PlayerClass == -1 ? "Random" :
-						D_EscapeUserInfo(type->Meta.GetMetaString (APMETA_DisplayName)).GetChars(),
-
-					 // [BB]
-					 info->ulTicsPerUpdate,
-					 // [BB]
-					 info->ulConnectionType,
-					 // [CK]
-					 info->clientFlags
-				);
-		}
-		else
-		{
-			sprintf (*((char **)stream),
-				"\\"
-				"\\%s"			// name
-				"\\%g"			// autoaim
-				"\\%x %x %x"	// color
-				"\\%s"			// skin
-				//"\\%d"			// team
-				"\\%s"			// gender
-				"\\%d"			// switchonpickup
-				"\\%d"			// railcolor
-				"\\%d"			// handicap
-				"\\%g"			// movebob
-				"\\%g"			// stillbob
-				"\\%s"			// playerclass
-				"\\%d"			// colorset
-				"\\%lu"			// [BB] ticsperupdate
-				"\\%lu"			// [BB] connectiontype
-				"\\%u"			// [CK] Clientflags
-				,
-				D_EscapeUserInfo(info->netname).GetChars(),
-				(double)info->aimdist / (float)ANGLE_1,
-				RPART(info->color), GPART(info->color), BPART(info->color),
-				D_EscapeUserInfo(skins[info->skin].name).GetChars(),
-				//info->team,
-				info->gender == GENDER_FEMALE ? "female" :
-					info->gender == GENDER_NEUTER ? "other" : "male",
-				info->switchonpickup,
-				static_cast<int> (info->lRailgunTrailColor),
-				static_cast<int> (info->lHandicap),
-				(float)(info->MoveBob) / 65536.f,
-				(float)(info->StillBob) / 65536.f,
-				info->PlayerClass == -1 ? "Random" :
-					D_EscapeUserInfo(type->Meta.GetMetaString (APMETA_DisplayName)).GetChars(),
-				info->colorset,
-
-				// [BB]
-				info->ulTicsPerUpdate,
-				// [BB]
-				info->ulConnectionType,
-				// [CK]
-				info->clientFlags
-			);
-		}
-	}
-
-	*stream += strlen (*((char **)stream)) + 1;
+	TMap<FName, FBaseCVar *>::ConstPair *pair1 = *(TMap<FName, FBaseCVar *>::ConstPair **)a;
+	TMap<FName, FBaseCVar *>::ConstPair *pair2 = *(TMap<FName, FBaseCVar *>::ConstPair **)b;
+	return stricmp(pair1->Key.GetChars(), pair2->Key.GetChars());
 }
 
-void D_ReadUserInfoStrings (int i, BYTE **stream, bool update)
+static int STACK_ARGS namesortfunc(const void *a, const void *b)
 {
-	userinfo_t *info = &players[i].userinfo;
+	FName *name1 = (FName *)a;
+	FName *name2 = (FName *)b;
+	return stricmp(name1->GetChars(), name2->GetChars());
+}
+
+void D_WriteUserInfoStrings (int pnum, BYTE **stream, bool compact)
+{
+	if (pnum >= MAXPLAYERS)
+	{
+		WriteByte (0, stream);
+		return;
+	}
+
+	userinfo_t *info = &players[pnum].userinfo;
+	TArray<TMap<FName, FBaseCVar *>::Pair *> userinfo_pairs(info->CountUsed());
+	TMap<FName, FBaseCVar *>::Iterator it(*info);
+	TMap<FName, FBaseCVar *>::Pair *pair;
+	UCVarValue cval;
+
+	// Create a simple array of all userinfo cvars
+	while (it.NextPair(pair))
+	{
+		userinfo_pairs.Push(pair);
+	}
+	// For compact mode, these need to be sorted. Verbose mode doesn't matter.
+	if (compact)
+	{
+		qsort(&userinfo_pairs[0], userinfo_pairs.Size(), sizeof(pair), userinfosortfunc);
+		// Compact mode is signified by starting the string with two backslash characters.
+		// We output one now. The second will be output as part of the first value.
+		*(*stream)++ = '\\';
+	}
+	for (unsigned int i = 0; i < userinfo_pairs.Size(); ++i)
+	{
+		pair = userinfo_pairs[i];
+
+		if (!compact)
+		{ // In verbose mode, prepend the cvar's name
+			*stream += sprintf(*((char **)stream), "\\%s", pair->Key.GetChars());
+		}
+		// A few of these need special handling for compatibility reasons.
+		switch (pair->Key.GetIndex())
+		{
+		case NAME_Gender:
+			*stream += sprintf(*((char **)stream), "\\%s",
+				*static_cast<FIntCVar *>(pair->Value) == GENDER_FEMALE ? "female" :
+				*static_cast<FIntCVar *>(pair->Value) == GENDER_NEUTER ? "other" : "male");
+			break;
+
+		case NAME_PlayerClass:
+			*stream += sprintf(*((char **)stream), "\\%s", info->GetPlayerClassNum() == -1 ? "Random" :
+				D_EscapeUserInfo(info->GetPlayerClassType()->Meta.GetMetaString(APMETA_DisplayName)).GetChars());
+			break;
+
+		case NAME_Skin:
+			*stream += sprintf(*((char **)stream), "\\%s", D_EscapeUserInfo(skins[info->GetSkin()].name).GetChars());
+			break;
+
+		default:
+			cval = pair->Value->GetGenericRep(CVAR_String);
+			*stream += sprintf(*((char **)stream), "\\%s", cval.String);
+			break;
+		}
+	}
+	*(*stream)++ = '\0';
+}
+
+void D_ReadUserInfoStrings (int pnum, BYTE **stream, bool update)
+{
+	userinfo_t *info = &players[pnum].userinfo;
+	TArray<FName> compact_names(info->CountUsed());
+	FBaseCVar **cvar_ptr;
 	const char *ptr = *((const char **)stream);
 	const char *breakpt;
 	FString value;
 	bool compact;
-	int infotype = -1;
+	FName keyname;
+	unsigned int infotype = 0;
 
 	if (*ptr++ != '\\')
 		return;
 
 	compact = (*ptr == '\\') ? ptr++, true : false;
 
-	if (i < MAXPLAYERS)
+	// We need the cvar names in sorted order for compact mode
+	if (compact)
 	{
-		for (;;)
-		{
-			int j;
+		TMap<FName, FBaseCVar *>::Iterator it(*info);
+		TMap<FName, FBaseCVar *>::Pair *pair;
 
-			breakpt = strchr (ptr, '\\');
+		while (it.NextPair(pair))
+		{
+			compact_names.Push(pair->Key);
+		}
+		qsort(&compact_names[0], compact_names.Size(), sizeof(FName), namesortfunc);
+	}
+
+	if (pnum < MAXPLAYERS)
+	{
+		for (breakpt = ptr; breakpt != NULL; ptr = breakpt + 1)
+		{
+			breakpt = strchr(ptr, '\\');
 
 			if (compact)
 			{
+				// Compact has just the value.
+				if (infotype >= compact_names.Size())
+				{ // Too many entries! OMG!
+					break;
+				}
+				keyname = compact_names[infotype++];
 				value = D_UnescapeUserInfo(ptr, breakpt != NULL ? breakpt - ptr : strlen(ptr));
-				infotype++;
 			}
 			else
 			{
+				// Verbose has both the key name and its value.
 				assert(breakpt != NULL);
 				// A malicious remote machine could invalidate the above assert.
 				if (breakpt == NULL)
@@ -1160,203 +1288,233 @@ void D_ReadUserInfoStrings (int i, BYTE **stream, bool update)
 				{
 					value = D_UnescapeUserInfo(valstart, strlen(valstart));
 				}
-
-				for (j = 0;
-					 UserInfoStrings[j] && strnicmp (UserInfoStrings[j], ptr, valstart - ptr - 1) != 0;
-					 ++j)
-				{ }
-				if (UserInfoStrings[j] == NULL)
-				{
-					infotype = -1;
-				}
-				else
-				{
-					infotype = j;
-				}
+				keyname = FName(ptr, valstart - ptr - 1, true);
 			}
-			switch (infotype)
+			
+			// A few of these need special handling.
+			switch (keyname)
 			{
-			case INFO_Autoaim: {
-				double angles;
-
-				angles = atof (value);
-				if (angles > 35.f || angles < 0.f)
-				{
-						info->aimdist = ANGLE_1*35;
-				}
-				else
-				{
-						info->aimdist = abs ((int)(angles * (float)ANGLE_1));
-				}
-								}
+			case NAME_Gender:
+				info->GenderChanged(value);
 				break;
 
-			case INFO_Name:
-				{
-					//ULONG	ulIdx;
-					char oldname[MAXPLAYERNAME+1];
-
-					strcpy (oldname, info->netname);
-					strncpy (info->netname, value, MAXPLAYERNAME);
-					info->netname[MAXPLAYERNAME] = 0;
-					CleanseString(info->netname);
-
-					V_CleanPlayerName(info->netname);
-
-					/* Remove % signs from names. // [RC] Covered in V_CleanName
-					for ( ulIdx = 0; ulIdx < strlen( info->netname ); ulIdx++ )
-					{
-						if ( info->netname[ulIdx] == '%' )
-							info->netname[ulIdx] = ' ';
-					}*/
-
-					if (update && strcmp (oldname, info->netname) != 0)
-					{
-						Printf ("%s \\c-is now known as %s\n", oldname, info->netname);
-					}
-				}
+			case NAME_PlayerClass:
+				info->PlayerClassChanged(value);
 				break;
 
-/* [BB] New team code by Karate Chris. Currently not used in ST.
-			case INFO_Team:
-				UpdateTeam (i, atoi(value), update);
-				break;
-*/
+			case NAME_Skin:
+				info->SkinChanged(value, players[pnum].CurrentPlayerClass);
 
-			case INFO_Color:
-			case INFO_ColorSet:
-				if (infotype == INFO_Color)
+				// [BC] If the skin was hidden, reveal it!
+				if ( skins[info->GetSkin()].bRevealed == false )
 				{
-					info->color = V_GetColorFromString (NULL, value);
+					Printf( "Hidden skin \"%s\\c-\" has now been revealed!\n", skins[info->GetSkin()].name );
+					skins[info->GetSkin()].bRevealed = true;
 				}
-				else
-				{
-					info->colorset = atoi(value);
-				}
-				R_BuildPlayerTranslation (i);
-				if (StatusBar != NULL && i == StatusBar->GetPlayer())
-				{
-					StatusBar->AttachToPlayer (&players[i]);
-				}
-				break;
 
-			case INFO_Skin:
-				info->skin = R_FindSkin (value, players[i].CurrentPlayerClass);
-				if (players[i].mo != NULL)
+				if (players[pnum].mo != NULL)
 				{
-					if (players[i].cls != NULL &&
-						players[i].mo->state->sprite ==
-						GetDefaultByType (players[i].cls)->SpawnState->sprite)
+					if (players[pnum].cls != NULL &&
+						!(players[pnum].mo->flags4 & MF4_NOSKIN) &&
+						players[pnum].mo->state->sprite ==
+						GetDefaultByType (players[pnum].cls)->SpawnState->sprite)
 					{ // Only change the sprite if the player is using a standard one
-						players[i].mo->sprite = skins[info->skin].sprite;
-						players[i].mo->scaleX = skins[info->skin].ScaleX;
-						players[i].mo->scaleY = skins[info->skin].ScaleY;
+						players[pnum].mo->sprite = skins[info->GetSkin()].sprite;
 					}
 				}
 				// Rebuild translation in case the new skin uses a different range
 				// than the old one.
-				R_BuildPlayerTranslation (i);
-
-				// If the skin was hidden, reveal it!
-				if ( skins[info->skin].bRevealed == false )
-				{
-					Printf( "Hidden skin \"%s\\c-\" has now been revealed!\n", skins[info->skin].name );
-					skins[info->skin].bRevealed = true;
-				}
+				R_BuildPlayerTranslation(pnum);
 				break;
 
-			case INFO_Gender:
-				info->gender = D_GenderToInt (value);
+			/* [BB] Zandronum still uses its own team code.
+			case NAME_Team:
+				UpdateTeam(pnum, atoi(value), update);
+				break;
+			*/
+
+			case NAME_Color:
+				info->ColorChanged(value);
 				break;
 
-			case INFO_SwitchOnPickup:
+			// [BB]
+			case NAME_SwitchOnPickup:
 				if (value[0] >= '0' && value[0] <= '9')
 				{
-					info->switchonpickup = atoi (value);
+					info->SwitchOnPickupChanged ( atoi (value) );
 				}
 				else if (stricmp (value, "true") == 0)
 				{
-					info->switchonpickup = 2;
+					info->SwitchOnPickupChanged ( 2 );
 				}
 				else
 				{
-					info->switchonpickup = 0;
+					info->SwitchOnPickupChanged ( 0 );
 				}
 				break;
 
-			case INFO_Railcolor:
-
-				info->lRailgunTrailColor = atoi( value );
-				break;
-			case INFO_Handicap:
-
-				info->lHandicap = atoi( value );
-				if ( info->lHandicap < 0 )
-					info->lHandicap = 0;
-				if ( info->lHandicap > deh.MaxSoulsphere )
-					info->lHandicap = deh.MaxSoulsphere;
-				break;
-			case INFO_MoveBob:
-				info->MoveBob = (fixed_t)(atof (value) * 65536.f);
-				break;
-
-			case INFO_StillBob:
-				info->StillBob = (fixed_t)(atof (value) * 65536.f);
-				break;
-
-			case INFO_PlayerClass:
-				info->PlayerClass = D_PlayerClassToInt (value);
+			// [BB]
+			case NAME_RailColor:
+				info->RailColorChanged ( atoi( value ) );
 				break;
 
 			// [BB]
-			case INFO_Ticsperupdate:
-				info->ulTicsPerUpdate = clamp ( atoi (value), 1, 3 );
+			case NAME_Handicap:
+				info->HandicapChanged ( atoi( value ) );
 				break;
 
 			// [BB]
-			case INFO_ConnectionType:
-				info->ulConnectionType = clamp ( atoi (value), 0, 1 );
+			case NAME_CL_TicsPerUpdate:
+				info->TicsPerUpdateChanged ( atoi (value) );
+				break;
+
+			// [BB]
+			case NAME_CL_ConnectionType:
+				info->ConnectionTypeChanged ( atoi (value) );
 				break;
 
 			// [CK]
-			case INFO_ClientFlags:
-				info->clientFlags = atoi( value );
+			case NAME_CL_ClientFlags:
+				info->ClientFlagsChanged ( atoi( value ) );
 				break;
 
 			default:
+				cvar_ptr = info->CheckKey(keyname);
+				if (cvar_ptr != NULL)
+				{
+					assert(*cvar_ptr != NULL);
+					UCVarValue val;
+					FString oldname;
+
+					if (keyname == NAME_Name)
+					{
+						val = (*cvar_ptr)->GetGenericRep(CVAR_String);
+						oldname = val.String;
+					}
+					val.String = CleanseString(value.LockBuffer());
+					(*cvar_ptr)->SetGenericRep(val, CVAR_String);
+					value.UnlockBuffer();
+					if (keyname == NAME_Name && update && oldname.Compare (value))
+					{
+						// [BB] Added "\\c-"
+						Printf("%s \\c-is now known as %s\n", oldname.GetChars(), value.GetChars());
+					}
+				}
 				break;
 			}
-
-			if (breakpt)
+			if (keyname == NAME_Color || keyname == NAME_ColorSet)
 			{
-				ptr = breakpt + 1;
+				R_BuildPlayerTranslation(pnum);
+				if (StatusBar != NULL && pnum == StatusBar->GetPlayer())
+				{
+					StatusBar->AttachToPlayer(&players[pnum]);
+				}
 			}
-			else
+		}
+	}
+	*stream += strlen (*((char **)stream)) + 1;
+}
+
+void ReadCompatibleUserInfo(FArchive &arc, userinfo_t &info)
+{
+	char netname[MAXPLAYERNAME + 1];
+	BYTE team;
+	int aimdist, color, colorset, skin, gender;
+	bool neverswitch;
+	//fixed_t movebob, stillbob;	These were never serialized!
+	//int playerclass;				"
+
+	info.Reset();
+
+	arc.Read(&netname, sizeof(netname));
+	arc << team << aimdist << color << skin << gender << neverswitch << colorset;
+
+	*static_cast<FStringCVar *>(info[NAME_Name]) = netname;
+	*static_cast<FIntCVar *>(info[NAME_Team]) = team;
+	*static_cast<FFloatCVar *>(info[NAME_Autoaim]) = (float)aimdist / ANGLE_1;
+	*static_cast<FIntCVar *>(info[NAME_Skin]) = skin;
+	*static_cast<FIntCVar *>(info[NAME_Gender]) = gender;
+	// [BB]
+	*static_cast<FIntCVar *>(info[NAME_SwitchOnPickup]) = switchonpickup;
+	// [BB] For now Zandronum doesn't let the player use the color sets.
+	//*static_cast<FIntCVar *>(info[NAME_ColorSet]) = colorset;
+
+	UCVarValue val;
+	val.Int = color;
+	static_cast<FColorCVar *>(info[NAME_Color])->SetGenericRep(val, CVAR_Int);
+}
+
+void WriteUserInfo(FArchive &arc, userinfo_t &info)
+{
+	TMapIterator<FName, FBaseCVar *> it(info);
+	TMap<FName, FBaseCVar *>::Pair *pair;
+	FName name;
+	UCVarValue val;
+	int i;
+
+	while (it.NextPair(pair))
+	{
+		name = pair->Key;
+		arc << name;
+		switch (name.GetIndex())
+		{
+		case NAME_Skin:
+			arc.WriteString(skins[info.GetSkin()].name);
+			break;
+
+		case NAME_PlayerClass:
+			i = info.GetPlayerClassNum();
+			arc.WriteString(i == -1 ? "Random" : PlayerClasses[i].Type->Meta.GetMetaString(APMETA_DisplayName));
+			break;
+
+		default:
+			val = pair->Value->GetGenericRep(CVAR_String);
+			arc.WriteString(val.String);
+			break;
+		}
+	}
+	name = NAME_None;
+	arc << name;
+}
+
+void ReadUserInfo(FArchive &arc, userinfo_t &info, FString &skin)
+{
+	FName name;
+	FBaseCVar **cvar;
+	char *str = NULL;
+	UCVarValue val;
+
+	if (SaveVersion < 4253)
+	{
+		ReadCompatibleUserInfo(arc, info);
+		return;
+	}
+
+	info.Reset();
+	skin = NULL;
+	for (arc << name; name != NAME_None; arc << name)
+	{
+		cvar = info.CheckKey(name);
+		arc << str;
+		if (cvar != NULL && *cvar != NULL)
+		{
+			switch (name)
 			{
+			// [BB] Zandronum still uses its own team code.
+			//case NAME_Team:			info.TeamChanged(atoi(str)); break;
+			case NAME_Skin:			skin = str; break;	// Caller must call SkinChanged() once current calss is known
+			case NAME_PlayerClass:	info.PlayerClassChanged(str); break;
+			default:
+				val.String = str;
+				(*cvar)->SetGenericRep(val, CVAR_String);
 				break;
 			}
 		}
 	}
-
-	*stream += strlen (*((char **)stream)) + 1;
-}
-
-FArchive &operator<< (FArchive &arc, userinfo_t &info)
-{
-	if (arc.IsStoring ())
+	if (str != NULL)
 	{
-		arc.Write (&info.netname, sizeof(info.netname));
+		delete[] str;
 	}
-	else
-	{
-		arc.Read (&info.netname, sizeof(info.netname));
-	}
-	arc << /*info.team <<*/ info.aimdist << info.color << info.skin << info.gender << info.switchonpickup;
-	if (SaveVersion >= 2193)
-	{
-		arc << info.colorset;
-	}
-	return arc;
 }
 
 CCMD (playerinfo)
@@ -1371,12 +1529,12 @@ CCMD (playerinfo)
 			{
 				// [BB] Only call Printf once to prevent problems with sv_logfiletimestamp.
 				FString infoString;
-				infoString.AppendFormat("\\c%c%d. %s", PLAYER_IsTrueSpectator( &players[i] ) ? 'k' : 'j', i, players[i].userinfo.netname);
+				infoString.AppendFormat("\\c%c%d. %s", PLAYER_IsTrueSpectator( &players[i] ) ? 'k' : 'j', i, players[i].userinfo.GetName());
 
 				// [RC] Are we the server? Draw their IPs as well.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				{
-					infoString.AppendFormat("\\c%c - IP %s", PLAYER_IsTrueSpectator( &players[i] ) ? 'k' : 'j', NETWORK_AddressToString ( SERVER_GetClient( i )->Address ) );
+					infoString.AppendFormat("\\c%c - IP %s", PLAYER_IsTrueSpectator( &players[i] ) ? 'k' : 'j', SERVER_GetClient( i )->Address.ToString() );
 					// [BB] If we detected suspicious behavior of this client, print this now.
 					if ( SERVER_GetClient( i )->bSuspicious )
 						infoString.AppendFormat ( " * %lu", SERVER_GetClient( i )->ulNumConsistencyWarnings );
@@ -1395,41 +1553,81 @@ CCMD (playerinfo)
 	}
 	else
 	{
-		int i = atoi (argv[1]);
+		int i = atoi(argv[1]);
 
-		// [BB] i needs to be checked.
-		if ( ( i < 0 ) || ( i > MAXPLAYERS ) || ( playeringame[i] == false ) )
+		if (i < 0 || i >= MAXPLAYERS)
 		{
-			Printf ( "Invalid player number specified.\n" );
+			Printf("Bad player number\n");
+			return;
+		}
+		userinfo_t *ui = &players[i].userinfo;
+
+		if (!playeringame[i])
+		{
+			Printf(TEXTCOLOR_ORANGE "Player %d is not in the game\n", i);
 			return;
 		}
 
-		userinfo_t *ui = &players[i].userinfo;
-		// [BB] Adjusted spacing to comply with SwitchOnPickup.
-		Printf ("Name:           %s\n",		ui->netname);
-		Printf ("Team:           %s (%d)\n",	players[i].bOnTeam ? TEAM_GetName( players[i].ulTeam ) : "NONE", static_cast<unsigned int> (players[i].ulTeam) );
-		Printf ("Aimdist:        %d\n",		ui->aimdist);
-		Printf ("Color:          %06x\n",		ui->color);
-		Printf ("ColorSet:    %d\n",		ui->colorset);
-		Printf ("Skin:           %s (%d)\n",	skins[ui->skin].name, ui->skin);
-		Printf ("Gender:         %s (%d)\n",	GenderNames[ui->gender], ui->gender);
-		Printf ("SwitchOnPickup: %s\n",	ui->switchonpickup == 0 ? "never" : ui->switchonpickup == 1 ? "only higher ranked" : "always" );
-		Printf ("MoveBob:        %g\n",		ui->MoveBob/65536.f);
-		Printf ("StillBob:       %g\n",		ui->StillBob/65536.f);
-		Printf ("PlayerClass:    %s (%d)\n",
-			ui->PlayerClass == -1 ? "Random" : PlayerClasses[ui->PlayerClass].Type->Meta.GetMetaString (APMETA_DisplayName),
-			ui->PlayerClass);
-		if (argv.argc() > 2) PrintMiscActorInfo(players[i].mo);
+		// Print special info
+		Printf("%20s: %s\n",      "Name", ui->GetName());
+		// [BB] Zandronum still uses its own team code.
+		Printf("%20s: %s (%d)\n", "Team", players[i].bOnTeam ? TEAM_GetName( players[i].ulTeam ) : "NONE", static_cast<unsigned int> (players[i].ulTeam) );
+		Printf("%20s: %s (%d)\n", "Skin", skins[ui->GetSkin()].name, ui->GetSkin());
+		Printf("%20s: %s (%d)\n", "Gender", GenderNames[ui->GetGender()], ui->GetGender());
+		Printf("%20s: %s (%d)\n", "PlayerClass",
+			ui->GetPlayerClassNum() == -1 ? "Random" : ui->GetPlayerClassType()->Meta.GetMetaString (APMETA_DisplayName),
+			ui->GetPlayerClassNum());
 
-		// [BB]
-		Printf ("Ticsperupdate:  %lu\n", ui->ulTicsPerUpdate);
-		// [BB]
-		Printf ("ConnectionType:  %lu\n", ui->ulConnectionType);
-		// [CK]
-		Printf ( "ClientFlags:  %u\n", ui->clientFlags );
-		Printf ( "    Unlagged      = %s\n", ui->clientFlags & CLIENTFLAGS_UNLAGGED ? "\\cdon" : "\\cgoff");
-		Printf ( "    RespawnOnFire = %s\n", ui->clientFlags & CLIENTFLAGS_RESPAWNONFIRE ? "\\cdon" : "\\cgoff");
+		// [TP] Show account name
+		if ( NETWORK_GetState() == NETSTATE_SERVER )
+		{
+			Printf( "%20s: %s\n", "Account", SERVER_GetClient( i )->GetAccountName().GetChars() );
+		}
+		else if ( NETWORK_InClientMode() )
+		{
+			Printf( "%20s: %s\n", "Account", CLIENT_GetPlayerAccountName( i ).GetChars() );
+		}
+
+		// Print generic info
+		TMapIterator<FName, FBaseCVar *> it(*ui);
+		TMap<FName, FBaseCVar *>::Pair *pair;
+
+		while (it.NextPair(pair))
+		{
+			// [TP] Some userinfo settings are unsynced.
+			if ((( NETWORK_GetState() == NETSTATE_SERVER ) || ( i != consoleplayer ))
+				&& ( pair->Value->GetFlags() & CVAR_UNSYNCED_USERINFO ))
+			{
+				Printf( "%20s: <unknown>\n", pair->Key.GetChars() );
+				continue;
+			}
+
+			if (pair->Key != NAME_Name && pair->Key != NAME_Team && pair->Key != NAME_Skin &&
+				pair->Key != NAME_Gender && pair->Key != NAME_PlayerClass)
+			{
+				UCVarValue val = pair->Value->GetGenericRep(CVAR_String);
+				Printf("%20s: %s\n", pair->Key.GetChars(), val.String);
+			}
+		}
+		if (argv.argc() > 2)
+		{
+			// [BB] The extended info is only available if cheats are allowed.
+			if ( CheckCheatmode() == false )
+				PrintMiscActorInfo(players[i].mo);
+		}
 	}
+}
+
+userinfo_t::~userinfo_t()
+{
+	TMapIterator<FName, FBaseCVar *> it(*this);
+	TMap<FName, FBaseCVar *>::Pair *pair;
+
+	while (it.NextPair(pair))
+	{
+		delete pair->Value;
+	}
+	this->Clear();
 }
 
 #ifdef _DEBUG

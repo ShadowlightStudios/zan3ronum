@@ -75,6 +75,10 @@ enum
 
 	// [TP] The CVar is not present in release builds
 	CVAR_DEBUGONLY = 262144,
+
+	// [TP] Despite being userinfo this CVar is not synced between client and server.
+	// (These CVars ideally shouldn't be userinfo in the first place but that would cause a lot of delta.)
+	CVAR_UNSYNCED_USERINFO = 524288,
 };
 
 union UCVarValue
@@ -132,9 +136,15 @@ public:
 
 	static void EnableNoSet ();		// enable the honoring of CVAR_NOSET
 	static void EnableCallbacks ();
+	static void DisableCallbacks ();
 	static void ResetColors ();		// recalc color cvars' indices after screen change
 
 	static void ListVars (const char *filter, bool plain);
+
+	// [TP] Gah
+	virtual bool IsFlagCVar() { return false; }
+	virtual bool IsMaskCVar() { return false; }
+	bool IsServerInfo();
 
 protected:
 	FBaseCVar () {}
@@ -164,7 +174,7 @@ private:
 	static bool m_UseCallback;
 	static bool m_DoNoSet;
 
-	friend void C_WriteCVars (BYTE **demo_p, uint32 filter, bool compact);
+	friend FString C_GetMassCVarString (uint32 filter, bool compact);
 	friend void C_ReadCVars (BYTE **demo_p);
 	friend void C_BackupCVars (void);
 	friend FBaseCVar *FindCVar (const char *var_name, FBaseCVar **prev);
@@ -175,6 +185,10 @@ private:
 	friend void FilterCompactCVars (TArray<FBaseCVar *> &cvars, uint32 filter);
 	friend void C_DeinitConsole();
 };
+
+// Returns a string with all cvars whose flags match filter. In compact mode,
+// the cvar names are omitted to save space.
+FString C_GetMassCVarString (uint32 filter, bool compact=false);
 
 // Writes all cvars that could effect demo sync to *demo_p. These are
 // cvars that have either CVAR_SERVERINFO or CVAR_DEMOSAVE set.
@@ -351,8 +365,10 @@ public:
 	virtual UCVarValue GetFavoriteRepDefault (ECVarType *type) const;
 	virtual void SetGenericRepDefault (UCVarValue value, ECVarType type);
 
-	inline FIntCVar const& GetValueVar() const { return ValueVar; } // [Dusk]
-	inline uint32 GetBitVal() const { return BitVal; } // [Dusk]
+	// [TP] More access functions
+	bool IsFlagCVar() { return true; }
+	inline FIntCVar* GetValueVar() const { return &ValueVar; }
+	inline uint32 GetBitVal() const { return BitVal; }
 
 	bool operator= (bool boolval)
 		{ UCVarValue val; val.Bool = boolval; SetGenericRep (val, CVAR_Bool); return boolval; }
@@ -360,6 +376,36 @@ public:
 		{ UCVarValue val; val.Bool = !!flag; SetGenericRep (val, CVAR_Bool); return val.Bool; }
 	inline operator int () const { return (ValueVar & BitVal); }
 	inline int operator *() const { return (ValueVar & BitVal); }
+
+protected:
+	virtual void DoSet (UCVarValue value, ECVarType type);
+
+	FIntCVar &ValueVar;
+	uint32 BitVal;
+	int BitNum;
+};
+
+class FMaskCVar : public FBaseCVar
+{
+public:
+	FMaskCVar (const char *name, FIntCVar &realvar, uint32 bitval);
+
+	virtual ECVarType GetRealType () const;
+
+	virtual UCVarValue GetGenericRep (ECVarType type) const;
+	virtual UCVarValue GetFavoriteRep (ECVarType *type) const;
+	virtual UCVarValue GetGenericRepDefault (ECVarType type) const;
+	virtual UCVarValue GetFavoriteRepDefault (ECVarType *type) const;
+	virtual void SetGenericRepDefault (UCVarValue value, ECVarType type);
+
+	inline operator int () const { return (ValueVar & BitVal) >> BitNum; }
+	inline int operator *() const { return (ValueVar & BitVal) >> BitNum; }
+
+	// [TP] More access functions
+	bool IsMaskCVar() { return true; }
+	inline FIntCVar* GetValueVar() const { return &ValueVar; }
+	inline uint32 GetBitVal() const { return BitVal; }
+	inline int GetBitNum() const { return BitNum; }
 
 protected:
 	virtual void DoSet (UCVarValue value, ECVarType type);
@@ -403,11 +449,6 @@ inline FBaseCVar *cvar_set (const char *var_name, const BYTE *value) { return cv
 inline FBaseCVar *cvar_forceset (const char *var_name, const BYTE *value) { return cvar_forceset (var_name, (const char *)value); }
 
 
-
-// Maximum number of cvars that can be saved across a demo. If you need
-// to save more, bump this up.
-// [BB] Bumped this from 32 to 64
-#define MAX_DEMOCVARS 64
 
 // Restore demo cvars. Called after demo playback to restore all cvars
 // that might possibly have been changed during the course of demo playback.

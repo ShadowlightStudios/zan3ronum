@@ -99,6 +99,7 @@ ACTOR ArtiPoisonBag : Inventory 8000 native
 	Game Hexen
 	SpawnID 72
 	+FLOATBOB
+	+NOGRAVITY
 	Inventory.DefMaxAmount
 	Inventory.PickupFlash "PickupFlash"
 	+INVBAR +FANCYPICKUPSOUND
@@ -137,6 +138,22 @@ ACTOR ArtiPoisonBag3 : ArtiPoisonBag native
 	Inventory.Icon "ARTIPSB3"
 	Tag "$TAG_ARTIPOISONBAG3"
 }
+
+
+// Poison Bag 4 (Custom Giver) ----------------------------------------------
+
+ACTOR ArtiPoisonBagGiver : ArtiPoisonBag native
+{
+	Inventory.Icon "ARTIPSB4"
+}
+
+// Poison Bag 5 (Custom Thrower) --------------------------------------------
+
+ACTOR ArtiPoisonBagShooter : ArtiPoisonBag native
+{
+	Inventory.Icon "ARTIPSB5"
+}
+
 // Poison Cloud -------------------------------------------------------------
 
 ACTOR PoisonCloud native

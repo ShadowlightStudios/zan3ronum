@@ -104,7 +104,7 @@
 #include "callvote.h"
 #include "invasion.h"
 #include "r_sky.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "domination.h"
 #include "p_3dmidtex.h"
 #include "a_lightning.h"
@@ -112,6 +112,12 @@
 #include "d_netinf.h"
 #include "po_man.h"
 #include "network/cl_auth.h"
+#include "r_data/colormaps.h"
+#include "r_main.h"
+#include "network_enums.h"
+#include "decallib.h"
+#include "network/servercommands.h"
+#include "am_map.h"
 
 //*****************************************************************************
 //	MISC CRAP THAT SHOULDN'T BE HERE BUT HAS TO BE BECAUSE OF SLOPPY CODING
@@ -119,12 +125,10 @@
 //void	ChangeSpy (bool forward);
 int		D_PlayerClassToInt (const char *classname);
 bool	P_OldAdjustFloorCeil (AActor *thing);
-void	ClientObituary (AActor *self, AActor *inflictor, AActor *attacker, FName MeansOfDeath);
+void	ClientObituary (AActor *self, AActor *inflictor, AActor *attacker, int dmgflags, FName MeansOfDeath);
 void	P_CrouchMove(player_t * player, int direction);
 extern	bool	SpawningMapThing;
 extern FILE *Logfile;
-bool	ClassOwnsState( const PClass *pClass, const FState *pState );
-bool	ActorOwnsState( const AActor *pActor, const FState *pState );
 void	D_ErrorCleanup ();
 extern bool FriendlyFire;
 extern const AInventory *SendItemUse;
@@ -140,6 +144,8 @@ EXTERN_CVAR( Bool, cl_oldfreelooklimit )
 EXTERN_CVAR( Float, turbo )
 EXTERN_CVAR( Float, sv_gravity )
 EXTERN_CVAR( Float, sv_aircontrol )
+EXTERN_CVAR( Bool, cl_hideaccount )
+EXTERN_CVAR( String, name )
 
 //*****************************************************************************
 //	CONSOLE COMMANDS/VARIABLES
@@ -149,109 +155,15 @@ CVAR( Bool, cl_emulatepacketloss, false, 0 )
 #endif
 // [BB]
 CVAR( Bool, cl_connectsound, true, CVAR_ARCHIVE )
+CVAR( Bool, cl_showwarnings, false, CVAR_ARCHIVE )
 
 //*****************************************************************************
 //	PROTOTYPES
 
-// Protocol functions.
-static	void	client_Header( BYTESTREAM_s *pByteStream );
-static	void	client_Ping( BYTESTREAM_s *pByteStream );
-static	void	client_BeginSnapshot( BYTESTREAM_s *pByteStream );
-static	void	client_EndSnapshot( BYTESTREAM_s *pByteStream );
-
 // Player functions.
-static	void	client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph = false );
-static	void	client_MovePlayer( BYTESTREAM_s *pByteStream );
-static	void	client_DamagePlayer( BYTESTREAM_s *pByteStream );
-static	void	client_KillPlayer( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerHealth( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerArmor( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerState( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerUserInfo( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerFrags( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerPoints( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerWins( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerKillCount( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerChatStatus( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerConsoleStatus( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerLaggingStatus( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerReadyToGoOnStatus( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerTeam( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerCamera( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerPoisonCount( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerCheats( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerPendingWeapon( BYTESTREAM_s *pByteStream );
 // [BB] Does not work with the latest ZDoom changes. Check if it's still necessary.
 //static	void	client_SetPlayerPieces( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerPSprite( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerBlend( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerMaxHealth( BYTESTREAM_s *pByteStream );
-static	void	client_SetPlayerLivesLeft( BYTESTREAM_s *pByteStream );
-static	void	client_UpdatePlayerPing( BYTESTREAM_s *pByteStream );
-static	void	client_UpdatePlayerExtraData( BYTESTREAM_s *pByteStream );
-static	void	client_UpdatePlayerTime( BYTESTREAM_s *pByteStream );
-static	void	client_MoveLocalPlayer( BYTESTREAM_s *pByteStream );
-static	void	client_DisconnectPlayer( BYTESTREAM_s *pByteStream );
-static	void	client_SetConsolePlayer( BYTESTREAM_s *pByteStream );
-static	void	client_ConsolePlayerKicked( BYTESTREAM_s *pByteStream );
-static	void	client_GivePlayerMedal( BYTESTREAM_s *pByteStream );
-static	void	client_ResetAllPlayersFragcount( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerIsSpectator( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerSay( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerTaunt( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerRespawnInvulnerability( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerUseInventory( BYTESTREAM_s *pByteStream );
-static	void	client_PlayerDropInventory( BYTESTREAM_s *pByteStream );
 static	void	client_IgnorePlayer( BYTESTREAM_s *pByteStream );
-
-// Thing functions.
-static	void	client_SpawnThing( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnThingNoNetID( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnThingExact( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnThingExactNoNetID( BYTESTREAM_s *pByteStream );
-static	void	client_MoveThing( BYTESTREAM_s *pByteStream );
-static	void	client_MoveThingExact( BYTESTREAM_s *pByteStream );
-static	void	client_DamageThing( BYTESTREAM_s *pByteStream );
-static	void	client_KillThing( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingState( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingTarget( BYTESTREAM_s *pByteStream );
-static	void	client_DestroyThing( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingAngle( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingAngleExact( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingWaterLevel( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingFlags( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingArguments( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingTranslation( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingProperty( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingSound( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingSpawnPoint( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingSpecial1( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingSpecial2( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingTics( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingTID( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingGravity( BYTESTREAM_s *pByteStream );
-static	void	client_SetThingFrame( BYTESTREAM_s *pByteStream, bool bCallStateFunction );
-static	void	client_SetWeaponAmmoGive( BYTESTREAM_s *pByteStream );
-static	void	client_ThingIsCorpse( BYTESTREAM_s *pByteStream );
-static	void	client_HideThing( BYTESTREAM_s *pByteStream );
-static	void	client_TeleportThing( BYTESTREAM_s *pByteStream );
-static	void	client_ThingActivate( BYTESTREAM_s *pByteStream );
-static	void	client_ThingDeactivate( BYTESTREAM_s *pByteStream );
-static	void	client_RespawnDoomThing( BYTESTREAM_s *pByteStream );
-static	void	client_RespawnRavenThing( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnBlood( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnBloodSplatter( BYTESTREAM_s *pByteStream, bool bIsBloodSplatter2 );
-static	void	client_SpawnPuff( BYTESTREAM_s *pByteStream );
-
-// Print commands.
-static	void	client_Print( BYTESTREAM_s *pByteStream );
-static	void	client_PrintMid( BYTESTREAM_s *pByteStream );
-static	void	client_PrintMOTD( BYTESTREAM_s *pByteStream );
-static	void	client_PrintHUDMessage( BYTESTREAM_s *pByteStream );
-static	void	client_PrintHUDMessageFadeOut( BYTESTREAM_s *pByteStream );
-static	void	client_PrintHUDMessageFadeInOut( BYTESTREAM_s *pByteStream );
-static	void	client_PrintHUDMessageTypeOnFadeOut( BYTESTREAM_s *pByteStream );
 
 // Game commands.
 static	void	client_SetGameMode( BYTESTREAM_s *pByteStream );
@@ -282,85 +194,10 @@ static	void	client_SetTeamReturnTicks( BYTESTREAM_s *pByteStream );
 static	void	client_TeamFlagReturned( BYTESTREAM_s *pByteStream );
 static	void	client_TeamFlagDropped( BYTESTREAM_s *pByteStream );
 
-// Missile commands.
-static	void	client_SpawnMissile( BYTESTREAM_s *pByteStream );
-static	void	client_SpawnMissileExact( BYTESTREAM_s *pByteStream );
-static	void	client_MissileExplode( BYTESTREAM_s *pByteStream );
-
-// Weapon commands.
-static	void	client_WeaponSound( BYTESTREAM_s *pByteStream );
-static	void	client_WeaponChange( BYTESTREAM_s *pByteStream );
-static	void	client_WeaponRailgun( BYTESTREAM_s *pByteStream );
-
-// Sector commands.
-static	void	client_SetSectorFloorPlane( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorCeilingPlane( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorFloorPlaneSlope( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorCeilingPlaneSlope( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorLightLevel( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorColor( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag = false );
-static	void	client_SetSectorFade( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag = false );
-static	void	client_SetSectorFlat( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorPanning( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorRotation( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag = false );
-static	void	client_SetSectorScale( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorSpecial( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorFriction( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorAngleYOffset( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorGravity( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorReflection( BYTESTREAM_s *pByteStream );
-static	void	client_StopSectorLightEffect( BYTESTREAM_s *pByteStream );
-static	void	client_DestroyAllSectorMovers( BYTESTREAM_s *pByteStream );
-static	void	client_SetSectorLink( BYTESTREAM_s *pByteStream );
-
-// Sector light commands.
-static	void	client_DoSectorLightFireFlicker( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightFlicker( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightLightFlash( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightStrobe( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightGlow( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightGlow2( BYTESTREAM_s *pByteStream );
-static	void	client_DoSectorLightPhased( BYTESTREAM_s *pByteStream );
-
-// Line commands.
-static	void	client_SetLineAlpha( BYTESTREAM_s *pByteStream );
-static	void	client_SetLineTexture( BYTESTREAM_s *pByteStream, bool bIdentifyLinesByID = false );
-static	void	client_SetSomeLineFlags( BYTESTREAM_s *pByteStream );
-
-// Side commands.
-static	void	client_SetSideFlags( BYTESTREAM_s *pByteStream );
-
-// ACS commands.
-static	void	client_ACSScriptExecute( BYTESTREAM_s *pByteStream );
-
-// Sound commands.
-static	void	client_Sound( BYTESTREAM_s *pByteStream );
-static	void	client_SoundActor( BYTESTREAM_s *pByteStream, bool bRespectActorPlayingSomething = false );
-static	void	client_SoundPoint( BYTESTREAM_s *pByteStream );
-static	void	client_AnnouncerSound( BYTESTREAM_s *pByteSream );
-
-// Sector sequence commands.
-static	void	client_StartSectorSequence( BYTESTREAM_s *pByteStream );
-static	void	client_StopSectorSequence( BYTESTREAM_s *pByteStream );
-
 // Vote commands.
 static	void	client_CallVote( BYTESTREAM_s *pByteStream );
 static	void	client_PlayerVote( BYTESTREAM_s *pByteStream );
 static	void	client_VoteEnded( BYTESTREAM_s *pByteStream );
-
-// Map commands.
-static	void	client_MapLoad( BYTESTREAM_s *pByteStream );
-static	void	client_MapNew( BYTESTREAM_s *pByteStream );
-static	void	client_MapExit( BYTESTREAM_s *pByteStream );
-static	void	client_MapAuthenticate( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapTime( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapNumKilledMonsters( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapNumFoundItems( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapNumFoundSecrets( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapNumTotalMonsters( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapNumTotalItems( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapMusic( BYTESTREAM_s *pByteStream );
-static	void	client_SetMapSky( BYTESTREAM_s *pByteStream );
 
 // Inventory commands.
 static	void	client_GiveInventory( BYTESTREAM_s *pByteStream );
@@ -433,7 +270,6 @@ static	void	client_SetPolyobjRotation( BYTESTREAM_s *pByteStream );
 
 // Miscellaneous commands.
 static	void	client_EarthQuake( BYTESTREAM_s *pByteStream );
-static	void	client_SetQueuePosition( BYTESTREAM_s *pByteStream );
 static	void	client_DoScroller( BYTESTREAM_s *pByteStream );
 static	void	client_SetScroller( BYTESTREAM_s *pByteStream );
 static	void	client_SetWallScroller( BYTESTREAM_s *pByteStream );
@@ -443,12 +279,6 @@ static	void	client_SetCameraToTexture( BYTESTREAM_s *pByteStream );
 static	void	client_CreateTranslation( BYTESTREAM_s *pByteStream, bool bIsTypeTwo );
 static	void	client_DoPusher( BYTESTREAM_s *pByteStream );
 static	void	client_AdjustPusher( BYTESTREAM_s *pByteStream );
-
-class STClient {
-public:
-	// [BB] Needs to be encapsulated in STClient, because STClient is friend of DLevelScript.
-	static void ReplaceTextures( BYTESTREAM_s *pByteStream );
-};
 
 //*****************************************************************************
 //	VARIABLES
@@ -473,6 +303,9 @@ static	bool				g_bServerLagging;
 
 // What's the time of the last message the server got from us?
 static	bool				g_bClientLagging;
+
+// [BB] Are we currently receiving a full update?
+static	bool				g_bFullUpdateIncomplete = false;
 
 // [BB] Time we received the end of the last full update from the server.
 static ULONG				g_ulEndFullUpdateTic = 0;
@@ -533,6 +366,9 @@ static	LONG				g_lLastCmd;
 // [CK] The most up-to-date server gametic
 static	int				g_lLatestServerGametic = 0;
 
+// [TP] Client's understanding of the account names of players.
+static FString				g_PlayerAccountNames[MAXPLAYERS];
+
 //*****************************************************************************
 //	FUNCTIONS
 
@@ -584,8 +420,8 @@ void CLIENT_Construct( void )
 	// Set up a socket and network message buffer.
 	NETWORK_Construct( usPort, true );
 
-	NETWORK_InitBuffer( &g_LocalBuffer, MAX_UDP_PACKET * 8, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_LocalBuffer );
+	g_LocalBuffer.Init( MAX_UDP_PACKET * 8, BUFFERTYPE_WRITE );
+	g_LocalBuffer.Clear();
 
 	// Initialize the stored packets buffer.
 	g_ReceivedPacketBuffer.lMaxSize = MAX_UDP_PACKET * PACKET_BUFFER_SIZE;
@@ -596,11 +432,11 @@ void CLIENT_Construct( void )
     if ( pszIPAddress )
     {
 		// Convert the given IP string into our server address.
-		NETWORK_StringToAddress( pszIPAddress, &g_AddressServer );
+		g_AddressServer.LoadFromString( pszIPAddress );
 
 		// If the user didn't specify a port, use the default one.
 		if ( g_AddressServer.usPort == 0 )
-			NETWORK_SetAddressPort( g_AddressServer, DEFAULT_SERVER_PORT );
+			g_AddressServer.SetPort( DEFAULT_SERVER_PORT );
 
 		// If we try to reconnect, use this address.
 		g_AddressLastConnected = g_AddressServer;
@@ -646,7 +482,7 @@ void CLIENT_Destruct( void )
 		CLIENT_QuitNetworkGame( NULL );
 
 	// Free our local buffer.
-	NETWORK_FreeBuffer( &g_LocalBuffer );
+	g_LocalBuffer.Free();
 }
 
 //*****************************************************************************
@@ -725,7 +561,7 @@ void CLIENT_EndTick( void )
 	}
 
 	// If there's any data in our packet, send it to the server.
-	if ( NETWORK_CalcBufferSize( &g_LocalBuffer ) > 0 )
+	if ( g_LocalBuffer.CalcSize() > 0 )
 		CLIENT_SendServerPacket( );
 }
 
@@ -905,14 +741,42 @@ void CLIENT_SetLatestServerGametic( int latestServerGametic )
 		g_lLatestServerGametic = latestServerGametic;
 }
 
+//*****************************************************************************
+//
+bool CLIENT_GetFullUpdateIncomplete ( void )
+{
+	return g_bFullUpdateIncomplete;
+}
+
+//*****************************************************************************
+//
+unsigned int CLIENT_GetEndFullUpdateTic( void )
+{
+	return g_ulEndFullUpdateTic;
+}
+
+//*****************************************************************************
+//
+const FString &CLIENT_GetPlayerAccountName( int player )
+{
+	static FString empty;
+
+	if ( static_cast<unsigned>( player ) < countof( g_PlayerAccountNames ))
+		return g_PlayerAccountNames[player];
+	else
+		return empty;
+}
+
+//*****************************************************************************
+//
 void CLIENT_SendServerPacket( void )
 {
 	// Add the size of the packet to the number of bytes sent.
-	CLIENTSTATISTICS_AddToBytesSent( NETWORK_CalcBufferSize( &g_LocalBuffer ));
+	CLIENTSTATISTICS_AddToBytesSent( g_LocalBuffer.CalcSize());
 
 	// Launch the packet, and clear out the buffer.
 	NETWORK_LaunchPacket( &g_LocalBuffer, g_AddressServer );
-	NETWORK_ClearBuffer( &g_LocalBuffer );
+	g_LocalBuffer.Clear();
 }
 
 //*****************************************************************************
@@ -929,10 +793,10 @@ void CLIENT_AttemptConnection( void )
 	}
 
 	g_ulRetryTicks = CONNECTION_RESEND_TIME;
-	Printf( "Connecting to %s\n", NETWORK_AddressToString( g_AddressServer ));
+	Printf( "Connecting to %s\n", g_AddressServer.ToString() );
 
 	// Reset a bunch of stuff.
-	NETWORK_ClearBuffer( &g_LocalBuffer );
+	g_LocalBuffer.Clear();
 	memset( g_ReceivedPacketBuffer.abData, 0, MAX_UDP_PACKET * 32 );
 	for ( ulIdx = 0; ulIdx < PACKET_BUFFER_SIZE; ulIdx++ )
 	{
@@ -955,8 +819,9 @@ void CLIENT_AttemptConnection( void )
 	 // Send connection signal to the server.
 	NETWORK_WriteByte( &g_LocalBuffer.ByteStream, CLCC_ATTEMPTCONNECTION );
 	NETWORK_WriteString( &g_LocalBuffer.ByteStream, DOTVERSIONSTR );
-	NETWORK_WriteString( &g_LocalBuffer.ByteStream, cl_password.GetGenericRep( CVAR_String ).String );
+	NETWORK_WriteString( &g_LocalBuffer.ByteStream, cl_password );
 	NETWORK_WriteByte( &g_LocalBuffer.ByteStream, cl_connect_flags );
+	NETWORK_WriteByte( &g_LocalBuffer.ByteStream, cl_hideaccount );
 	NETWORK_WriteByte( &g_LocalBuffer.ByteStream, NETGAMEVERSION );
 	NETWORK_WriteString( &g_LocalBuffer.ByteStream, g_lumpsAuthenticationChecksum.GetChars() );
 }
@@ -1004,7 +869,10 @@ void CLIENT_RequestSnapshot( void )
 
 	// Send them a message to get data from the server, along with our userinfo.
 	NETWORK_WriteByte( &g_LocalBuffer.ByteStream, CLCC_REQUESTSNAPSHOT );
-	CLIENTCOMMANDS_UserInfo( USERINFO_ALL );
+	CLIENTCOMMANDS_SendAllUserInfo();
+
+	// [TP] Send video resolution for ACS scripting support.
+	CLIENTCOMMANDS_SetVideoResolution();
 
 	// Make sure all players are gone from the level.
 	CLIENT_ClearAllPlayers();
@@ -1050,14 +918,13 @@ void CLIENT_GetPackets( void )
 #endif
 	while (( lSize = NETWORK_GetPackets( )) > 0 )
 	{
-		UCVarValue		Val;
 		BYTESTREAM_s	*pByteStream;
 
 		pByteStream = &NETWORK_GetNetworkMessageBuffer( )->ByteStream;
 
 		// If we're a client and receiving a message from the server...
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) &&
-			( NETWORK_CompareAddress( NETWORK_GetFromAddress( ), CLIENT_GetServerAddress( ), false )))
+		if ( NETWORK_GetState() == NETSTATE_CLIENT
+			&& NETWORK_GetFromAddress().Compare( CLIENT_GetServerAddress() ))
 		{
 			// Statistics.
 			CLIENTSTATISTICS_AddToBytesReceived( lSize );
@@ -1116,12 +983,10 @@ void CLIENT_GetPackets( void )
 			const char		*pszAddressBuf;
 			NETADDRESS_s	AddressFrom;
 			LONG			lCommand;
-			NETADDRESS_s	MasterAddress;
 			const char		*pszMasterPort;
-			Val = masterhostname.GetGenericRep( CVAR_String );
 			// [BB] This conversion potentially does a DNS lookup.
 			// There is absolutely no reason to call this at beginning of the while loop above (like done before). 
-			NETWORK_StringToAddress( Val.String, &MasterAddress );
+			NETADDRESS_s MasterAddress ( masterhostname );
 
 			// Allow the user to specify which port the master server is on.
 			pszMasterPort = Args->CheckValue( "-masterport" );
@@ -1131,7 +996,7 @@ void CLIENT_GetPackets( void )
 				MasterAddress.usPort = NETWORK_ntohs( DEFAULT_MASTER_PORT );
 
 
-			pszAddressBuf = NETWORK_AddressToString( NETWORK_GetFromAddress( ));
+			pszAddressBuf = NETWORK_GetFromAddress().ToString();
 
 			// Skulltag is receiving a message from something on the LAN.
 			if (( strncmp( pszAddressBuf, pszPrefix1, 9 ) == 0 ) || 
@@ -1148,7 +1013,7 @@ void CLIENT_GetPackets( void )
 				AddressFrom = NETWORK_GetFromAddress( );
 
 			// If we're receiving info from the master server...
-			if ( NETWORK_CompareAddress( AddressFrom, MasterAddress, false ))
+			if ( AddressFrom.Compare( MasterAddress ))
 			{
 				lCommand = NETWORK_ReadLong( pByteStream );
 				switch ( lCommand )
@@ -1203,7 +1068,7 @@ void CLIENT_GetPackets( void )
 				else if ( lCommand == SERVER_LAUNCHER_IGNORING )
 					Printf( "WARNING! Please wait a full 10 seconds before refreshing the server list.\n" );
 				//else
-				//	Printf( "Unknown network message from %s.\n", NETWORK_AddressToString( g_AddressFrom ));
+				//	Printf( "Unknown network message from %s.\n", g_AddressFrom.ToString() );
 			}
 		}
 	}
@@ -1288,9 +1153,10 @@ bool CLIENT_ReadPacketHeader( BYTESTREAM_s *pByteStream )
 	if ( lCommand == SVC_UNRELIABLEPACKET )
 		return ( true );
 	else
-
-	// Read in the sequence. This is the # of the packet the server has sent us.
-	lSequence = NETWORK_ReadLong( pByteStream );
+	{
+		// Read in the sequence. This is the # of the packet the server has sent us.
+		lSequence = NETWORK_ReadLong( pByteStream );
+	}
 	if ( lCommand != SVC_HEADER )
 		Printf( "CLIENT_ReadPacketHeader: WARNING! Expected SVC_HEADER or SVC_UNRELIABLEPACKET!\n" );
 
@@ -1302,17 +1168,17 @@ bool CLIENT_ReadPacketHeader( BYTESTREAM_s *pByteStream )
 	}
 
 	// The end of the buffer has been reached.
-	if (( g_lCurrentPosition + ( NETWORK_CalcBufferSize( NETWORK_GetNetworkMessageBuffer( )))) >= g_ReceivedPacketBuffer.lMaxSize )
+	if (( g_lCurrentPosition + ( NETWORK_GetNetworkMessageBuffer( )->CalcSize())) >= g_ReceivedPacketBuffer.lMaxSize )
 		g_lCurrentPosition = 0;
 
 	// Save a bunch of information about this incoming packet.
 	g_lPacketBeginning[g_bPacketNum] = g_lCurrentPosition;
-	g_lPacketSize[g_bPacketNum] = NETWORK_CalcBufferSize( NETWORK_GetNetworkMessageBuffer( ));
+	g_lPacketSize[g_bPacketNum] = NETWORK_GetNetworkMessageBuffer( )->CalcSize();
 	g_lPacketSequence[g_bPacketNum] = lSequence;
 
 	// Save the received packet.
-	memcpy( g_ReceivedPacketBuffer.abData + g_lPacketBeginning[g_bPacketNum], NETWORK_GetNetworkMessageBuffer( )->ByteStream.pbStream, NETWORK_CalcBufferSize( NETWORK_GetNetworkMessageBuffer( )));
-	g_lCurrentPosition += NETWORK_CalcBufferSize( NETWORK_GetNetworkMessageBuffer( ));
+	memcpy( g_ReceivedPacketBuffer.abData + g_lPacketBeginning[g_bPacketNum], NETWORK_GetNetworkMessageBuffer( )->ByteStream.pbStream, NETWORK_GetNetworkMessageBuffer( )->CalcSize());
+	g_lCurrentPosition += NETWORK_GetNetworkMessageBuffer( )->CalcSize();
 
 	if ( lSequence > g_lHighestReceivedSequence )
 		g_lHighestReceivedSequence = lSequence;
@@ -1351,15 +1217,17 @@ void CLIENT_ParsePacket( BYTESTREAM_s *pByteStream, bool bSequencedPacket )
 		CLIENTDEMO_MarkCurrentPosition();
 		lCommand = NETWORK_ReadByte( pByteStream );
 
+		// [TP] Reset the bit reading buffer.
+		pByteStream->bitBuffer = NULL;
+		pByteStream->bitShift = -1;
+
 		// End of message.
 		if ( lCommand == -1 )
 			break;
 
-#ifdef _DEBUG
 		// Option to print commands for debugging purposes.
 		if ( cl_showcommands )
 			CLIENT_PrintCommand( lCommand );
-#endif
 
 		// Process this command.
 		CLIENT_ProcessCommand( lCommand, pByteStream );
@@ -1397,6 +1265,9 @@ void CLIENT_ParsePacket( BYTESTREAM_s *pByteStream, bool bSequencedPacket )
 void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 {
 	char	szString[128];
+
+	if ( CLIENT_ParseServerCommand( static_cast<SVC>( lCommand ), pByteStream ))
+		return;
 
 	switch ( lCommand )
 	{
@@ -1451,6 +1322,9 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				// Start new level.
 				G_InitNew( g_szMapName, false );
 
+				// [BB] We'll receive a full update for the new map from the server.
+				g_bFullUpdateIncomplete = true;
+
 				// For right now, the view is not active.
 				viewactive = false;
 
@@ -1497,6 +1371,13 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				break;
 			case NETWORK_ERRORCODE_BANNED:
 
+				// [TP] Is this a master ban?
+				if ( !!NETWORK_ReadByte( pByteStream ))
+				{
+					szErrorString = "Couldn't connect. \\cgYou have been banned from " GAMENAME "'s master server!\\c-\n"
+						"If you feel this is in error, you may contact the staff at " FORUM_URL;
+				}
+				else
 				{
 					szErrorString = "Couldn't connect. \\cgYou have been banned from this server!\\c-";
 
@@ -1516,8 +1397,18 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 						strftime( szDate, 32, "%m/%d/%Y %H:%M", pTimeInfo);
 						szErrorString = szErrorString + "\nYour ban expires on: " + szDate + " (server time)";
 					}
-					break;
+
+					// [TP] Read in contact information, if any.
+					FString contact = NETWORK_ReadString( pByteStream );
+					if ( contact.IsNotEmpty() )
+					{
+						szErrorString.AppendFormat( "\nIf you feel this is in error, you may contact the server "
+							"host at: %s", contact.GetChars() );
+					}
+					else
+						szErrorString += "\nThis server has not provided any contact information.";
 				}
+				break;
 			case NETWORK_ERRORCODE_SERVERISFULL:
 
 				szErrorString = "Server is full.";
@@ -1549,10 +1440,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					break;
 				}
-			case NETWORK_ERRORCODE_FAILEDTOSENDUSERINFO:
-
-				szErrorString = "Failed to send userinfo.";
-				break;
 			case NETWORK_ERRORCODE_TOOMANYCONNECTIONSFROMIP:
 
 				szErrorString = "Too many connections from your IP.";
@@ -1570,116 +1457,8 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 			CLIENT_QuitNetworkGame( szErrorString );
 		}
 		return;
-	case SVC_HEADER:
-
-		client_Header( pByteStream );
-		break;
-	case SVC_PING:
-
-		client_Ping( pByteStream );
-		break;
 	case SVC_NOTHING:
 
-		break;
-	case SVC_BEGINSNAPSHOT:
-
-		client_BeginSnapshot( pByteStream );
-		break;
-	case SVC_ENDSNAPSHOT:
-
-		client_EndSnapshot( pByteStream );
-		break;
-	case SVC_SPAWNPLAYER:
-
-		client_SpawnPlayer( pByteStream );
-		break;
-	case SVC_SPAWNMORPHPLAYER:
-
-		client_SpawnPlayer( pByteStream, true );
-		break;
-	case SVC_MOVEPLAYER:
-
-		client_MovePlayer( pByteStream );
-		break;
-	case SVC_DAMAGEPLAYER:
-
-		client_DamagePlayer( pByteStream );
-		break;
-	case SVC_KILLPLAYER:
-
-		client_KillPlayer( pByteStream );
-		break;
-	case SVC_SETPLAYERHEALTH:
-
-		client_SetPlayerHealth( pByteStream );
-		break;
-	case SVC_SETPLAYERARMOR:
-
-		client_SetPlayerArmor( pByteStream );
-		break;
-	case SVC_SETPLAYERSTATE:
-
-		client_SetPlayerState( pByteStream );
-		break;
-	case SVC_SETPLAYERUSERINFO:
-
-		client_SetPlayerUserInfo( pByteStream );
-		break;
-	case SVC_SETPLAYERFRAGS:
-
-		client_SetPlayerFrags( pByteStream );
-		break;
-	case SVC_SETPLAYERPOINTS:
-
-		client_SetPlayerPoints( pByteStream );
-		break;
-	case SVC_SETPLAYERWINS:
-
-		client_SetPlayerWins( pByteStream );
-		break;
-	case SVC_SETPLAYERKILLCOUNT:
-
-		client_SetPlayerKillCount( pByteStream );
-		break;
-	case SVC_SETPLAYERCHATSTATUS:
-
-		client_SetPlayerChatStatus( pByteStream );
-		break;
-	case SVC_SETPLAYERCONSOLESTATUS:
-
-		client_SetPlayerConsoleStatus( pByteStream );
-		break;
-	case SVC_SETPLAYERLAGGINGSTATUS:
-
-		client_SetPlayerLaggingStatus( pByteStream );
-		break;
-	case SVC_SETPLAYERREADYTOGOONSTATUS:
-
-		client_SetPlayerReadyToGoOnStatus( pByteStream );
-		break;
-	case SVC_SETPLAYERTEAM:
-
-		client_SetPlayerTeam( pByteStream );
-		break;
-	case SVC_SETPLAYERCAMERA:
-
-		client_SetPlayerCamera( pByteStream );
-		break;
-	case SVC_SETPLAYERPOISONCOUNT:
-
-		client_SetPlayerPoisonCount( pByteStream );
-		break;
-	case SVC_SETPLAYERAMMOCAPACITY:
-
-		client_SetPlayerAmmoCapacity( pByteStream );
-		break;
-	case SVC_SETPLAYERCHEATS:
-
-		client_SetPlayerCheats( pByteStream );
-		break;
-	case SVC_SETPLAYERPENDINGWEAPON:
-
-		client_SetPlayerPendingWeapon( pByteStream );
 		break;
 	/* [BB] Does not work with the latest ZDoom changes. Check if it's still necessary.
 	case SVC_SETPLAYERPIECES:
@@ -1687,266 +1466,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 		client_SetPlayerPieces( pByteStream );
 		break;
 	*/
-	case SVC_SETPLAYERPSPRITE:
-
-		client_SetPlayerPSprite( pByteStream );
-		break;
-	case SVC_SETPLAYERBLEND:
-
-		client_SetPlayerBlend( pByteStream );
-		break;
-	case SVC_SETPLAYERMAXHEALTH:
-
-		client_SetPlayerMaxHealth( pByteStream );
-		break;
-	case SVC_SETPLAYERLIVESLEFT:
-
-		client_SetPlayerLivesLeft( pByteStream );
-		break;
-	case SVC_UPDATEPLAYERPING:
-
-		client_UpdatePlayerPing( pByteStream );
-		break;
-	case SVC_UPDATEPLAYEREXTRADATA:
-
-		client_UpdatePlayerExtraData( pByteStream );
-		break;
-	case SVC_UPDATEPLAYERTIME:
-
-		client_UpdatePlayerTime( pByteStream );
-		break;
-	case SVC_MOVELOCALPLAYER:
-
-		client_MoveLocalPlayer( pByteStream );
-		break;
-	case SVC_DISCONNECTPLAYER:
-
-		client_DisconnectPlayer( pByteStream );
-		break;
-	case SVC_SETCONSOLEPLAYER:
-
-		client_SetConsolePlayer( pByteStream );
-		break;
-	case SVC_CONSOLEPLAYERKICKED:
-
-		client_ConsolePlayerKicked( pByteStream );
-		break;
-	case SVC_GIVEPLAYERMEDAL:
-
-		client_GivePlayerMedal( pByteStream );
-		break;
-	case SVC_RESETALLPLAYERSFRAGCOUNT:
-
-		client_ResetAllPlayersFragcount( pByteStream );
-		break;
-	case SVC_PLAYERISSPECTATOR:
-
-		client_PlayerIsSpectator( pByteStream );
-		break;
-	case SVC_PLAYERSAY:
-
-		client_PlayerSay( pByteStream );
-		break;
-	case SVC_PLAYERTAUNT:
-
-		client_PlayerTaunt( pByteStream );
-		break;
-	case SVC_PLAYERRESPAWNINVULNERABILITY:
-
-		client_PlayerRespawnInvulnerability( pByteStream );
-		break;
-	case SVC_PLAYERUSEINVENTORY:
-
-		client_PlayerUseInventory( pByteStream );
-		break;
-	case SVC_PLAYERDROPINVENTORY:
-
-		client_PlayerDropInventory( pByteStream );
-		break;
-	case SVC_SPAWNTHING:
-
-		client_SpawnThing( pByteStream );
-		break;
-	case SVC_SPAWNTHINGNONETID:
-
-		client_SpawnThingNoNetID( pByteStream );
-		break;
-	case SVC_SPAWNTHINGEXACT:
-
-		client_SpawnThingExact( pByteStream );
-		break;
-	case SVC_SPAWNTHINGEXACTNONETID:
-
-		client_SpawnThingExactNoNetID( pByteStream );
-		break;
-	case SVC_MOVETHING:
-
-		client_MoveThing( pByteStream );
-		break;
-	case SVC_MOVETHINGEXACT:
-
-		client_MoveThingExact( pByteStream );
-		break;
-	case SVC_DAMAGETHING:
-
-		client_DamageThing( pByteStream );
-		break;
-	case SVC_KILLTHING:
-
-		client_KillThing( pByteStream );
-		break;
-	case SVC_SETTHINGSTATE:
-
-		client_SetThingState( pByteStream );
-		break;
-	case SVC_SETTHINGTARGET:
-
-		client_SetThingTarget( pByteStream );
-		break;
-	case SVC_DESTROYTHING:
-
-		client_DestroyThing( pByteStream );
-		break;
-	case SVC_SETTHINGANGLE:
-
-		client_SetThingAngle( pByteStream );
-		break;
-	case SVC_SETTHINGANGLEEXACT:
-
-		client_SetThingAngleExact( pByteStream );
-		break;
-	case SVC_SETTHINGWATERLEVEL:
-
-		client_SetThingWaterLevel( pByteStream );
-		break;
-	case SVC_SETTHINGFLAGS:
-
-		client_SetThingFlags( pByteStream );
-		break;
-	case SVC_SETTHINGARGUMENTS:
-
-		client_SetThingArguments( pByteStream );
-		break;
-	case SVC_SETTHINGTRANSLATION:
-
-		client_SetThingTranslation( pByteStream );
-		break;
-	case SVC_SETTHINGPROPERTY:
-
-		client_SetThingProperty( pByteStream );
-		break;
-	case SVC_SETTHINGSOUND:
-
-		client_SetThingSound( pByteStream );
-		break;
-	case SVC_SETTHINGSPAWNPOINT:
-
-		client_SetThingSpawnPoint( pByteStream );
-		break;
-	case SVC_SETTHINGSPECIAL1:
-
-		client_SetThingSpecial1( pByteStream );
-		break;
-	case SVC_SETTHINGSPECIAL2:
-
-		client_SetThingSpecial2( pByteStream );
-		break;
-	case SVC_SETTHINGTICS:
-
-		client_SetThingTics( pByteStream );
-		break;
-	case SVC_SETTHINGTID:
-
-		client_SetThingTID( pByteStream );
-		break;
-	case SVC_SETTHINGGRAVITY:
-
-		client_SetThingGravity( pByteStream );
-		break;
-	case SVC_SETTHINGFRAME:
-
-		client_SetThingFrame( pByteStream, true );
-		break;
-	case SVC_SETTHINGFRAMENF:
-
-		client_SetThingFrame( pByteStream, false );
-		break;
-	case SVC_SETWEAPONAMMOGIVE:
-
-		client_SetWeaponAmmoGive( pByteStream );
-		break;
-	case SVC_THINGISCORPSE:
-
-		client_ThingIsCorpse( pByteStream );
-		break;
-	case SVC_HIDETHING:
-
-		client_HideThing( pByteStream );
-		break;
-	case SVC_TELEPORTTHING:
-
-		client_TeleportThing( pByteStream );
-		break;
-	case SVC_THINGACTIVATE:
-
-		client_ThingActivate( pByteStream );
-		break;
-	case SVC_THINGDEACTIVATE:
-
-		client_ThingDeactivate( pByteStream );
-		break;
-	case SVC_RESPAWNDOOMTHING:
-
-		client_RespawnDoomThing( pByteStream );
-		break;
-	case SVC_RESPAWNRAVENTHING:
-
-		client_RespawnRavenThing( pByteStream );
-		break;
-	case SVC_SPAWNBLOOD:
-
-		client_SpawnBlood( pByteStream );
-		break;
-	case SVC_SPAWNBLOODSPLATTER:
-
-		client_SpawnBloodSplatter( pByteStream, false );
-		break;
-	case SVC_SPAWNBLOODSPLATTER2:
-
-		client_SpawnBloodSplatter( pByteStream, true );
-		break;
-	case SVC_SPAWNPUFF:
-
-		client_SpawnPuff( pByteStream );
-		break;
-	case SVC_PRINT:
-
-		client_Print( pByteStream );
-		break;
-	case SVC_PRINTMID:
-
-		client_PrintMid( pByteStream );
-		break;
-	case SVC_PRINTMOTD:
-
-		client_PrintMOTD( pByteStream );
-		break;
-	case SVC_PRINTHUDMESSAGE:
-
-		client_PrintHUDMessage( pByteStream );
-		break;
-	case SVC_PRINTHUDMESSAGEFADEOUT:
-
-		client_PrintHUDMessageFadeOut( pByteStream );
-		break;
-	case SVC_PRINTHUDMESSAGEFADEINOUT:
-
-		client_PrintHUDMessageFadeInOut( pByteStream );
-		break;
-	case SVC_PRINTHUDMESSAGETYPEONFADEOUT:
-
-		client_PrintHUDMessageTypeOnFadeOut( pByteStream );
-		break;
 	case SVC_SETGAMEMODE:
 
 		client_SetGameMode( pByteStream );
@@ -2047,190 +1566,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 		client_TeamFlagDropped( pByteStream );
 		break;
-	case SVC_SPAWNMISSILE:
-
-		client_SpawnMissile( pByteStream );
-		break;
-	case SVC_SPAWNMISSILEEXACT:
-
-		client_SpawnMissileExact( pByteStream );
-		break;
-	case SVC_MISSILEEXPLODE:
-
-		client_MissileExplode( pByteStream );
-		break;
-	case SVC_WEAPONSOUND:
-
-		client_WeaponSound( pByteStream );
-		break;
-	case SVC_WEAPONCHANGE:
-
-		client_WeaponChange( pByteStream );
-		break;
-	case SVC_WEAPONRAILGUN:
-
-		client_WeaponRailgun( pByteStream );
-		break;
-	case SVC_SETSECTORFLOORPLANE:
-
-		client_SetSectorFloorPlane( pByteStream );
-		break;
-	case SVC_SETSECTORCEILINGPLANE:
-
-		client_SetSectorCeilingPlane( pByteStream );
-		break;
-	case SVC_SETSECTORFLOORPLANESLOPE:
-
-		client_SetSectorFloorPlaneSlope( pByteStream );
-		break;
-	case SVC_SETSECTORCEILINGPLANESLOPE:
-
-		client_SetSectorCeilingPlaneSlope( pByteStream );
-		break;
-	case SVC_SETSECTORLIGHTLEVEL:
-
-		client_SetSectorLightLevel( pByteStream );
-		break;
-	case SVC_SETSECTORCOLOR:
-
-		client_SetSectorColor( pByteStream );
-		break;
-	case SVC_SETSECTORCOLORBYTAG:
-
-		client_SetSectorColor( pByteStream, true );
-		break;
-	case SVC_SETSECTORFADE:
-
-		client_SetSectorFade( pByteStream );
-		break;
-	case SVC_SETSECTORFADEBYTAG:
-
-		client_SetSectorFade( pByteStream, true );
-		break;
-	case SVC_SETSECTORFLAT:
-
-		client_SetSectorFlat( pByteStream );
-		break;
-	case SVC_SETSECTORPANNING:
-
-		client_SetSectorPanning( pByteStream );
-		break;
-	case SVC_SETSECTORROTATION:
-
-		client_SetSectorRotation( pByteStream );
-		break;
-	case SVC_SETSECTORROTATIONBYTAG:
-
-		client_SetSectorRotation( pByteStream, true );
-		break;
-	case SVC_SETSECTORSCALE:
-
-		client_SetSectorScale( pByteStream );
-		break;
-	case SVC_SETSECTORSPECIAL:
-
-		client_SetSectorSpecial( pByteStream );
-		break;
-	case SVC_SETSECTORFRICTION:
-
-		client_SetSectorFriction( pByteStream );
-		break;
-	case SVC_SETSECTORANGLEYOFFSET:
-
-		client_SetSectorAngleYOffset( pByteStream );
-		break;
-	case SVC_SETSECTORGRAVITY:
-
-		client_SetSectorGravity( pByteStream );
-		break;
-	case SVC_SETSECTORREFLECTION:
-
-		client_SetSectorReflection( pByteStream );
-		break;
-	case SVC_STOPSECTORLIGHTEFFECT:
-
-		client_StopSectorLightEffect( pByteStream );
-		break;
-	case SVC_DESTROYALLSECTORMOVERS:
-
-		client_DestroyAllSectorMovers( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTFIREFLICKER:
-
-		client_DoSectorLightFireFlicker( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTFLICKER:
-
-		client_DoSectorLightFlicker( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTLIGHTFLASH:
-
-		client_DoSectorLightLightFlash( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTSTROBE:
-
-		client_DoSectorLightStrobe( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTGLOW:
-
-		client_DoSectorLightGlow( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTGLOW2:
-
-		client_DoSectorLightGlow2( pByteStream );
-		break;
-	case SVC_DOSECTORLIGHTPHASED:
-
-		client_DoSectorLightPhased( pByteStream );
-		break;
-	case SVC_SETLINEALPHA:
-
-		client_SetLineAlpha( pByteStream );
-		break;
-	case SVC_SETLINETEXTURE:
-
-		client_SetLineTexture( pByteStream );
-		break;
-	case SVC_SETLINETEXTUREBYID:
-
-		client_SetLineTexture( pByteStream, true );
-		break;
-	case SVC_SETSOMELINEFLAGS:
-
-		client_SetSomeLineFlags( pByteStream );
-		break;
-	case SVC_SETSIDEFLAGS:
-
-		client_SetSideFlags( pByteStream );
-		break;
-	case SVC_ACSSCRIPTEXECUTE:
-
-		client_ACSScriptExecute( pByteStream );
-		break;
-	case SVC_SOUND:
-
-		client_Sound( pByteStream );
-		break;
-	case SVC_SOUNDACTOR:
-
-		client_SoundActor( pByteStream );
-		break;
-	case SVC_SOUNDACTORIFNOTPLAYING:
-
-		client_SoundActor( pByteStream, true );
-		break;
-	case SVC_SOUNDPOINT:
-
-		client_SoundPoint( pByteStream );
-		break;
-	case SVC_STARTSECTORSEQUENCE:
-
-		client_StartSectorSequence( pByteStream );
-		break;
-	case SVC_STOPSECTORSEQUENCE:
-
-		client_StopSectorSequence( pByteStream );
-		break;
 	case SVC_CALLVOTE:
 
 		client_CallVote( pByteStream );
@@ -2242,69 +1577,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 	case SVC_VOTEENDED:
 
 		client_VoteEnded( pByteStream );
-		break;
-	case SVC_MAPLOAD:
-
-		// [BB] We are about to change the map, so if we are playing a demo right now
-		// and wanted to skip the current map, we are done with it now.
-		CLIENTDEMO_SetSkippingToNextMap ( false );
-		client_MapLoad( pByteStream );
-		break;
-	case SVC_MAPNEW:
-
-		// [BB] We are about to change the map, so if we are playing a demo right now
-		// and wanted to skip the current map, we are done with it now.
-		if ( CLIENTDEMO_IsSkippingToNextMap() == true )
-		{
-			// [BB] All the skipping seems to mess up the information which player is in game.
-			// Clearing everything will take care of this.
-			CLIENT_ClearAllPlayers();
-			CLIENTDEMO_SetSkippingToNextMap ( false );
-		}
-		client_MapNew( pByteStream );
-		break;
-	case SVC_MAPEXIT:
-
-		// [BB] We are about to change the map, so if we are playing a demo right now
-		// and wanted to skip the current map, we are done with it now.
-		CLIENTDEMO_SetSkippingToNextMap ( false );
-		client_MapExit( pByteStream );
-		break;
-	case SVC_MAPAUTHENTICATE:
-
-		client_MapAuthenticate( pByteStream );
-		break;
-	case SVC_SETMAPTIME:
-
-		client_SetMapTime( pByteStream );
-		break;
-	case SVC_SETMAPNUMKILLEDMONSTERS:
-
-		client_SetMapNumKilledMonsters( pByteStream );
-		break;
-	case SVC_SETMAPNUMFOUNDITEMS:
-
-		client_SetMapNumFoundItems( pByteStream );
-		break;
-	case SVC_SETMAPNUMFOUNDSECRETS:
-
-		client_SetMapNumFoundSecrets( pByteStream );
-		break;
-	case SVC_SETMAPNUMTOTALMONSTERS:
-
-		client_SetMapNumTotalMonsters( pByteStream );
-		break;
-	case SVC_SETMAPNUMTOTALITEMS:
-
-		client_SetMapNumTotalItems( pByteStream );
-		break;
-	case SVC_SETMAPMUSIC:
-
-		client_SetMapMusic( pByteStream );
-		break;
-	case SVC_SETMAPSKY:
-
-		client_SetMapSky( pByteStream );
 		break;
 	case SVC_GIVEINVENTORY:
 
@@ -2478,10 +1750,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 		client_EarthQuake( pByteStream );
 		break;
-	case SVC_SETQUEUEPOSITION:
-
-		client_SetQueuePosition( pByteStream );
-		break;
 	case SVC_DOSCROLLER:
 
 		client_DoScroller( pByteStream );
@@ -2514,15 +1782,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 		client_CreateTranslation( pByteStream, true );
 		break;
-	case SVC_REPLACETEXTURES:
-
-		STClient::ReplaceTextures( pByteStream );
-		break;
-
-	case SVC_SETSECTORLINK:
-
-		client_SetSectorLink( pByteStream );
-		break;
 
 	case SVC_DOPUSHER:
 
@@ -2539,36 +1798,21 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 		client_IgnorePlayer( pByteStream );
 		break;
 
-	case SVC_ANNOUNCERSOUND:
-
-		client_AnnouncerSound( pByteStream );
-		break;
-
 	case SVC_EXTENDEDCOMMAND:
 		{
 			const LONG lExtCommand = NETWORK_ReadByte( pByteStream );
 
-#ifdef _DEBUG
 			if ( cl_showcommands )
 				Printf( "%s\n", GetStringSVC2 ( static_cast<SVC2> ( lExtCommand ) ) );
-#endif
+
+			if ( CLIENT_ParseExtendedServerCommand( static_cast<SVC2>( lExtCommand ), pByteStream ))
+				break;
 
 			switch ( lExtCommand )
 			{
 			case SVC2_SETINVENTORYICON:
 
 				client_SetInventoryIcon( pByteStream );
-				break;
-
-			case SVC2_FULLUPDATECOMPLETED:
-
-				// [BB] The server doesn't send any info with this packet, it's just there to allow us
-				// keeping track of the current time so that we don't think we are lagging immediately after receiving a full update.
-				g_ulEndFullUpdateTic = gametic;
-				g_bClientLagging = false;
-				// [BB] Tell the server that we received the full update.
-				CLIENTCOMMANDS_FullUpdateReceived();
-
 				break;
 
 			case SVC2_SETIGNOREWEAPONSELECT:
@@ -2627,55 +1871,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				}
 				break;
 
-			case SVC2_GIVEWEAPONHOLDER:
-				{
-					const ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-					const int iPieceMask = NETWORK_ReadShort( pByteStream );
-					const USHORT usNetIndex = NETWORK_ReadShort( pByteStream );
-
-					if ( PLAYER_IsValidPlayerWithMo( ulPlayer ) == false )
-						break;
-
-					const PClass *pPieceWeapon = NETWORK_GetClassFromIdentification( usNetIndex );
-					if ( !pPieceWeapon ) break;
-
-					AWeaponHolder *holder = static_cast<AWeaponHolder *>( players[ulPlayer].mo->FindInventory( RUNTIME_CLASS( AWeaponHolder ) ) );
-					if ( holder == NULL )
-						holder = static_cast<AWeaponHolder *>( players[ulPlayer].mo->GiveInventoryType( RUNTIME_CLASS( AWeaponHolder ) ) );
-
-					if (!holder)
-					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "GIVEWEAPONHOLDER: Failed to give AWeaponHolder!\n");
-#endif
-						break;
-					}
-
-					// Set the special fields. This is why this function exists in the first place.
-					holder->PieceMask = iPieceMask;
-					holder->PieceWeapon = pPieceWeapon;
-				}
-				break;
-
-			// [Dusk]
-			case SVC2_SETHEXENARMORSLOTS:
-				{
-					const ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-					AHexenArmor *aHXArmor = PLAYER_IsValidPlayerWithMo( ulPlayer ) ? static_cast<AHexenArmor *>( players[ulPlayer].mo->FindInventory( RUNTIME_CLASS (AHexenArmor ))) : NULL;
-
-					if ( aHXArmor == NULL )
-					{
-						// [BB] Even if we can't set the values, we still have to parse them.
-						for (int i = 0; i <= 4; i++) NETWORK_ReadLong( pByteStream );
-						break;
-					}
-					
-					for (int i = 0; i <= 4; i++)
-						aHXArmor->Slots[i] = NETWORK_ReadLong( pByteStream );
-				}
-
-				break;
-
 			case SVC2_SETTHINGREACTIONTIME:
 				{
 					const LONG lID = NETWORK_ReadShort( pByteStream ); 
@@ -2684,9 +1879,7 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					if ( pActor == NULL )
 					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "SETTHINGREACTIONTIME: Couldn't find thing: %d\n", lID );
-#endif
+						CLIENT_PrintWarning( "SETTHINGREACTIONTIME: Couldn't find thing: %ld\n", lID );
 						break;
 					}
 					pActor->reactiontime = lReactionTime;
@@ -2702,9 +1895,7 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					if ( pActor == NULL )
 					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "SETFASTCHASESTRAFECOUNT: Couldn't find thing: %d\n", lID );
-#endif
+						CLIENT_PrintWarning( "SETFASTCHASESTRAFECOUNT: Couldn't find thing: %ld\n", lID );
 						break;
 					}
 					pActor->FastChaseStrafeCount = lStrafeCount;
@@ -2712,7 +1903,13 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				break;
 
 			case SVC2_RESETMAP:
-				GAME_ResetMap();
+				{
+					// [EP] Clear all the HUD messages.
+					if ( StatusBar )
+						StatusBar->DetachAllMessages();
+
+					GAME_ResetMap();
+				}
 				break;
 
 			case SVC2_SETPOWERUPBLENDCOLOR:
@@ -2793,9 +1990,7 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					if ( pActor == NULL )
 					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "SVC2_SETTHINGSPECIAL: Couldn't find thing: %d\n", lID );
-#endif
+						CLIENT_PrintWarning( "SVC2_SETTHINGSPECIAL: Couldn't find thing: %ld\n", lID );
 						break;
 					}
 					pActor->special = lSpecial;
@@ -2805,6 +2000,19 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 			case SVC2_SYNCPATHFOLLOWER:
 				{
 					APathFollower::InitFromStream ( pByteStream );
+				}
+				break;
+
+			case SVC2_SETPLAYERVIEWHEIGHT:
+				{
+					const ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
+					const int viewHeight = NETWORK_ReadLong( pByteStream );
+
+					if ( PLAYER_IsValidPlayerWithMo( ulPlayer ) == false ) 
+						break;
+
+					players[ulPlayer].mo->ViewHeight = viewHeight;
+					players[ulPlayer].viewheight = viewHeight;
 				}
 				break;
 
@@ -2822,9 +2030,7 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					if ( mo == NULL )
 					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "SVC2_SETTHINGSPECIAL: Couldn't find thing: %d\n", lID );
-#endif
+						CLIENT_PrintWarning( "SVC2_SETTHINGSPECIAL: Couldn't find thing: %ld\n", lID );
 						break;
 					}
 
@@ -2842,11 +2048,8 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 					if (( cvar == NULL ) || (( cvar->GetFlags() & CVAR_MOD ) == 0 ))
 					{
-#ifdef CLIENT_WARNING_MESSAGES
-						Printf( "SVC2_SETCVAR: The server attempted to set the value of "
-							"non-existant or non-mod CVAR \"%s\" to \"%s\"\n",
-							cvarName.GetChars(), cvarValue.GetChars() );
-#endif
+						CLIENT_PrintWarning( "SVC2_SETCVAR: The server attempted to set the value of "
+							"%s to \"%s\"\n", cvarName.GetChars(), cvarValue.GetChars() );
 						break;
 					}
 
@@ -2877,6 +2080,59 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 				}
 				break;
 
+			case SVC2_PUSHTOJOINQUEUE:
+				{
+					int player = NETWORK_ReadByte( pByteStream );
+					int team = NETWORK_ReadByte( pByteStream );
+					JOINQUEUE_AddPlayer( player, team );
+				}
+				break;
+
+			case SVC2_REMOVEFROMJOINQUEUE:
+				JOINQUEUE_RemovePlayerAtPosition( NETWORK_ReadByte( pByteStream ) );
+				break;
+
+			case SVC2_SETDEFAULTSKYBOX:
+				{
+					int mobjNetID = NETWORK_ReadShort( pByteStream );
+					if ( mobjNetID == -1  )
+						level.DefaultSkybox = NULL;
+					else
+					{
+						AActor *mo = CLIENT_FindThingByNetID( mobjNetID );
+						if ( mo && mo->GetClass()->IsDescendantOf( RUNTIME_CLASS( ASkyViewpoint ) ) )
+							level.DefaultSkybox = static_cast<ASkyViewpoint *>( mo );
+					}
+				}
+				break;
+
+			case SVC2_FLASHSTEALTHMONSTER:
+				{
+					AActor* mobj = CLIENT_FindThingByNetID( NETWORK_ReadShort( pByteStream ));
+
+					if ( mobj && ( mobj->flags & MF_STEALTH ))
+					{
+						mobj->alpha = OPAQUE;
+						mobj->visdir = -1;
+					}
+				}
+				break;
+
+			case SVC2_SHOOTDECAL:
+				{
+					FName decalName = NETWORK_ReadName( pByteStream );
+					AActor* actor = CLIENT_FindThingByNetID( NETWORK_ReadShort( pByteStream ));
+					fixed_t z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+					angle_t angle = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+					fixed_t tracedist = NETWORK_ReadLong( pByteStream );
+					bool permanent = !!NETWORK_ReadByte( pByteStream );
+					const FDecalTemplate* tpl = DecalLibrary.GetDecalByName( decalName );
+
+					if ( actor && tpl )
+						ShootDecal( tpl, actor, actor->Sector, actor->x, actor->y, z, angle, tracedist, permanent );
+				}
+				break;
+
 			default:
 				sprintf( szString, "CLIENT_ParsePacket: Illegible server message: %d\nLast command: %d\n", static_cast<int> (lExtCommand), static_cast<int> (g_lLastCmd) );
 				CLIENT_QuitNetworkGame( szString );
@@ -2899,7 +2155,6 @@ void CLIENT_ProcessCommand( LONG lCommand, BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-#ifdef _DEBUG
 void CLIENT_PrintCommand( LONG lCommand )
 {
 	const char	*pszString;
@@ -2949,7 +2204,6 @@ void CLIENT_PrintCommand( LONG lCommand )
 	if ( debugfile )
 		fprintf( debugfile, "%s\n", pszString );
 }
-#endif
 
 //*****************************************************************************
 //
@@ -2959,8 +2213,11 @@ void CLIENT_QuitNetworkGame( const char *pszString )
 		Printf( "%s\n", pszString );
 
 	// Set the consoleplayer back to 0 and keep our userinfo to avoid desync if we ever reconnect.
-	players[0].userinfo = players[consoleplayer].userinfo;
-	consoleplayer = 0;
+	if ( consoleplayer != 0 )
+	{
+		players[0].userinfo.TransferFrom ( players[consoleplayer].userinfo );
+		consoleplayer = 0;
+	}
 
 	// Clear out the existing players.
 	CLIENT_ClearAllPlayers();
@@ -2980,10 +2237,14 @@ void CLIENT_QuitNetworkGame( const char *pszString )
 	CLIENT_SetConnectionState( CTS_DISCONNECTED );
 
 	// Go back to the full console.
+	// [BB] This is what the CCMD endgame is doing and thus should be
+	// enough to handle all non-network related things.
 	gameaction = ga_fullconsole;
 
-	// View is no longer active.
-	viewactive = false;
+	// [BB] If we arrive here, because a client used the map CCMD, the
+	// gameaction will be ignored. So we manually stop the automap.
+	if ( automapactive )
+		AM_Stop ();
 
 	g_lLastParsedSequence = -1;
 	g_lHighestReceivedSequence = -1;
@@ -2993,14 +2254,11 @@ void CLIENT_QuitNetworkGame( const char *pszString )
 	// Set the network state back to single player.
 	NETWORK_SetState( NETSTATE_SINGLE );
 
-	// [BB] This prevents the status bar from showing up shortly, if you start a new game, while connected to a server.
-	gamestate = GS_FULLCONSOLE;
-
 	// [BB] Reset gravity to its default, discarding the setting the server used.
 	// Although this is not done for any other sv_* CVAR, it is necessary here,
 	// since the server sent us level.gravity instead of its own sv_gravity value,
 	// see SERVERCOMMANDS_SetGameModeLimits.
-	sv_gravity = sv_gravity.GetGenericRepDefault( CVAR_Float ).Float;
+	sv_gravity.ResetToDefault();
 
 	// If we're recording a demo, then finish it!
 	if ( CLIENTDEMO_IsRecording( ))
@@ -3009,6 +2267,10 @@ void CLIENT_QuitNetworkGame( const char *pszString )
 	// [BB] Also, if we're playing a demo, finish it
 	if ( CLIENTDEMO_IsPlaying( ))
 		CLIENTDEMO_FinishPlaying( );
+
+	// [BB] If the server assigned a different name to us, reset that now.
+	if ( strcmp ( static_cast<const char*>(name), players[consoleplayer].userinfo.GetName() ) != 0 )
+		D_SetupUserInfo ();
 }
 
 //*****************************************************************************
@@ -3083,7 +2345,7 @@ void CLIENT_AuthenticateLevel( const char *pszMapName )
 	MapData		*pMap;
 
 	// [BB] Check if the wads contain the map at all. If not, don't send any checksums.
-	pMap = P_OpenMapData( pszMapName );
+	pMap = P_OpenMapData( pszMapName, false );
 
 	if ( pMap == NULL )
 	{
@@ -3123,7 +2385,7 @@ void CLIENT_AuthenticateLevel( const char *pszMapName )
 
 //*****************************************************************************
 //
-AActor *CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, LONG lNetID )
+AActor *CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, LONG lNetID, BYTE spawnFlags )
 {
 	AActor			*pActor;
 
@@ -3180,20 +2442,31 @@ AActor *CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z,
 		}
 	}
 
+	bool levelThing = ((spawnFlags & SPAWNFLAG_LEVELTHING) != 0);
+
 	// Now that all checks have been done, spawn the actor.
-	pActor = Spawn( pType, X, Y, Z, NO_REPLACE );
+	pActor = AActor::StaticSpawn( pType, X, Y, Z, NO_REPLACE, levelThing );
 	if ( pActor )
 	{
+		// [BB] Calling StaticSpawn with "levelThing == true" will prevent
+		// BeginPlay from being called on pActor, so we have to do this manually.
+		if ( levelThing )
+			pActor->BeginPlay ();
+
 		pActor->lNetID = lNetID;
-		if ( lNetID != -1 )
-		{
-			g_NetIDList[lNetID].bFree = false;
-			g_NetIDList[lNetID].pActor = pActor;
-		}
+		g_NetIDList.useID ( lNetID, pActor );
 
 		pActor->SpawnPoint[0] = X;
 		pActor->SpawnPoint[1] = Y;
 		pActor->SpawnPoint[2] = Z;
+
+		// [Zalewa] Bullet puffs don't do 3D floor checks server-side.
+		if (!(spawnFlags & SPAWNFLAG_PUFF))
+		{
+			// [BB] The "Spawn" call apparently doesn't properly take into account 3D floors,
+			// so we have to explicitly adjust the floor again.
+			P_FindFloorCeiling ( pActor, FFCF_SAMESECTOR | FFCF_ONLY3DFLOORS | FFCF_3DRESTRICT );
+		}
 
 		// [BB] The current position of the actor comes straight from the server, so it's safe
 		// to assume that it's correct and thus a valid value for the last updated position.
@@ -3209,13 +2482,15 @@ AActor *CLIENT_SpawnThing( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z,
 		if ( invasion )
 			pActor->ulInvasionWave = INVASION_GetCurrentWave( );
 	}
+	else
+		CLIENT_PrintWarning( "CLIENT_SpawnThing: Failed to spawn actor %s with id %ld\n", pType->TypeName.GetChars( ), lNetID );
 
 	return ( pActor );
 }
 
 //*****************************************************************************
 //
-void CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, fixed_t MomX, fixed_t MomY, fixed_t MomZ, LONG lNetID, LONG lTargetNetID )
+void CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, fixed_t VelX, fixed_t VelY, fixed_t VelZ, LONG lNetID, LONG lTargetNetID )
 {
 	AActor				*pActor;
 
@@ -3234,15 +2509,6 @@ void CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, 
 	pActor = CLIENT_FindThingByNetID( lNetID );
 	if ( pActor )
 	{
-/*
-		if ( pActor == players[consoleplayer].mo )
-		{
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "CLIENT_SpawnMissile: WARNING! Tried to delete console player's body!\n" );
-#endif
-			return;
-		}
-*/
 		pActor->Destroy( );
 	}
 
@@ -3250,26 +2516,20 @@ void CLIENT_SpawnMissile( const PClass *pType, fixed_t X, fixed_t Y, fixed_t Z, 
 	pActor = Spawn( pType, X, Y, Z, NO_REPLACE );
 	if ( pActor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "CLIENT_SpawnMissile: Failed to spawn missile: %d\n", lNetID );
-#endif
+		CLIENT_PrintWarning( "CLIENT_SpawnMissile: Failed to spawn missile: %ld\n", lNetID );
 		return;
 	}
 
-	// Set the thing's momentum.
-	pActor->velx = MomX;
-	pActor->vely = MomY;
-	pActor->velz = MomZ;
+	// Set the thing's velocity.
+	pActor->velx = VelX;
+	pActor->vely = VelY;
+	pActor->velz = VelZ;
 
-	// Derive the thing's angle from its momentum.
-	pActor->angle = R_PointToAngle2( 0, 0, MomX, MomY );
+	// Derive the thing's angle from its velocity.
+	pActor->angle = R_PointToAngle2( 0, 0, VelX, VelY );
 
 	pActor->lNetID = lNetID;
-	if ( lNetID != -1 )
-	{
-		g_NetIDList[lNetID].bFree = false;
-		g_NetIDList[lNetID].pActor = pActor;
-	}
+	g_NetIDList.useID ( lNetID, pActor );
 
 	// Play the seesound if this missile has one.
 	if ( pActor->SeeSound )
@@ -3292,13 +2552,21 @@ void CLIENT_MoveThing( AActor *pActor, fixed_t X, fixed_t Y, fixed_t Z )
 	{
 		// [BB] Unfortunately, P_OldAdjustFloorCeil messes up the floorz value under some circumstances.
 		// Save the old value, so that we can restore it if necessary.
+		// [EP] It seems it messes also with the ceilingz value.
 		fixed_t oldfloorz = pActor->floorz;
+		fixed_t oldceilingz = pActor->ceilingz;
 		P_OldAdjustFloorCeil( pActor );
 		// [BB] An actor can't be below its floorz, if the value is correct.
 		// In this case, P_OldAdjustFloorCeil apparently didn't work, so revert to the old value.
 		// [BB] But don't do this for the console player, it messes up the prediction.
-		if ( ( NETWORK_IsConsolePlayer ( pActor ) == false ) && ( pActor->floorz > pActor->z ) )
-			pActor->floorz = oldfloorz;
+		// [EP] Ditto for ceilingz.
+		if ( NETWORK_IsConsolePlayer ( pActor ) == false )
+		{
+			if ( pActor->floorz > pActor->z )
+				pActor->floorz = oldfloorz;
+			if ( pActor->ceilingz < pActor->z + pActor->height )
+				pActor->ceilingz = oldceilingz;
+		}
 	}
 }
 
@@ -3319,7 +2587,7 @@ void CLIENT_AdjustPredictionToServerSideConsolePlayerMove( fixed_t X, fixed_t Y,
 bool CLIENT_CanClipMovement( AActor *pActor )
 {
 	// [WS] If it's not a client, of course clip its movement.
-	if ( !NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() == false )
 		return true;
 
 	// [Dusk] Clients clip missiles the server has no control over.
@@ -3381,13 +2649,7 @@ void CLIENT_DisplayMOTD( void )
 //
 AActor *CLIENT_FindThingByNetID( LONG lNetID )
 {
-	if (( lNetID < 0 ) || ( lNetID >= 65536 ))
-		return ( NULL );
-
-	if (( g_NetIDList[lNetID].bFree == false ) && ( g_NetIDList[lNetID].pActor ))
-		return ( g_NetIDList[lNetID].pActor );
-
-    return ( NULL );
+    return ( g_NetIDList.findPointerByID ( lNetID ) );
 }
 
 //*****************************************************************************
@@ -3455,11 +2717,7 @@ AInventory *CLIENT_FindPlayerInventory( ULONG ulPlayer, const PClass *pType )
 
 	// If he still doesn't have the object after trying to give it to him... then YIKES!
 	if ( pInventory == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "CLIENT_FindPlayerInventory: Failed to give inventory type, %s!\n", pType->TypeName.GetChars( ));
-#endif
-	}
+		CLIENT_PrintWarning( "CLIENT_FindPlayerInventory: Failed to give inventory type, %s!\n", pType->TypeName.GetChars( ));
 
 	return ( pInventory );
 }
@@ -3518,6 +2776,26 @@ sector_t *CLIENT_FindSectorByID( ULONG ulID )
 		return ( NULL );
 
 	return ( &sectors[ulID] );
+}
+
+//*****************************************************************************
+//
+line_t *CLIENT_FindLineByID( ULONG lineID )
+{
+	if ( lineID >= static_cast<ULONG>( numlines ) )
+		return ( NULL );
+
+	return ( &lines[lineID] );
+}
+
+//*****************************************************************************
+//
+side_t *CLIENT_FindSideByID( ULONG sideID )
+{
+	if ( sideID >= static_cast<ULONG>( numsides ) )
+		return ( NULL );
+
+	return ( &sides[sideID] );
 }
 
 //*****************************************************************************
@@ -3583,8 +2861,6 @@ void PLAYER_ResetPlayerData( player_t *pPlayer )
 	pPlayer->respawn_time = 0;
 	pPlayer->camera = 0;
 	pPlayer->air_finished = 0;
-	pPlayer->accuracy = 0;
-	pPlayer->stamina = 0;
 	pPlayer->BlendR = 0;
 	pPlayer->BlendG = 0;
 	pPlayer->BlendB = 0;
@@ -3628,15 +2904,13 @@ void PLAYER_ResetPlayerData( player_t *pPlayer )
 	memset( &pPlayer->cmd, 0, sizeof( pPlayer->cmd ));
 	if (( pPlayer - players ) != consoleplayer )
 	{
-		memset( &pPlayer->userinfo, 0, sizeof( pPlayer->userinfo ));
-		// [BB] For now Zandronum doesn't let the player use the color sets.
-		pPlayer->userinfo.colorset = -1;
+		pPlayer->userinfo.Reset();
 	}
 	memset( pPlayer->psprites, 0, sizeof( pPlayer->psprites ));
 
 	memset( &pPlayer->ulMedalCount, 0, sizeof( ULONG ) * NUM_MEDALS );
 	memset( &pPlayer->ServerXYZ, 0, sizeof( fixed_t ) * 3 );
-	memset( &pPlayer->ServerXYZMom, 0, sizeof( fixed_t ) * 3 );
+	memset( &pPlayer->ServerXYZVel, 0, sizeof( fixed_t ) * 3 );
 }
 
 //*****************************************************************************
@@ -3693,7 +2967,7 @@ LONG CLIENT_AdjustElevatorDirection( LONG lDirection )
 
 //*****************************************************************************
 //
-void CLIENT_LogHUDMessage( char *pszString, LONG lColor )
+void CLIENT_LogHUDMessage( const char *pszString, LONG lColor )
 {
 	static const char	szBar[] = TEXTCOLOR_ORANGE "\n\35\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36"
 "\36\36\36\36\36\36\36\36\36\36\36\36\37" TEXTCOLOR_NORMAL "\n";
@@ -3701,7 +2975,7 @@ void CLIENT_LogHUDMessage( char *pszString, LONG lColor )
 	char				acLogColor[3];
 
 	acLogColor[0] = '\x1c';
-	acLogColor[1] = (( lColor >= CR_BRICK ) && ( lColor <= CR_YELLOW )) ? ( lColor + 'A' ) : ( '-' );
+	acLogColor[1] = static_cast<char> ( (( lColor >= CR_BRICK ) && ( lColor <= CR_YELLOW )) ? ( lColor + 'A' ) : ( '-' ) );
 	acLogColor[2] = '\0';
 
 	AddToConsole( -1, szBar );
@@ -3766,16 +3040,48 @@ void CLIENT_SetActorToLastDeathStateFrame ( AActor *pActor )
 }
 
 //*****************************************************************************
+//
+// [TP] For the code generator -- turns an actor net ID into an actor class
+// - subclass is the subclass the actor must be an instance of (AActor * if no specific specialization)
+// - allowNull is true of the result value is allowed to be NULL
+// - commandName is the name of the command, used in warnings
+// - parameterName is the name of the parameter, used in warnings
+// - actor is a reference to the desired actor pointer.
+//
+// 'actor' MUST be either NULL or an instance of the provided subclass!
+//
+bool CLIENT_ReadActorFromNetID( int netid, const PClass *subclass, bool allowNull, AActor *&actor,
+								const char *commandName, const char *parameterName )
+{
+	actor = CLIENT_FindThingByNetID( netid );
+
+	if ( actor && ( actor->IsKindOf( subclass ) == false ))
+	{
+		if ( allowNull == false )
+		{
+			CLIENT_PrintWarning( "%s: %s (%s) does not derive from %s\n",
+				commandName, parameterName, actor->GetClass()->TypeName.GetChars(), subclass->TypeName.GetChars() );
+			return false;
+		}
+		actor = NULL;
+	}
+
+	if (( actor == NULL ) && ( allowNull == false ))
+	{
+		CLIENT_PrintWarning( "%s: couldn't find %s: %d\n", commandName, parameterName, netid );
+		return false;
+	}
+
+	return true;
+}
+
+//*****************************************************************************
 //*****************************************************************************
 //
-static void client_Header( BYTESTREAM_s *pByteStream )
+void ServerCommands::Header::Execute()
 {
-	LONG	lSequence;
-
-	// Read in the sequence. This is the # of the packet the server has sent us.
-	// This function shouldn't ever be called since the packet header is parsed seperately.
-	lSequence = NETWORK_ReadLong( pByteStream );
-//	Printf( "client_Header: Received packet %d\n", lSequence );
+	// This is the # of the packet the server has sent us.
+    // This function shouldn't ever be called since the packet header is parsed seperately.
 }
 //*****************************************************************************
 //
@@ -3788,21 +3094,16 @@ static void client_ResetSequence( BYTESTREAM_s *pByteStream )
 */
 //*****************************************************************************
 //
-static void client_Ping( BYTESTREAM_s *pByteStream )
+void ServerCommands::Ping::Execute()
 {
-	ULONG	ulTime;
-
-	// Read in the time on the server end. We send this back to them, and then the server can
-	// tell how many milliseconds passed since it sent the ping message to us.
-	ulTime = NETWORK_ReadLong( pByteStream );
-
-	// Send back the server's time.
-	CLIENTCOMMANDS_Pong( ulTime );
+	// We send the time back to the server, so that it can tell how many milliseconds passed since it sent the
+	// ping message to us.
+	CLIENTCOMMANDS_Pong( time );
 }
 
 //*****************************************************************************
 //
-static void client_BeginSnapshot( BYTESTREAM_s *pByteStream )
+void ServerCommands::BeginSnapshot::Execute()
 {
 	// Display in the console that we're receiving a snapshot.
 	Printf( "Receiving snapshot...\n" );
@@ -3816,7 +3117,7 @@ static void client_BeginSnapshot( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_EndSnapshot( BYTESTREAM_s *pByteStream )
+void ServerCommands::EndSnapshot::Execute()
 {
 	// We're all done! Set the new client connection state to active.
 	CLIENT_SetConnectionState( CTS_ACTIVE );
@@ -3879,87 +3180,47 @@ static void client_EndSnapshot( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
+void ServerCommands::FullUpdateCompleted::Execute()
 {
-	ULONG			ulPlayer;
-	player_t		*pPlayer;
-	APlayerPawn		*pActor;
-	LONG			lID;
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	angle_t			Angle;
-	bool			bSpectating;
-	bool			bDeadSpectator;
-	bool			bIsBot;
-	LONG			lPlayerState;
-	LONG			lState;
-	LONG			lPlayerClass;
-	LONG			lSkin;
-	bool			bWasWatchingPlayer;
-	AActor			*pCameraActor;
-	APlayerPawn		*pOldActor;
-	USHORT			usActorNetworkIndex = 0;
-	const PClass	*pType;
+	// [BB] The server doesn't send any info with this packet, it's just there to allow us
+	// keeping track of the current time so that we don't think we are lagging immediately after receiving a full update.
+	g_ulEndFullUpdateTic = gametic;
+	g_bFullUpdateIncomplete = false;
+	g_bClientLagging = false;
+	// [BB] Tell the server that we received the full update.
+	CLIENTCOMMANDS_FullUpdateReceived();
+}
 
-	// Which player is being spawned?
-	ulPlayer = NETWORK_ReadByte( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SpawnPlayer::Execute()
+{
+	ULONG					ulPlayer = player - players;
+	player_t				*pPlayer = player;
+	APlayerPawn				*pActor;
+	LONG					lSkin;
+	bool					bWasWatchingPlayer;
+	AActor					*pCameraActor;
+	APlayerPawn				*pOldActor;
 
-	// Read in the player's state prior to being spawned. This determines whether or not we
-	// should wipe his weapons, etc.
-	lPlayerState = NETWORK_ReadByte( pByteStream );
-
-	// Is the player a bot?
-	bIsBot = !!NETWORK_ReadByte( pByteStream );
-
-	// State of the player?
-	lState = NETWORK_ReadByte( pByteStream );
-
-	// Is he spectating?
-	bSpectating = !!NETWORK_ReadByte( pByteStream );
-
-	// Is he a dead spectator?
-	bDeadSpectator = !!NETWORK_ReadByte( pByteStream );
-
-	// Network ID of the player's body.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Angle of the player.
-	Angle = NETWORK_ReadLong( pByteStream );
-
-	// XYZ position of the player.
-	X = NETWORK_ReadLong( pByteStream );
-	Y = NETWORK_ReadLong( pByteStream );
-	Z = NETWORK_ReadLong( pByteStream );
-
-	lPlayerClass = NETWORK_ReadShort( pByteStream );
-
-	if ( bMorph )
+	if ( gamestate != GS_LEVEL )
 	{
-		// [BB] Read in the identification of the morphed playerpawn
-		usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
+		CLIENT_PrintWarning( "SpawnPlayer: not in a level\n" );
+		return;
 	}
 
-	// Invalid player ID or not in a level.
-	if (( ulPlayer >= MAXPLAYERS ) || ( gamestate != GS_LEVEL ))
-		return;
+	AActor *pOldNetActor = g_NetIDList.findPointerByID ( netid );
 
 	// If there's already an actor with this net ID, kill it!
-	if ( g_NetIDList[lID].pActor != NULL )
+	if ( pOldNetActor != NULL )
 	{
-/*
-		if ( g_NetIDList[lID].pActor == players[consoleplayer].mo )
-		{
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_SpawnPlayer: WARNING! Tried to delete console player's body!\n" );
-#endif
-			return;
-		}
-*/
-		g_NetIDList[lID].pActor->Destroy( );
-		g_NetIDList[lID].pActor = NULL;
-		g_NetIDList[lID].bFree = true;
+		pOldNetActor->Destroy( );
+		g_NetIDList.freeID ( netid );
 	}
+
+	// [BB] Potentially print the player number, position, and network ID of the player spawning.
+	if ( cl_showspawnnames )
+		Printf( "Player %d body: (%d, %d, %d), %d\n", static_cast<int>(ulPlayer), x >> FRACBITS, y >> FRACBITS, z >> FRACBITS, static_cast<int> (netid) );
 
 	// [BB] Remember if we were already ignoring WeaponSelect commands. If so, the server
 	// told us to ignore them and we need to continue to do so after spawning the player.
@@ -3969,7 +3230,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	CLIENT_IgnoreWeaponSelect ( true );
 
 	// [BB] Possibly play a connect sound.
-	if ( cl_connectsound && ( playeringame[ulPlayer] == false ) && bSpectating && ( ulPlayer != static_cast<ULONG>(consoleplayer) )
+	if ( cl_connectsound && ( playeringame[ulPlayer] == false ) && isSpectating && ( ulPlayer != static_cast<ULONG>(consoleplayer) )
 		&& ( CLIENT_GetConnectionState() != CTS_RECEIVINGSNAPSHOT ) )
 		S_Sound( CHAN_AUTO, "zandronum/connect", 1.f, ATTN_NONE );
 
@@ -4005,7 +3266,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		// frame of its death state.
 		if ( pOldActor->health > 0 )
 		{
-			CALL_ACTION(A_NoBlocking, pOldActor);
+			A_Unblock( pOldActor, true, true );
 
 			// Put him in the last frame of his death state.
 			CLIENT_SetActorToLastDeathStateFrame ( pOldActor );
@@ -4016,15 +3277,15 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		if ( pOldActor->CheckLocalView( consoleplayer ))
 			bWasWatchingPlayer = true;
 
-		if (( lPlayerState == PST_REBORN ) ||
-			( lPlayerState == PST_REBORNNOINVENTORY ) ||
-			( lPlayerState == PST_ENTER ) ||
-			( lPlayerState == PST_ENTERNOINVENTORY ))
+		if (( priorState == PST_REBORN ) ||
+			( priorState == PST_REBORNNOINVENTORY ) ||
+			( priorState == PST_ENTER ) ||
+			( priorState == PST_ENTERNOINVENTORY ) || isDeadSpectator)
 		{
-			pOldActor->player = NULL;
-			pOldActor->id = -1;
 			// [BB] This will eventually free the player's body's network ID.
 			G_QueueBody (pOldActor);
+			pOldActor->player = NULL;
+			pOldActor->id = -1;
 		}
 		else
 		{
@@ -4039,53 +3300,53 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	const BYTE oldPlayerClass = pPlayer->CurrentPlayerClass;
 
 	// Set up the player class.
-	pPlayer->CurrentPlayerClass = lPlayerClass;
+	pPlayer->CurrentPlayerClass = playerClass;
 	pPlayer->cls = PlayerClasses[pPlayer->CurrentPlayerClass].Type;
 
-	if ( bMorph )
+	if ( isMorphed )
 	{
-		// [BB] Get the morphed player class.
-		pType = NETWORK_GetClassFromIdentification( usActorNetworkIndex );
 		// [BB] We'll be casting the spawned body to APlayerPawn, so we must check
 		// if the desired class is valid.
-		if ( pType && pType->IsDescendantOf( RUNTIME_CLASS( APlayerPawn ) ) )
-			pPlayer->cls = pType;
+		if ( morphedClass && morphedClass->IsDescendantOf( RUNTIME_CLASS( APlayerPawn ) ) )
+			pPlayer->cls = morphedClass;
 	}
 
 	// Spawn the body.
-	pActor = static_cast<APlayerPawn *>( Spawn( pPlayer->cls, X, Y, Z, NO_REPLACE ));
+	pActor = static_cast<APlayerPawn *>( Spawn( pPlayer->cls, x, y, z, NO_REPLACE ));
+
+	// [BB] If the player was morphed or unmorphed, we to substitute all pointers
+	// to the old body to the new one. Otherwise (among other things) CLIENTSIDE
+	// scripts will lose track of the player body as activator.
+	if (pPlayer->mo && ( priorState == PST_LIVE ) && ( isMorphed != ( pPlayer->morphTics != 0 ) ) )
+		DObject::StaticPointerSubstitution (pPlayer->mo, pActor);
 
 	pPlayer->mo = pActor;
 	pActor->player = pPlayer;
-	pPlayer->playerstate = lState;
+	pPlayer->playerstate = playerState;
 
 	// If we were watching through this player's eyes, reattach the camera.
 	if ( bWasWatchingPlayer )
 		players[consoleplayer].camera = pPlayer->mo;
 
 	// Set the network ID.
-	pPlayer->mo->lNetID = lID;
-	if ( lID != -1 )
-	{
-		g_NetIDList[lID].bFree = false;
-		g_NetIDList[lID].pActor = pPlayer->mo;
-	}
+	pPlayer->mo->lNetID = netid;
+	g_NetIDList.useID ( netid, pPlayer->mo );
 
 	// Set the spectator variables [after G_PlayerReborn so our data doesn't get lost] [BB] Why?.
-	// [BB] To properly handle that spectators don't get default inventory, we need to set this
+	// [BB] To properly handle that true spectators don't get default inventory, we need to set this
 	// before calling G_PlayerReborn (which in turn calls GiveDefaultInventory).
-	pPlayer->bSpectating = bSpectating;
-	pPlayer->bDeadSpectator = bDeadSpectator;
+	pPlayer->bSpectating = isSpectating;
+	pPlayer->bDeadSpectator = isDeadSpectator;
 
-	if (( lPlayerState == PST_REBORN ) ||
-		( lPlayerState == PST_REBORNNOINVENTORY ) ||
-		( lPlayerState == PST_ENTER ) ||
-		( lPlayerState == PST_ENTERNOINVENTORY ))
+	if (( priorState == PST_REBORN ) ||
+		( priorState == PST_REBORNNOINVENTORY ) ||
+		( priorState == PST_ENTER ) ||
+		( priorState == PST_ENTERNOINVENTORY ) || isDeadSpectator)
 	{
-		G_PlayerReborn( ulPlayer );
+		G_PlayerReborn( pPlayer - players );
 	}
 	// [BB] The player possibly changed the player class, so we have to correct the health (usually done in G_PlayerReborn).
-	else if ( lPlayerState == PST_LIVE )
+	else if ( priorState == PST_LIVE )
 		pPlayer->health = pPlayer->mo->GetDefault ()->health;
 
 	// Give all cards in death match mode.
@@ -4095,7 +3356,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	// Special inventory handling for respawning in coop.
 	// [BB] Also don't do so if the player changed the player class.
 	else if (( teamgame == false ) &&
-			 ( lPlayerState == PST_REBORN ) &&
+			 ( priorState == PST_REBORN ) &&
 			 ( oldPlayerClass == pPlayer->CurrentPlayerClass ) &&
 			 ( pOldActor ))
 	{
@@ -4109,10 +3370,10 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	// If this is the console player, and he's spawned as a regular player, he's definitely not
 	// in line anymore!
 	if ((( pPlayer - players ) == consoleplayer ) && ( pPlayer->bSpectating == false ))
-		JOINQUEUE_SetClientPositionInLine( -1 );
+		JOINQUEUE_RemovePlayerFromQueue( consoleplayer );
 
 	// Set the player's bot status.
-	pPlayer->bIsBot = bIsBot;
+	pPlayer->bIsBot = isBot;
 
 	// [BB] If this if not "our" player, clear the weapon selected from the inventory and wait for
 	// the server to tell us the selected weapon.
@@ -4120,11 +3381,11 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		PLAYER_ClearWeapon ( pPlayer );
 
 	// [GRB] Reset skin
-	pPlayer->userinfo.skin = R_FindSkin (skins[pPlayer->userinfo.skin].name, pPlayer->CurrentPlayerClass);
+	pPlayer->userinfo.SkinNumChanged ( R_FindSkin (skins[pPlayer->userinfo.GetSkin()].name, pPlayer->CurrentPlayerClass) );
 
 	// [WS] Don't set custom skin color when the player is morphed.
 	// [BB] In team games (where we assume that all players are on a team), we allow the team color for morphed players.
-	if (!(pActor->flags2 & MF2_DONTTRANSLATE) && ( !bMorph || ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )))
+	if (!(pActor->flags2 & MF2_DONTTRANSLATE) && ( !isMorphed || ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )))
 	{
 		// [RH] Be sure the player has the right translation
 		R_BuildPlayerTranslation ( ulPlayer );
@@ -4132,7 +3393,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		// [RH] set color translations for player sprites
 		pActor->Translation = TRANSLATION( TRANSLATION_Players, ulPlayer );
 	}
-	pActor->angle = Angle;
+	pActor->angle = angle;
 	pActor->pitch = pActor->roll = 0;
 	pActor->health = pPlayer->health;
 	pActor->lFixedColormap = NOFIXEDCOLORMAP;
@@ -4149,26 +3410,24 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	}
 	else if ( cl_skins >= 2 )
 	{
-		if ( skins[pPlayer->userinfo.skin].bCheat )
+		if ( skins[pPlayer->userinfo.GetSkin()].bCheat )
 		{
 			lSkin = R_FindSkin( "base", pPlayer->CurrentPlayerClass );
 			pActor->flags4 |= MF4_NOSKIN;
 		}
 		else
-			lSkin = pPlayer->userinfo.skin;
+			lSkin = pPlayer->userinfo.GetSkin();
 	}
 	else
-		lSkin = pPlayer->userinfo.skin;
+		lSkin = pPlayer->userinfo.GetSkin();
 
 	if (( lSkin < 0 ) || ( lSkin >= static_cast<LONG>(skins.Size()) ))
 		lSkin = R_FindSkin( "base", pPlayer->CurrentPlayerClass );
 
 	// [BB] There is no skin for the morphed class.
-	if ( !bMorph )
+	if ( !isMorphed )
 	{
 		pActor->sprite = skins[lSkin].sprite;
-		pActor->scaleX = skins[lSkin].ScaleX;
-		pActor->scaleY = skins[lSkin].ScaleY;
 	}
 
 	pPlayer->DesiredFOV = pPlayer->FOV = 90.f;
@@ -4206,7 +3465,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		players[consoleplayer].camera = players[consoleplayer].mo;
 */
 	// setup gun psprite
-	P_SetupPsprites (pPlayer);
+	P_SetupPsprites (pPlayer, false);
 
 	// If this console player is looking through this player's eyes, attach the status
 	// bar to this player.
@@ -4232,7 +3491,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	}
 	// [BB] Don't spawn fog when receiving a snapshot.
 	// [WS] Don't spawn fog when a player is morphing. The server will tell us.
-	else if ( CLIENT_GetConnectionState() != CTS_RECEIVINGSNAPSHOT && !bMorph && !bPlayerWasMorphed )
+	else if ( CLIENT_GetConnectionState() != CTS_RECEIVINGSNAPSHOT && !isMorphed && !bPlayerWasMorphed )
 	{
 		// Spawn the respawn fog.
 		unsigned an = pActor->angle >> ANGLETOFINESHIFT;
@@ -4244,11 +3503,11 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	}
 
 	pPlayer->playerstate = PST_LIVE;
-	
+
 	// [BB] If the player is reborn, we have to substitute all pointers
 	// to the old body to the new one. Otherwise (among other things) CLIENTSIDE
 	// ENTER scripts stop working after the corresponding player is respawned.
-	if (lPlayerState == PST_REBORN || lPlayerState == PST_REBORNNOINVENTORY)
+	if (priorState == PST_REBORN || priorState == PST_REBORNNOINVENTORY)
 	{
 		if ( pOldActor != NULL )
 		{
@@ -4260,7 +3519,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		}
 	}
 
-	if ( bMorph )
+	if ( isMorphed )
 	{
 		// [BB] Bring up the weapon of the morphed class.
 		pPlayer->mo->ActivateMorphWeapon();
@@ -4268,15 +3527,21 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 		// morph time since the server handles the timing of the unmorphing.
 		pPlayer->morphTics = -1;
 		// [EP] Still, assign the current class pointer, because it's used by the status bar
-		pPlayer->MorphedPlayerClass = pType;
+		pPlayer->MorphedPlayerClass = morphedClass;
+		// [EP] Set the morph style, too.
+		pPlayer->MorphStyle = morphStyle;
 	}
 	else
 	{
 		pPlayer->morphTics = 0;
 
 		// [BB] If the player was just unmorphed, we need to set reactiontime to the same value P_UndoPlayerMorph uses.
+		// [EP] The morph style, too.
 		if ( bPlayerWasMorphed )
+		{
 			pPlayer->mo->reactiontime = 18;
+			pPlayer->MorphStyle = 0;
+		}
 	}
 
 
@@ -4285,9 +3550,9 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	{
 		CLIENT_AdjustPredictionToServerSideConsolePlayerMove( pPlayer->mo->x, pPlayer->mo->y, pPlayer->mo->z );
 
-		pPlayer->ServerXYZMom[0] = 0;
-		pPlayer->ServerXYZMom[1] = 0;
-		pPlayer->ServerXYZMom[2] = 0;
+		pPlayer->ServerXYZVel[0] = 0;
+		pPlayer->ServerXYZVel[1] = 0;
+		pPlayer->ServerXYZVel[2] = 0;
 	}
 
 	// [BB] Now that we have our inventory, tell the server the weapon we selected from it.
@@ -4312,7 +3577,7 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 	if ( D_ShouldOverridePlayerColors() )
 	{
 		bool joinedgame = ( ulPlayer == static_cast<ULONG>( consoleplayer ))
-			&& ( lPlayerState == PST_ENTER || lPlayerState == PST_ENTERNOINVENTORY );
+			&& ( priorState == PST_ENTER || priorState == PST_ENTERNOINVENTORY );
 		D_UpdatePlayerColors( joinedgame ? MAXPLAYERS : ulPlayer );
 	}
 
@@ -4322,243 +3587,130 @@ static void client_SpawnPlayer( BYTESTREAM_s *pByteStream, bool bMorph )
 
 //*****************************************************************************
 //
-static void client_MovePlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::MovePlayer::Execute()
 {
-	ULONG		ulPlayer;
-	bool		bVisible;
-	fixed_t		X = 0;
-	fixed_t		Y = 0;
-	fixed_t		Z = 0;
-	angle_t		Angle = 0;
-	fixed_t		MomX = 0;
-	fixed_t		MomY = 0;
-	fixed_t		MomZ = 0;
-	bool		bCrouching = false;
-
-	// Read in the player number.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Is this player visible? If not, there's no other information to read in.
-	ULONG ulFlags = NETWORK_ReadByte( pByteStream );
-	bVisible = ( ulFlags & PLAYER_VISIBLE );
-
-	// The server only sends position, angle, etc. information if the player is actually
-	// visible to us.
-	if ( bVisible )
+	// Check to make sure everything is valid. If not, break out.
+	if ( gamestate != GS_LEVEL )
 	{
-		// Read in the player's XYZ position.
-		// [BB] The x/y position has to be sent at full precision.
-		X = NETWORK_ReadLong( pByteStream );
-		Y = NETWORK_ReadLong( pByteStream );
-		Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-		// Read in the player's angle.
-		Angle = NETWORK_ReadLong( pByteStream );
-
-		// Read in the player's XYZ momentum.
-		MomX = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-		MomY = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-		MomZ = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-		// Read in whether or not the player's crouching.
-		bCrouching = !!NETWORK_ReadByte( pByteStream );
+		CLIENT_PrintWarning( "MovePlayer: not in a level\n" );
+		return;
 	}
 
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ) || ( gamestate != GS_LEVEL ))
-		return;
-
 	// If we're not allowed to know the player's location, then just make him invisible.
-	if ( bVisible == false )
+	if ( IsVisible() == false )
 	{
-		players[ulPlayer].mo->renderflags |= RF_INVISIBLE;
+		player->mo->renderflags |= RF_INVISIBLE;
 
 		// Don't move the player since the server didn't send any useful position information.
 		return;
 	}
 	else
-		players[ulPlayer].mo->renderflags &= ~RF_INVISIBLE;
+		player->mo->renderflags &= ~RF_INVISIBLE;
 
 	// Set the player's XYZ position.
 	// [BB] But don't just set the position, but also properly set floorz and ceilingz, etc.
-	CLIENT_MoveThing( players[ulPlayer].mo, X, Y, Z );
+	CLIENT_MoveThing( player->mo, x, y, z );
 
 	// Set the player's angle.
-	players[ulPlayer].mo->angle = Angle;
+	player->mo->angle = angle;
 
 	// Set the player's XYZ momentum.
-	players[ulPlayer].mo->velx = MomX;
-	players[ulPlayer].mo->vely = MomY;
-	players[ulPlayer].mo->velz = MomZ;
+	player->mo->velx = velx;
+	player->mo->vely = vely;
+	player->mo->velz = velz;
 
 	// Is the player crouching?
-	players[ulPlayer].crouchdir = ( bCrouching ) ? 1 : -1;
+	player->crouchdir = ( isCrouching ) ? 1 : -1;
 
-	if (( players[ulPlayer].crouchdir == 1 ) &&
-		( players[ulPlayer].crouchfactor < FRACUNIT ) &&
-		(( players[ulPlayer].mo->z + players[ulPlayer].mo->height ) < players[ulPlayer].mo->ceilingz ))
+	if (( player->crouchdir == 1 ) &&
+		( player->crouchfactor < FRACUNIT ) &&
+		(( player->mo->z + player->mo->height ) < player->mo->ceilingz ))
 	{
-		P_CrouchMove( &players[ulPlayer], 1 );
+		P_CrouchMove( player, 1 );
 	}
-	else if (( players[ulPlayer].crouchdir == -1 ) &&
-		( players[ulPlayer].crouchfactor > FRACUNIT/2 ))
+	else if (( player->crouchdir == -1 ) &&
+		( player->crouchfactor > FRACUNIT/2 ))
 	{
-		P_CrouchMove( &players[ulPlayer], -1 );
+		P_CrouchMove( player, -1 );
 	}
 
 	// [BB] Set whether the player is attacking or not.
 	// Check: Is it a good idea to only do this, when the player is visible?
-	if ( ulFlags & PLAYER_ATTACK )
-		players[ulPlayer].cmd.ucmd.buttons |= BT_ATTACK;
+	if ( flags & PLAYER_ATTACK )
+		player->cmd.ucmd.buttons |= BT_ATTACK;
 	else
-		players[ulPlayer].cmd.ucmd.buttons &= ~BT_ATTACK;
+		player->cmd.ucmd.buttons &= ~BT_ATTACK;
 
-	if ( ulFlags & PLAYER_ALTATTACK )
-		players[ulPlayer].cmd.ucmd.buttons |= BT_ALTATTACK;
+	if ( flags & PLAYER_ALTATTACK )
+		player->cmd.ucmd.buttons |= BT_ALTATTACK;
 	else
-		players[ulPlayer].cmd.ucmd.buttons &= ~BT_ALTATTACK;
+		player->cmd.ucmd.buttons &= ~BT_ALTATTACK;
 }
 
 //*****************************************************************************
 //
-static void client_DamagePlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::DamagePlayer::Execute()
 {
-	ULONG		ulPlayer;
-	LONG		lHealth;
-	LONG		lArmor;
-	LONG		lDamage;
-	ABasicArmor	*pArmor;
-	FState		*pPainState;
-
-	// Read in the player being damaged.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the new health and armor values.
-	lHealth = NETWORK_ReadShort( pByteStream );
-	lArmor = NETWORK_ReadShort( pByteStream );
-
-	// [BB] Read in the NetID of the damage inflictor and find the corresponding actor.
-	AActor *pAttacker = CLIENT_FindThingByNetID( NETWORK_ReadShort( pByteStream ) );
-
 	// Level not loaded, ignore...
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
 	// Calculate the amount of damage being taken based on the old health value, and the
 	// new health value.
-	lDamage = players[ulPlayer].health - lHealth;
+	int damage = player->health - health;
 
 	// Do the damage.
 //	P_DamageMobj( players[ulPlayer].mo, NULL, NULL, lDamage, 0, 0 );
 
 	// Set the new health value.
-	players[ulPlayer].mo->health = players[ulPlayer].health = lHealth;
+	player->mo->health = player->health = health;
 
-	pArmor = players[ulPlayer].mo->FindInventory<ABasicArmor>( );
-	if ( pArmor )
-		pArmor->Amount = lArmor;
+	ABasicArmor *basicArmor = player->mo->FindInventory<ABasicArmor>( );
+	if ( basicArmor )
+		basicArmor->Amount = armor;
 
 	// [BB] Set the inflictor of the damage (necessary to let the HUD mugshot look in direction of the inflictor).
-	players[ulPlayer].attacker = pAttacker;
+	player->attacker = attacker;
 
 	// Set the damagecount, for blood on the screen.
-	players[ulPlayer].damagecount += lDamage;
-	if ( players[ulPlayer].damagecount > 100 )
-		players[ulPlayer].damagecount = 100;
-	if ( players[ulPlayer].damagecount < 0 )
-		players[ulPlayer].damagecount = 0;
+	player->damagecount += damage;
+	if ( player->damagecount > 100 )
+		player->damagecount = 100;
+	if ( player->damagecount < 0 )
+		player->damagecount = 0;
 
-	if ( players[ulPlayer].mo->CheckLocalView( consoleplayer ))
+	if ( player->mo->CheckLocalView( consoleplayer ))
 	{
-		if ( lDamage > 100 )
-			lDamage = 100;
+		if ( damage > 100 )
+			damage = 100;
 
-		I_Tactile( 40,10,40 + lDamage * 2 );
+		I_Tactile( 40,10,40 + damage * 2 );
 	}
-
-	// Also, make sure they get put into the pain state.
-	pPainState = players[ulPlayer].mo->FindState( NAME_Pain );
-	if ( pPainState )
-		players[ulPlayer].mo->SetState( pPainState );
 }
 
 //*****************************************************************************
 //
-static void client_KillPlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::KillPlayer::Execute()
 {
-	ULONG		ulPlayer;
-	LONG		lSourceID;
-	LONG		lInflictorID;
-	LONG		lHealth;
-	FName		MOD;
-	USHORT		usActorNetworkIndex;
-	FName		DamageType;
-	AActor		*pSource;
-	AActor		*pInflictor;
-	AWeapon		*pWeapon;
-	ULONG		ulIdx;
-	ULONG		ulSourcePlayer;
-
-	// Read in the player who's dying.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the actor that killed the player.
-	lSourceID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the inflictor.
-	lInflictorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in how much health they currently have (for gibs).
-	lHealth = NETWORK_ReadShort( pByteStream );
-
-	// Read in the means of death.
-	MOD = NETWORK_ReadString( pByteStream );
-
-	// Read in the thing's damage type.
-	DamageType = NETWORK_ReadString( pByteStream );
-
-	// Read in the player who did the killing's ready weapon's identification so we can properly do obituary
-	// messages.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
-	// Find the actor associated with the source. It's okay if this actor does not exist.
-	if ( lSourceID != -1 )
-		pSource = CLIENT_FindThingByNetID( lSourceID );
-	else
-		pSource = NULL;
-
-	// Find the actor associated with the inflictor. It's okay if this actor does not exist.
-	if ( lInflictorID != -1 )
-		pInflictor = CLIENT_FindThingByNetID( lInflictorID );
-	else
-		pInflictor = NULL;
-
 	// Set the player's new health.
-	players[ulPlayer].health = players[ulPlayer].mo->health = lHealth;
+	player->health = player->mo->health = health;
 
 	// Set the player's damage type.
-	players[ulPlayer].mo->DamageType = DamageType;
+	player->mo->DamageType = damageType;
 
 	// Kill the player.
-	players[ulPlayer].mo->Die( pSource, pInflictor );
+	player->mo->Die( source, inflictor, 0 );
 
 	// [BB] Set the attacker, necessary to let the death view follow the killer.
-	players[ulPlayer].attacker = pSource;
+	player->attacker = source;
 
 	// If health on the status bar is less than 0%, make it 0%.
-	if ( players[ulPlayer].health <= 0 )
-		players[ulPlayer].health = 0;
+	if ( player->health <= 0 )
+		player->health = 0;
 
-	ulSourcePlayer = MAXPLAYERS;
-	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
+	// [TP] FIXME: Wouldn't this be much easier to compute using source->player?
+	ULONG ulSourcePlayer = MAXPLAYERS;
+	for ( ULONG ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
 	{
 		if (( playeringame[ulIdx] == false ) ||
 			( players[ulIdx].mo == NULL ))
@@ -4566,30 +3718,30 @@ static void client_KillPlayer( BYTESTREAM_s *pByteStream )
 			continue;
 		}
 
-		if ( players[ulIdx].mo == pSource )
+		if ( players[ulIdx].mo == source )
 		{
 			ulSourcePlayer = ulIdx;
 			break;
 		}
 	}
 
-	if (( (GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE) == false ) &&
+	if (( (GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE) == false ) &&
 		( cl_showlargefragmessages ) &&
 		( ulSourcePlayer < MAXPLAYERS ) &&
-		( ulPlayer != ulSourcePlayer ) &&
+		( static_cast<ULONG>( player - players ) != ulSourcePlayer ) &&
 		( MOD != NAME_SpawnTelefrag ) &&
 		( GAMEMODE_IsGameInProgress() ))
 	{
-		if ((( ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS ) == false ) || (( fraglimit == 0 ) || ( players[ulSourcePlayer].fragcount < fraglimit ))) &&
-			(( ( ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS ) && !( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS ) ) == false ) || (( winlimit == 0 ) || ( players[ulSourcePlayer].ulWins < static_cast<ULONG>(winlimit) ))) &&
-			(( ( ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS ) && ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS ) ) == false ) || (( winlimit == 0 ) || ( TEAM_GetWinCount( players[ulSourcePlayer].ulTeam ) < winlimit ))))
+		if ((( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ) == false ) || (( fraglimit == 0 ) || ( players[ulSourcePlayer].fragcount < fraglimit ))) &&
+			(( ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS ) && !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) ) == false ) || (( winlimit == 0 ) || ( players[ulSourcePlayer].ulWins < static_cast<ULONG>(winlimit) ))) &&
+			(( ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS ) && ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) ) == false ) || (( winlimit == 0 ) || ( TEAM_GetWinCount( players[ulSourcePlayer].ulTeam ) < winlimit ))))
 		{
 			// Display a large "You were fragged by <name>." message in the middle of the screen.
-			if ( ulPlayer == static_cast<ULONG>(consoleplayer) )
+			if ( player == &players[consoleplayer] )
 				SCOREBOARD_DisplayFraggedMessage( &players[ulSourcePlayer] );
 			// Display a large "You fragged <name>!" message in the middle of the screen.
 			else if ( ulSourcePlayer == static_cast<ULONG>(consoleplayer) )
-				SCOREBOARD_DisplayFragMessage( &players[ulPlayer] );
+				SCOREBOARD_DisplayFragMessage( player );
 		}
 	}
 
@@ -4598,21 +3750,21 @@ static void client_KillPlayer( BYTESTREAM_s *pByteStream )
 
 	if ( ulSourcePlayer < MAXPLAYERS )
 	{
-		if ( NETWORK_GetClassFromIdentification( usActorNetworkIndex ) == NULL )
+		if ( weaponType == NULL )
 			players[ulSourcePlayer].ReadyWeapon = NULL;
 		else if ( players[ulSourcePlayer].mo )
 		{
-			pWeapon = static_cast<AWeapon *>( players[ulSourcePlayer].mo->FindInventory( NETWORK_GetClassFromIdentification( usActorNetworkIndex )));
-			if ( pWeapon == NULL )
-				pWeapon = static_cast<AWeapon *>( players[ulSourcePlayer].mo->GiveInventoryType( NETWORK_GetClassFromIdentification( usActorNetworkIndex )));
+			AWeapon *weapon = static_cast<AWeapon *>( players[ulSourcePlayer].mo->FindInventory( weaponType ));
+			if ( weapon == NULL )
+				weapon = static_cast<AWeapon *>( players[ulSourcePlayer].mo->GiveInventoryType( weaponType ));
 
-			if ( pWeapon )
-				players[ulSourcePlayer].ReadyWeapon = pWeapon;
+			if ( weapon )
+				players[ulSourcePlayer].ReadyWeapon = weapon;
 		}
 	}
 
 	// Finally, print the obituary string.
-	ClientObituary( players[ulPlayer].mo, pInflictor, pSource, MOD );
+	ClientObituary( player->mo, inflictor, source, ( ulSourcePlayer < MAXPLAYERS ) ? DMG_PLAYERATTACK : 0, MOD );
 
 	// [BB] Restore the weapon the player actually is using now.
 	if ( ( ulSourcePlayer < MAXPLAYERS ) && ( players[ulSourcePlayer].ReadyWeapon != pSavedReadyWeapon ) )
@@ -4630,96 +3782,48 @@ static void client_KillPlayer( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetPlayerHealth( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerHealth::Execute()
 {
-	LONG	lHealth;
-	ULONG	ulPlayer;
-
-	// Read in the player whose health is being altered.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the health;
-	lHealth = NETWORK_ReadShort( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	players[ulPlayer].health = lHealth;
-	if ( players[ulPlayer].mo )
-		players[ulPlayer].mo->health = lHealth;
+	player->health = health;
+	if ( player->mo )
+		player->mo->health = health;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerArmor( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerArmor::Execute()
 {
-	ULONG		ulPlayer;
-	LONG		lArmorAmount;
-	const char	*pszArmorIconName;
-	AInventory	*pArmor;
-
-	// Read in the player whose armor display is updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the armor amount and icon.
-	lArmorAmount = NETWORK_ReadShort( pByteStream );
-	pszArmorIconName = NETWORK_ReadString( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	pArmor = players[ulPlayer].mo ? players[ulPlayer].mo->FindInventory<ABasicArmor>( ) : NULL;
+	AInventory *pArmor = player->mo->FindInventory<ABasicArmor>();
 	if ( pArmor != NULL )
 	{
-		pArmor->Amount = lArmorAmount;
-		pArmor->Icon = TexMan.GetTexture( pszArmorIconName, 0 );
+		pArmor->Amount = armorAmount;
+		pArmor->Icon = TexMan.GetTexture( armorIcon, 0 );
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerState( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerState::Execute()
 {
-	ULONG			ulPlayer;
-	PLAYERSTATE_e	ulState;
-
-	// Read in the player whose state is being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-	
-	// Read in the state to update him to.
-	ulState = static_cast<PLAYERSTATE_e>(NETWORK_ReadByte( pByteStream ));
-
-	// If this isn't a valid player, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetPlayerState: No player object for player: %d\n", ulPlayer );
-#endif
-		return;
-	}
-
 	// If the player is dead, then we shouldn't have to update his state.
-	if ( players[ulPlayer].mo->health <= 0 )
+	if ( player->mo->health <= 0 )
 		return;
 
 	// Finally, change the player's state to whatever the server told us it was.
-	switch( ulState )
+	switch( static_cast<PLAYERSTATE_e>( state ))
 	{
 	case STATE_PLAYER_IDLE:
-
-		players[ulPlayer].mo->PlayIdle( );
+		player->mo->PlayIdle( );
 		break;
+
 	case STATE_PLAYER_SEE:
-
-		players[ulPlayer].mo->SetState( players[ulPlayer].mo->SpawnState );
-		players[ulPlayer].mo->PlayRunning( );
+		player->mo->SetState( player->mo->SpawnState );
+		player->mo->PlayRunning( );
 		break;
+
 	case STATE_PLAYER_ATTACK:
 	case STATE_PLAYER_ATTACK_ALTFIRE:
-
-		players[ulPlayer].mo->PlayAttacking( );
+		player->mo->PlayAttacking( );
 		// [BB] This partially fixes the problem that attack animations are not displayed in demos
 		// if you are spying a player that you didn't spy when recording the demo. Still has problems
 		// with A_ReFire.
@@ -4732,7 +3836,7 @@ static void client_SetPlayerState( BYTESTREAM_s *pByteStream )
 		// [BB] SERVERCOMMANDS_MovePlayer/client_MovePlayer now informs a client about BT_ATTACK or BT_ALTATTACK
 		// of every player. This hopefully properly fixes these problems once and for all.
 		/*
-		if ( ( CLIENTDEMO_IsPlaying( ) || ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE ) && static_cast<signed> (ulPlayer) != consoleplayer ) )
+		if ( ( CLIENTDEMO_IsPlaying( ) || ( ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) && static_cast<signed> (ulPlayer) != consoleplayer ) )
 				&& players[ulPlayer].ReadyWeapon )
 		{
 			if ( ulState == STATE_PLAYER_ATTACK )
@@ -4743,383 +3847,197 @@ static void client_SetPlayerState( BYTESTREAM_s *pByteStream )
 		}
 		*/
 		break;
+
 	case STATE_PLAYER_ATTACK2:
-
-		players[ulPlayer].mo->PlayAttacking2( );
+		player->mo->PlayAttacking2( );
 		break;
-	default:
 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetPlayerState: Unknown state: %d\n", ulState );
-#endif
+	default:
+		CLIENT_PrintWarning( "client_SetPlayerState: Unknown state: %d\n", state );
 		break;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerUserInfo( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerUserInfo::Execute()
 {
-	ULONG		ulIdx;
-    player_t	*pPlayer;
-	ULONG		ulPlayer;
-	ULONG		ulFlags;
-	char		szName[MAXPLAYERNAME + 1];
-	LONG		lGender = 0;
-	LONG		lColor = 0;
-	const char	*pszSkin = NULL;
-	LONG		lRailgunTrailColor = 0;
-	LONG		lHandicap = 0;
-	LONG		lSkin;
-	ULONG		ulTicsPerUpdate;
-	ULONG		ulConnectionType;
-	BYTE		clientFlags;
-
-	// Read in the player whose userinfo is being sent to us.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in what userinfo entries are going to be updated.
-	ulFlags = NETWORK_ReadShort( pByteStream );
-
-	// Read in the player's name.
-	if ( ulFlags & USERINFO_NAME )
+	for ( unsigned int i = 0; i < cvars.Size(); ++i )
 	{
-		strncpy( szName, NETWORK_ReadString( pByteStream ), MAXPLAYERNAME );
-		szName[MAXPLAYERNAME] = 0;
-	}
+		FName name = cvars[i].name;
+		FString value = cvars[i].value;
 
-	// Read in the player's gender.
-	if ( ulFlags & USERINFO_GENDER )
-		lGender = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's color.
-	if ( ulFlags & USERINFO_COLOR )
-		lColor = NETWORK_ReadLong( pByteStream );
-
-	// Read in the player's railgun trail color.
-	if ( ulFlags & USERINFO_RAILCOLOR )
-		lRailgunTrailColor = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's skin.
-	if ( ulFlags & USERINFO_SKIN )
-		pszSkin = NETWORK_ReadString( pByteStream );
-
-	// Read in the player's handicap.
-	if ( ulFlags & USERINFO_HANDICAP )
-		lHandicap = NETWORK_ReadByte( pByteStream );
-
-	// [BB] Read in the player's respawnonfire setting.
-	if ( ulFlags & USERINFO_TICSPERUPDATE )
-		ulTicsPerUpdate = NETWORK_ReadByte( pByteStream );
-
-	// [BB]
-	if ( ulFlags & USERINFO_CONNECTIONTYPE )
-		ulConnectionType = NETWORK_ReadByte( pByteStream );
-
-	// [CK] We do bitfields now.
-	if ( ulFlags & USERINFO_CLIENTFLAGS )
-		clientFlags = NETWORK_ReadByte( pByteStream );
-
-	// If this isn't a valid player, break out.
-	// We actually send the player's userinfo before he gets spawned, thus putting him in
-	// the game. Therefore, this call won't work unless the way the server sends the data
-	// changes.
-//	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-//		return;
-	if ( ulPlayer >= MAXPLAYERS )
-		return;
-
-	// Now that everything's been read in, actually set the player's userinfo properties.
-	// Player's name.
-    pPlayer = &players[ulPlayer];
-	if ( ulFlags & USERINFO_NAME )
-	{
-		if ( strlen( szName ) > MAXPLAYERNAME )
-			szName[MAXPLAYERNAME] = '\0';
-		strcpy( pPlayer->userinfo.netname, szName );
-
-		// Remove % signs from names.
-		for ( ulIdx = 0; ulIdx < strlen( pPlayer->userinfo.netname ); ulIdx++ )
+		// Player's name.
+		if ( name == NAME_Name )
 		{
-			if ( pPlayer->userinfo.netname[ulIdx] == '%' )
-				pPlayer->userinfo.netname[ulIdx] = ' ';
+			if ( value.Len() > MAXPLAYERNAME )
+				value = value.Left( MAXPLAYERNAME );
+			player->userinfo.NameChanged ( value );
 		}
-	}
-
-	// Other info.
-	// [BB] Make sure that the gender is valid.
-	if ( ulFlags & USERINFO_GENDER )
-		pPlayer->userinfo.gender = clamp ( static_cast<int>(lGender), 0, 2 );
-	if ( ulFlags & USERINFO_COLOR )
-	    pPlayer->userinfo.color = lColor;
-	if ( ulFlags & USERINFO_RAILCOLOR )
-		pPlayer->userinfo.lRailgunTrailColor = lRailgunTrailColor;
-
-	// Make sure the skin is valid.
-	if ( ulFlags & USERINFO_SKIN )
-	{
-		pPlayer->userinfo.skin = R_FindSkin( pszSkin, pPlayer->CurrentPlayerClass );
-
-		// [BC] Handle cl_skins here.
-		if ( cl_skins <= 0 )
+		// Other info.
+		else if ( name == NAME_Gender )
+			player->userinfo.GenderNumChanged ( value.ToLong() );
+		else if ( name == NAME_Color )
+			player->userinfo.ColorChanged ( value );
+		else if ( name == NAME_RailColor )
+			player->userinfo.RailColorChanged ( value.ToLong() );
+		// Make sure the skin is valid.
+		else if ( name == NAME_Skin )
 		{
-			lSkin = R_FindSkin( "base", pPlayer->CurrentPlayerClass );
-			if ( pPlayer->mo )
-				pPlayer->mo->flags4 |= MF4_NOSKIN;
-		}
-		else if ( cl_skins >= 2 )
-		{
-			if ( skins[pPlayer->userinfo.skin].bCheat )
+			int skin;
+			player->userinfo.SkinNumChanged ( R_FindSkin( value, player->CurrentPlayerClass ) );
+
+			// [BC] Handle cl_skins here.
+			if ( cl_skins <= 0 )
 			{
-				lSkin = R_FindSkin( "base", pPlayer->CurrentPlayerClass );
-				if ( pPlayer->mo )
-					pPlayer->mo->flags4 |= MF4_NOSKIN;
+				skin = R_FindSkin( "base", player->CurrentPlayerClass );
+				if ( player->mo )
+					player->mo->flags4 |= MF4_NOSKIN;
+			}
+			else if ( cl_skins >= 2 )
+			{
+				if ( skins[player->userinfo.GetSkin()].bCheat )
+				{
+					skin = R_FindSkin( "base", player->CurrentPlayerClass );
+					if ( player->mo )
+						player->mo->flags4 |= MF4_NOSKIN;
+				}
+				else
+					skin = player->userinfo.GetSkin();
 			}
 			else
-				lSkin = pPlayer->userinfo.skin;
+				skin = player->userinfo.GetSkin();
+
+			if (( skin < 0 ) || ( skin >= static_cast<signed>(skins.Size()) ))
+				skin = R_FindSkin( "base", player->CurrentPlayerClass );
+
+			if ( player->mo )
+			{
+				player->mo->sprite = skins[skin].sprite;
+			}
 		}
+		// Read in the player's handicap.
+		else if ( name == NAME_Handicap )
+			player->userinfo.HandicapChanged ( value.ToLong() );
+		else if ( name == NAME_CL_TicsPerUpdate )
+			player->userinfo.TicsPerUpdateChanged ( value.ToLong() );
+		else if ( name == NAME_CL_ConnectionType )
+			player->userinfo.ConnectionTypeChanged ( value.ToLong() );
+		// [CK] We do compressed bitfields now.
+		else if ( name == NAME_CL_ClientFlags )
+			player->userinfo.ClientFlagsChanged ( value.ToLong() );
 		else
-			lSkin = pPlayer->userinfo.skin;
-
-		if (( lSkin < 0 ) || ( lSkin >= static_cast<LONG>(skins.Size()) ))
-			lSkin = R_FindSkin( "base", pPlayer->CurrentPlayerClass );
-
-		if ( pPlayer->mo )
 		{
-			pPlayer->mo->sprite = skins[lSkin].sprite;
-			pPlayer->mo->scaleX = skins[lSkin].ScaleX;
-			pPlayer->mo->scaleY = skins[lSkin].ScaleY;
+			FBaseCVar **cvarPointer = player->userinfo.CheckKey( name );
+			FBaseCVar *cvar = cvarPointer ? *cvarPointer : nullptr;
+
+			if ( cvar )
+			{
+				UCVarValue cvarValue;
+				cvarValue.String = value;
+				cvar->SetGenericRep( cvarValue, CVAR_String );
+			}
 		}
 	}
-
-	// Read in the player's handicap.
-	if ( ulFlags & USERINFO_HANDICAP )
-	{
-		pPlayer->userinfo.lHandicap = lHandicap;
-		if ( pPlayer->userinfo.lHandicap < 0 )
-			pPlayer->userinfo.lHandicap = 0;
-		else if ( pPlayer->userinfo.lHandicap > deh.MaxSoulsphere )
-			pPlayer->userinfo.lHandicap = deh.MaxSoulsphere;
-	}
-
-	if ( ulFlags & USERINFO_TICSPERUPDATE )
-		pPlayer->userinfo.ulTicsPerUpdate = ulTicsPerUpdate;
-
-	if ( ulFlags & USERINFO_CONNECTIONTYPE )
-		pPlayer->userinfo.ulConnectionType = ulConnectionType;
-
-	// [CK] We do compressed bitfields now.
-	if ( ulFlags & USERINFO_CLIENTFLAGS )
-		pPlayer->userinfo.clientFlags = clientFlags;
 
 	// Build translation tables, always gotta do this!
-	R_BuildPlayerTranslation( ulPlayer );
+	R_BuildPlayerTranslation( player - players );
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerFrags( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerAccountName::Execute()
 {
-	ULONG	ulPlayer;
-	LONG	lFragCount;
+	g_PlayerAccountNames[player - players] = accountName;
+}
 
-	// Read in the player whose frags are being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the number of points he's supposed to get.
-	lFragCount = NETWORK_ReadShort( pByteStream );
-
-	// If this isn't a valid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
+//*****************************************************************************
+//
+void ServerCommands::SetPlayerFrags::Execute()
+{
 	if (( g_ConnectionState == CTS_ACTIVE ) &&
-		( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS ) &&
-		!( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) &&
+		( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ) &&
+		!( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) &&
 		( GAMEMODE_IsGameInProgress() ) &&
 		// [BB] If we are still in the first tic of the level, we are receiving the frag count
 		// as part of the full update (that is not considered as a snapshot after a "changemap"
 		// map change). Thus don't announce anything in this case.
 		( level.time != 0 ))
 	{
-		ANNOUNCER_PlayFragSounds( ulPlayer, players[ulPlayer].fragcount, lFragCount );
+		ANNOUNCER_PlayFragSounds( player - players, player->fragcount, fragCount );
 	}
 
 	// Finally, set the player's frag count, and refresh the HUD.
-	players[ulPlayer].fragcount = lFragCount;
+	player->fragcount = fragCount;
 	SCOREBOARD_RefreshHUD( );
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerPoints( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerPoints::Execute()
 {
-	ULONG	ulPlayer;
-	LONG	lPointCount;
-
-	// Read in the player whose frags are being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the number of points he's supposed to get.
-	lPointCount = NETWORK_ReadShort( pByteStream );
-
-	// If this isn't a valid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Finally, set the player's point count, and refresh the HUD.
-	players[ulPlayer].lPointCount = lPointCount;
+	player->lPointCount = pointCount;
 	SCOREBOARD_RefreshHUD( );
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerWins( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerWins::Execute()
 {
-	ULONG	ulPlayer;
-	LONG	lWins;
-
-	// Read in the player whose wins are being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the number of wins he's supposed to have.
-	lWins = NETWORK_ReadByte( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Finally, set the player's win count, and refresh the HUD.
-	players[ulPlayer].ulWins = lWins;
+	player->ulWins = wins;
 	SCOREBOARD_RefreshHUD( );
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerKillCount( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerKillCount::Execute()
 {
-	ULONG	ulPlayer;
-	LONG	lKillCount;
-
-	// Read in the player whose kill count being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the number of kills he's supposed to have.
-	lKillCount = NETWORK_ReadShort( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Finally, set the player's kill count, and refresh the HUD.
-	players[ulPlayer].killcount = lKillCount;
+	player->killcount = killCount;
 	SCOREBOARD_RefreshHUD( );
 }
 
 //*****************************************************************************
 //
-void client_SetPlayerChatStatus( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerChatStatus::Execute()
 {
-	// Read in the player.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	bool bChatting = !!NETWORK_ReadByte( pByteStream );
-
-	// Ensure that he's valid.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Read and set his chat status.
-	players[ulPlayer].bChatting = bChatting;
+	player->bChatting = chatting;
 }
 
 //*****************************************************************************
 //
-void client_SetPlayerConsoleStatus( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerConsoleStatus::Execute()
 {
-	// Read in the player.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	bool bInConsole = !!NETWORK_ReadByte( pByteStream );
-
-	// Ensure that he's valid.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Read and set his "in console" status.
-	players[ulPlayer].bInConsole = bInConsole;
+	player->bInConsole = inConsole;
 }
 
 //*****************************************************************************
 //
-void client_SetPlayerLaggingStatus( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerLaggingStatus::Execute()
 {
-	// Read in the player.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	bool bLagging = !!NETWORK_ReadByte( pByteStream );
-
-	// Ensure that he's valid.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Read and set his lag status.
-	players[ulPlayer].bLagging = bLagging;
+	player->bLagging = lagging;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerReadyToGoOnStatus( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerReadyToGoOnStatus::Execute()
 {
-	// Read in the player.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	bool bReadyToGoOn = !!NETWORK_ReadByte( pByteStream );
-
-	// Ensure that he's valid.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Read and set his "ready to go on" status.
-	players[ulPlayer].bReadyToGoOn = bReadyToGoOn;
+	player->bReadyToGoOn = readyToGoOn;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerTeam( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerTeam::Execute()
 {
-	ULONG	ulPlayer;
-	ULONG	ulTeam;
-
-	// Read in the player having his team set.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's team.
-	ulTeam = NETWORK_ReadByte( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Update the player's team.
-	PLAYER_SetTeam( &players[ulPlayer], ulTeam, false );
+	PLAYER_SetTeam( player, team, false );
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerCamera( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerCamera::Execute()
 {
-	AActor	*pCamera;
-	LONG	lID;
-	bool	bRevertPleaseStatus;
-
-	// Read in the network ID of the camera.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the "revert please" status.
-	bRevertPleaseStatus = !!NETWORK_ReadByte( pByteStream );
-
 	AActor *oldcamera = players[consoleplayer].camera;
 
-	// Find the camera by the network ID.
-	pCamera = CLIENT_FindThingByNetID( lID );
-	if ( pCamera == NULL )
+	if ( camera == NULL )
 	{
 		players[consoleplayer].camera = players[consoleplayer].mo;
 		players[consoleplayer].cheats &= ~CF_REVERTPLEASE;
@@ -5129,8 +4047,8 @@ static void client_SetPlayerCamera( BYTESTREAM_s *pByteStream )
 	}
 
 	// Finally, change the player's camera.
-	players[consoleplayer].camera = pCamera;
-	if ( bRevertPleaseStatus == false )
+	players[consoleplayer].camera = camera;
+	if ( revertPlease == false )
 		players[consoleplayer].cheats &= ~CF_REVERTPLEASE;
 	else
 		players[consoleplayer].cheats |= CF_REVERTPLEASE;
@@ -5141,50 +4059,18 @@ static void client_SetPlayerCamera( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetPlayerPoisonCount( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerPoisonCount::Execute()
 {
-	ULONG	ulPlayer;
-	ULONG	ulPoisonCount;
-
-	// Read in the player being poisoned.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the poison count.
-	ulPoisonCount = NETWORK_ReadShort( pByteStream );
-
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Finally, set the player's poison count.
-	players[ulPlayer].poisoncount = ulPoisonCount;
+	player->poisoncount = poisonCount;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerAmmoCapacity::Execute()
 {
-	ULONG			ulPlayer;
-	USHORT			usActorNetworkIndex;
-	LONG			lMaxAmount;
-	AInventory		*pAmmo;
-
-	// Read in the player ID.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the identification of the type of item to give.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Read in the amount of this inventory type the player has.
-	lMaxAmount = NETWORK_ReadLong( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
 	// [BB] Remember whether we already had this ammo.
-	const bool hadAmmo = ( players[ulPlayer].mo->FindInventory( NETWORK_GetClassFromIdentification( usActorNetworkIndex ) ) != NULL );
-
-	pAmmo = CLIENT_FindPlayerInventory( ulPlayer, NETWORK_GetClassFromIdentification( usActorNetworkIndex ));
+	const bool hadAmmo = ( player->mo->FindInventory( ammoType ) != NULL );
+	AInventory *pAmmo = CLIENT_FindPlayerInventory( player - players, ammoType );
 
 	if ( pAmmo == NULL )
 		return;
@@ -5198,7 +4084,7 @@ static void client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream )
 		pAmmo->Amount = 0;
 
 	// Set the new maximum amount of the inventory object.
-	pAmmo->MaxAmount = lMaxAmount;
+	pAmmo->MaxAmount = maxAmount;
 
 	// Since an item displayed on the HUD may have been given, refresh the HUD.
 	SCOREBOARD_RefreshHUD( );
@@ -5206,63 +4092,33 @@ static void client_SetPlayerAmmoCapacity( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetPlayerCheats( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerCheats::Execute()
 {
-	ULONG			ulPlayer;
-	ULONG			ulCheats;
+	// [TP] If we're setting the cheats of the consoleplayer and we're spectating, don't let this command modify the noclip cheats.
+	if ( player == &players[consoleplayer] && player->bSpectating )
+		cheats = ( cheats & ~( CF_NOCLIP | CF_NOCLIP2 )) | ( player->cheats & ( CF_NOCLIP | CF_NOCLIP2 ));
 
-	// Read in the player ID.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the cheats value.
-	ulCheats = NETWORK_ReadLong( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	players[ulPlayer].cheats = ulCheats;
+	player->cheats = cheats;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerPendingWeapon( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerPendingWeapon::Execute()
 {
-	ULONG			ulPlayer;
-	USHORT			usActorNetworkIndex;
-	const PClass	*pType = NULL;
-	AWeapon			*pWeapon = NULL;
+	// If we dont have this weapon already, we do now!
+	AWeapon *weapon = static_cast<AWeapon *>( player->mo->FindInventory( weaponType ));
+	if ( weapon == NULL )
+		weapon = static_cast<AWeapon *>( player->mo->GiveInventoryType( weaponType ));
 
-	// Read in the player whose info is about to be updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the identification of the weapon.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// If the player doesn't exist, get out!
-	if ( PLAYER_IsValidPlayerWithMo( ulPlayer ) == false )
-		return;
-
-	pType = NETWORK_GetClassFromIdentification( usActorNetworkIndex );
-	if (( pType != NULL ) &&
-		( pType->IsDescendantOf( RUNTIME_CLASS( AWeapon ))))
+	// If he still doesn't have the object after trying to give it to him... then YIKES!
+	if ( weapon == NULL )
 	{
-		// If we dont have this weapon already, we do now!
-		pWeapon = static_cast<AWeapon *>( players[ulPlayer].mo->FindInventory( pType ));
-		if ( pWeapon == NULL )
-			pWeapon = static_cast<AWeapon *>( players[ulPlayer].mo->GiveInventoryType( pType ));
-
-		// If he still doesn't have the object after trying to give it to him... then YIKES!
-		if ( pWeapon == NULL )
-		{
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_SetPlayerPendingWeapon: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
-			return;
-		}
-
-		players[ulPlayer].PendingWeapon = pWeapon;
+		CLIENT_PrintWarning( "client_SetPlayerPendingWeapon: Failed to give inventory type, %s!\n",
+							 weaponType->TypeName.GetChars() );
+		return;
 	}
+
+	player->PendingWeapon = weapon;
 }
 
 //*****************************************************************************
@@ -5289,279 +4145,105 @@ static void client_SetPlayerPieces( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetPlayerPSprite( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerPSprite::Execute()
 {
-	ULONG			ulPlayer;
-	const char		*pszState;
-	LONG			lOffset;
-	LONG			lPosition;
-	FState			*pNewState;
-
-	// Read in the player.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the state.
-	pszState = NETWORK_ReadString( pByteStream );
-
-	// Offset into the state label.
-	lOffset = NETWORK_ReadByte( pByteStream );
-
-	// Read in the position (ps_weapon, etc.).
-	lPosition = NETWORK_ReadByte( pByteStream );
-
 	// Not in a level; nothing to do (shouldn't happen!)
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// Check to make sure everything is valid. If not, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
+	if ( player->ReadyWeapon == NULL )
 		return;
 
-	if ( players[ulPlayer].ReadyWeapon == NULL )
+	if ( stateOwner->ActorInfo == NULL )
 		return;
 
-	// [BB] In this case lOffset is just the offset from the ready state.
-	// Handle this accordingly.
-	if ( stricmp( pszState, ":R" ) == 0 )
+	FState *pNewState = stateOwner->ActorInfo->OwnedStates + offset;
+
+	// [BB] The offset is only guaranteed to work if the actor owns the state.
+	if ( stateOwner->ActorInfo->OwnsState( pNewState ) == false )
 	{
-		pNewState = players[ulPlayer].ReadyWeapon->GetReadyState( );
+		CLIENT_PrintWarning( "SetPlayerPSprite: %s does not own its state at offset %d\n",
+		                     stateOwner->TypeName.GetChars(), offset );
 	}
-	// [BB] In this case lOffset is just the offset from the flash state.
-	else if ( stricmp( pszState, ":F" ) == 0 )
+	// [BB] Don't switch to a state belonging to a completely unrelated actor.
+	else if ( player->ReadyWeapon->GetClass()->IsDescendantOf ( stateOwner ) == false )
 	{
-		pNewState = players[ulPlayer].ReadyWeapon->FindState(NAME_Flash);
-	}
-	else
-	{
-		// Build the state name list.
-		TArray<FName> &StateList = MakeStateNameList( pszState );
-
-		// [BB] Obviously, we can't access StateList[0] if StateList is empty.
-		if ( StateList.Size( ) == 0 )
-			return;
-
-		pNewState = players[ulPlayer].ReadyWeapon->GetClass( )->ActorInfo->FindState( StateList.Size( ), &StateList[0] );
-
-		// [BB] The offset was calculated by FindStateLabelAndOffset using GetNextState(),
-		// so we have to use this here, too, to propely find the target state.
-		// Note: The same loop is used in client_SetThingFrame and could be moved to a new function.
-		for ( int i = 0; i < lOffset; i++ )
-		{
-			if ( pNewState != NULL )
-				pNewState = pNewState->GetNextState( );
-		}
-
-		if ( pNewState == NULL )
-			return;
-
-		P_SetPsprite( &players[ulPlayer], lPosition, pNewState );
-		return;
-	}
-	if ( pNewState )
-	{
-		// [BB] The offset is only guaranteed to work if the actor owns the state.
-		if ( lOffset != 0 )
-		{
-			if ( ActorOwnsState ( players[ulPlayer].ReadyWeapon, pNewState ) == false )
-			{
-#ifdef CLIENT_WARNING_MESSAGES
-				Printf ( "client_SetPlayerPSprite: %s doesn't own %s\n", players[ulPlayer].ReadyWeapon->GetClass()->TypeName.GetChars(), pszState );
-#endif
-				return;
-			}
-			if ( ActorOwnsState ( players[ulPlayer].ReadyWeapon, pNewState + lOffset ) == false )
-			{
-#ifdef CLIENT_WARNING_MESSAGES
-				Printf ( "client_SetPlayerPSprite: %s doesn't own %s + %d\n", players[ulPlayer].ReadyWeapon->GetClass()->TypeName.GetChars(), pszState, lOffset );
-#endif
-				return;
-			}
-		}
-		P_SetPsprite( &players[ulPlayer], lPosition, pNewState + lOffset );
-	}
-}
-
-//*****************************************************************************
-//
-static void client_SetPlayerBlend( BYTESTREAM_s *pByteStream )
-{
-	ULONG			ulPlayer;
-
-	// Read in the player.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	if ( ulPlayer < MAXPLAYERS )
-	{
-		players[ulPlayer].BlendR = NETWORK_ReadFloat( pByteStream );
-		players[ulPlayer].BlendG = NETWORK_ReadFloat( pByteStream );
-		players[ulPlayer].BlendB = NETWORK_ReadFloat( pByteStream );
-		players[ulPlayer].BlendA = NETWORK_ReadFloat( pByteStream );
+		CLIENT_PrintWarning( "SetPlayerPSprite: %s is not a descendant of %s\n",
+		                     player->ReadyWeapon->GetClass()->TypeName.GetChars(), stateOwner->TypeName.GetChars() );
 	}
 	else
 	{
-		NETWORK_ReadFloat( pByteStream );
-		NETWORK_ReadFloat( pByteStream );
-		NETWORK_ReadFloat( pByteStream );
-		NETWORK_ReadFloat( pByteStream );
+		P_SetPsprite( player, position, pNewState );
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerMaxHealth( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerBlend::Execute()
 {
-	// [BB] Read in the player and the new MaxHealth.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	LONG lMaxHealth =  NETWORK_ReadLong( pByteStream );
-
-	// [BB] Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
-	players[ulPlayer].mo->MaxHealth = lMaxHealth;
+	player->BlendR = blendR;
+	player->BlendG = blendG;
+	player->BlendB = blendB;
+	player->BlendA = blendA;
 }
 
 //*****************************************************************************
 //
-static void client_SetPlayerLivesLeft( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerMaxHealth::Execute()
 {
-	// [BB] Read in the player and the new LivesLeft.
-	ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	ULONG ulLivesLeft =  NETWORK_ReadByte( pByteStream );
-
-	// [BB] Check to make sure everything is valid. If not, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	players[ulPlayer].ulLivesLeft = ulLivesLeft;
+	player->mo->MaxHealth = maxHealth;
 }
 
 //*****************************************************************************
 //
-static void client_UpdatePlayerPing( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetPlayerLivesLeft::Execute()
 {
-	ULONG	ulPlayer;
-	ULONG	ulPing;
-
-	// Read in the player whose ping is being updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's ping.
-	ulPing = NETWORK_ReadShort( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Finally, set the player's ping.
-	players[ulPlayer].ulPing = ulPing;
+	player->ulLivesLeft = livesLeft;
 }
 
 //*****************************************************************************
 //
-static void client_UpdatePlayerExtraData( BYTESTREAM_s *pByteStream )
+void ServerCommands::UpdatePlayerPing::Execute()
 {
-	ULONG	ulPlayer;
-//	ULONG	ulPendingWeapon;
-//	ULONG	ulReadyWeapon;
-	LONG	lPitch;
-	ULONG	ulWaterLevel;
-	ULONG	ulButtons;
-	LONG	lViewZ;
-	LONG	lBob;
+	player->ulPing = ping;
+}
 
-	// Read in the player who's info is about to be updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's pitch.
-	lPitch = NETWORK_ReadLong( pByteStream );
-
-	// Read in the player's water level.
-	ulWaterLevel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the player's buttons.
-	ulButtons = NETWORK_ReadByte( pByteStream );
-
-	// Read in the view and weapon bob.
-	lViewZ = NETWORK_ReadLong( pByteStream );
-	lBob = NETWORK_ReadLong( pByteStream );
-
-	// If the player doesn't exist, get out!
-	if (( players[ulPlayer].mo == NULL ) || ( playeringame[ulPlayer] == false ))
-		return;
-
+//*****************************************************************************
+//
+void ServerCommands::UpdatePlayerExtraData::Execute()
+{
 	// [BB] If the spectated player uses the GL renderer and we are using software,
 	// the viewangle has to be limited.	We don't care about cl_disallowfullpitch here.
 	if ( !currentrenderer )
 	{
 		// [BB] The user can restore ZDoom's freelook limit.
 		const fixed_t pitchLimit = -ANGLE_1*( cl_oldfreelooklimit ? 32 : 56 );
-		if (lPitch < pitchLimit)
-			lPitch = pitchLimit;
-		if (lPitch > ANGLE_1*56)
-			lPitch = ANGLE_1*56;
+		if (pitch < pitchLimit)
+			pitch = pitchLimit;
+		if (pitch > ANGLE_1*56)
+			pitch = ANGLE_1*56;
 	}
-	players[ulPlayer].mo->pitch = lPitch;
-	players[ulPlayer].mo->waterlevel = ulWaterLevel;
+	player->mo->pitch = pitch;
+	player->mo->waterlevel = waterLevel;
 	// [BB] The attack buttons are now already set in *_MovePlayer, so additionally setting
 	// them here is obsolete. I don't want to change this before 97D2 final though.
-	players[ulPlayer].cmd.ucmd.buttons = ulButtons;
-//	players[ulPlayer].velx = lMomX;
-//	players[ulPlayer].vely = lMomY;
-	players[ulPlayer].viewz = lViewZ;
-	players[ulPlayer].bob = lBob;
+	player->cmd.ucmd.buttons = buttons;
+	player->viewz = viewZ;
+	player->bob = bob;
 }
 
 //*****************************************************************************
 //
-static void client_UpdatePlayerTime( BYTESTREAM_s *pByteStream )
+void ServerCommands::UpdatePlayerTime::Execute()
 {
-	ULONG	ulPlayer;
-	ULONG	ulTime;
-
-	// Read in the player.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the time.
-	ulTime = NETWORK_ReadShort( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	players[ulPlayer].ulTime = ulTime * ( TICRATE * 60 );
+	player->ulTime = time * ( TICRATE * 60 );
 }
 
 //*****************************************************************************
 //
-static void client_MoveLocalPlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::MoveLocalPlayer::Execute()
 {
-	player_t	*pPlayer;
-	ULONG		ulClientTicOnServerEnd;
-	fixed_t		X;
-	fixed_t		Y;
-	fixed_t		Z;
-	fixed_t		MomX;
-	fixed_t		MomY;
-	fixed_t		MomZ;
-
-	pPlayer = &players[consoleplayer];
-	
-	// Read in the last tick that we sent to the server.
-	ulClientTicOnServerEnd = NETWORK_ReadLong( pByteStream );
-
-	// [CK] This should be our latest server tick we will record.
-	const int latestServerGametic = NETWORK_ReadLong( pByteStream );
-
-	// Get XYZ.
-	X = NETWORK_ReadLong( pByteStream );
-	Y = NETWORK_ReadLong( pByteStream );
-	Z = NETWORK_ReadLong( pByteStream );
-
-	// Get XYZ momentum.
-	MomX = NETWORK_ReadLong( pByteStream );
-	MomY = NETWORK_ReadLong( pByteStream );
-	MomZ = NETWORK_ReadLong( pByteStream );
+	player_t *pPlayer = &players[consoleplayer];
 
 	// No player object to update.
 	if ( pPlayer->mo == NULL )
@@ -5577,11 +4259,11 @@ static void client_MoveLocalPlayer( BYTESTREAM_s *pByteStream )
 	CLIENT_SetLatestServerGametic( latestServerGametic );
 
 	// "ulClientTicOnServerEnd" is the gametic of the last time we sent a movement command.
-	CLIENT_SetLastConsolePlayerUpdateTick( ulClientTicOnServerEnd );
+	CLIENT_SetLastConsolePlayerUpdateTick( clientTicOnServerEnd );
 
 	// If the last time the server heard from us exceeds one second, the client is lagging!
 	// [BB] But don't think we are lagging immediately after receiving a full update.
-	if (( gametic - CLIENTDEMO_GetGameticOffset( ) - ulClientTicOnServerEnd >= TICRATE ) && (( gametic + CLIENTDEMO_GetGameticOffset( ) - g_ulEndFullUpdateTic ) > TICRATE ))
+	if (( gametic - CLIENTDEMO_GetGameticOffset( ) - clientTicOnServerEnd >= TICRATE ) && (( gametic + CLIENTDEMO_GetGameticOffset( ) - g_ulEndFullUpdateTic ) > TICRATE ))
 		g_bClientLagging = true;
 	else
 		g_bClientLagging = false;
@@ -5594,67 +4276,58 @@ static void client_MoveLocalPlayer( BYTESTREAM_s *pByteStream )
 	// Now that everything's check out, update stuff.
 	if ( pPlayer->bSpectating == false )
 	{
-		pPlayer->ServerXYZ[0] = X;
-		pPlayer->ServerXYZ[1] = Y;
-		pPlayer->ServerXYZ[2] = Z;
+		pPlayer->ServerXYZ[0] = x;
+		pPlayer->ServerXYZ[1] = y;
+		pPlayer->ServerXYZ[2] = z;
 
-		pPlayer->ServerXYZMom[0] = MomX;
-		pPlayer->ServerXYZMom[1] = MomY;
-		pPlayer->ServerXYZMom[2] = MomZ;
+		pPlayer->ServerXYZVel[0] = velx;
+		pPlayer->ServerXYZVel[1] = vely;
+		pPlayer->ServerXYZVel[2] = velz;
 	}
 	else
 	{
 		// [BB] Calling CLIENT_MoveThing instead of setting the x,y,z position directly should make
 		// sure that the spectator body doesn't get stuck.
-		CLIENT_MoveThing ( pPlayer->mo, X, Y, Z );
+		CLIENT_MoveThing ( pPlayer->mo, x, y, z );
 
-		pPlayer->mo->velx = MomX;
-		pPlayer->mo->vely = MomY;
-		pPlayer->mo->velz = MomZ;
+		pPlayer->mo->velx = velx;
+		pPlayer->mo->vely = vely;
+		pPlayer->mo->velz = velz;
 	}
 }
 
 //*****************************************************************************
 //
-void client_DisconnectPlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::DisconnectPlayer::Execute()
 {
-	ULONG	ulPlayer;
-
-	// Read in the player who's being disconnected (could be us!).
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
 	// If we were a spectator and looking through this player's eyes, revert them.
-	if ( players[ulPlayer].mo->CheckLocalView( consoleplayer ))
+	if ( player->mo->CheckLocalView( consoleplayer ))
 	{
 		CLIENT_ResetConsolePlayerCamera( );
 	}
 
 	// Create a little disconnect particle effect thingamabobber!
 	// [BB] Only do this if a non-spectator disconnects.
-	if ( players[ulPlayer].bSpectating == false )
+	if ( player->bSpectating == false )
 	{
-		P_DisconnectEffect( players[ulPlayer].mo );
+		P_DisconnectEffect( player->mo );
 
 		// [BB] Stop all CLIENTSIDE scripts of the player that are still running.
 		if ( !( zacompatflags & ZACOMPATF_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT ) )
-			FBehavior::StaticStopMyScripts ( players[ulPlayer].mo );
+			FBehavior::StaticStopMyScripts ( player->mo );
 	}
 
 	// Destroy the actor associated with the player.
-	if ( players[ulPlayer].mo )
+	if ( player->mo )
 	{
-		players[ulPlayer].mo->Destroy( );
-		players[ulPlayer].mo = NULL;
+		player->mo->Destroy( );
+		player->mo = NULL;
 	}
 
-	playeringame[ulPlayer] = false;
+	playeringame[player - players] = false;
 
 	// Zero out all the player information.
-	PLAYER_ResetPlayerData( &players[ulPlayer] );
+	PLAYER_ResetPlayerData( player );
 
 	// Refresh the HUD because this affects the number of players in the game.
 	SCOREBOARD_RefreshHUD( );
@@ -5662,23 +4335,38 @@ void client_DisconnectPlayer( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetConsolePlayer( BYTESTREAM_s *pByteStream )
+void ServerCommands::SecretFound::Execute()
 {
-	LONG	lConsolePlayer;
+	const bool allowclient = true;
+	P_GiveSecret( actor, !!(secretFlags & SECRETFOUND_MESSAGE), secretFlags & SECRETFOUND_SOUND, allowclient );
+}
 
-	// Read in what our local player index is.
-	lConsolePlayer = NETWORK_ReadByte( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SecretMarkSectorFound::Execute()
+{
+	sector->special &= ~SECRET_MASK;
+}
 
+//*****************************************************************************
+//
+void ServerCommands::SetConsolePlayer::Execute()
+{
 	// If this index is invalid, break out.
-	if ( lConsolePlayer >= MAXPLAYERS )
+	// [TP] playerNumber < 0 could happen if the packet is too short. However, the code generator
+	// should already ward against executing truncated commands. But let's add a check anyway...
+	if (( playerNumber < 0 ) || ( playerNumber >= MAXPLAYERS ))
 		return;
 
 	// In a client demo, don't lose the userinfo we gave to our console player.
-	if ( CLIENTDEMO_IsPlaying( ))
-		memcpy( &players[lConsolePlayer].userinfo, &players[consoleplayer].userinfo, sizeof( userinfo_t ));
+	if ( CLIENTDEMO_IsPlaying() && ( playerNumber != consoleplayer ))
+	{
+		players[playerNumber].userinfo.TransferFrom( players[consoleplayer].userinfo );
+		players[consoleplayer].userinfo.Reset();
+	}
 
 	// Otherwise, since it's valid, set our local player index to this.
-	consoleplayer = lConsolePlayer;
+	consoleplayer = playerNumber;
 
 	// Finally, apply our local userinfo to this player slot.
 	D_SetupUserInfo( );
@@ -5686,7 +4374,7 @@ static void client_SetConsolePlayer( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_ConsolePlayerKicked( BYTESTREAM_s *pByteStream )
+void ServerCommands::ConsolePlayerKicked::Execute()
 {
 	// Set the connection state to "disconnected" before calling CLIENT_QuitNetworkGame( ),
 	// so that we don't send a disconnect signal to the server.
@@ -5698,28 +4386,14 @@ static void client_ConsolePlayerKicked( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_GivePlayerMedal( BYTESTREAM_s *pByteStream )
+void ServerCommands::GivePlayerMedal::Execute()
 {
-	ULONG	ulPlayer;
-	ULONG	ulMedal;
-
-	// Read in the player to award the medal to.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-	
-	// Read in the medal to be awarded.
-	ulMedal = NETWORK_ReadByte( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// Award the medal.
-	MEDAL_GiveMedal( ulPlayer, ulMedal );
+	MEDAL_GiveMedal( player - players, medal );
 }
 
 //*****************************************************************************
 //
-static void client_ResetAllPlayersFragcount( BYTESTREAM_s *pByteStream )
+void ServerCommands::ResetAllPlayersFragcount::Execute()
 {
 	// This function pretty much takes care of everything we need to do!
 	PLAYER_ResetAllPlayersFragcount( );
@@ -5727,90 +4401,58 @@ static void client_ResetAllPlayersFragcount( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_PlayerIsSpectator( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerIsSpectator::Execute()
 {
-	ULONG	ulPlayer;
-	bool	bDeadSpectator;
-
-	// Read in the player who's going to be spectating.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in if he's becoming a dead spectator.
-	bDeadSpectator = !!NETWORK_ReadByte( pByteStream );
-
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
 	// [BB] If the player turns into a true spectator, create the disconnect particle effect.
 	// Note: We have to do this before the player is actually turned into a spectator, because
 	// the tiny height of a spectator's body would alter the effect.
-	if ( ( bDeadSpectator == false ) && players[ulPlayer].mo )
-		P_DisconnectEffect( players[ulPlayer].mo );
+	if ( ( deadSpectator == false ) && player->mo )
+		P_DisconnectEffect( player->mo );
 
 	// Make the player a spectator.
-	PLAYER_SetSpectator( &players[ulPlayer], false, bDeadSpectator );
+	PLAYER_SetSpectator( player, false, deadSpectator );
 
 	// If we were a spectator and looking through this player's eyes, revert them.
-	if ( players[ulPlayer].mo && players[ulPlayer].mo->CheckLocalView( consoleplayer ))
+	if ( player->mo && player->mo->CheckLocalView( consoleplayer ))
 	{
 		CLIENT_ResetConsolePlayerCamera();
 	}
 
 	// Don't lag anymore if we're a spectator.
-	if ( ulPlayer == static_cast<ULONG>(consoleplayer) )
+	if ( player == &players[consoleplayer] )
 		g_bClientLagging = false;
+
+	// [EP] Refresh the HUD, since this could affect the number of players left in a dead spectators game.
+	SCOREBOARD_RefreshHUD();
 }
 
 //*****************************************************************************
 //
-static void client_PlayerSay( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerSay::Execute()
 {
-	ULONG		ulPlayer;
-	ULONG		ulMode;
-	const char	*pszString;
-
-	// Read in the player who's supposed to be talking.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the chat mode. Could be global, team-only, etc.
-	ulMode = NETWORK_ReadByte( pByteStream );
-
-	// Read in the actual chat string.
-	pszString = NETWORK_ReadString( pByteStream );
-
-	// If ulPlayer == MAXPLAYERS, that means the server is talking.
-	if ( ulPlayer != MAXPLAYERS )
+	// If playerNumber == MAXPLAYERS, that means the server is talking.
+	if ( playerNumber != MAXPLAYERS )
 	{
 		// If this is an invalid player, break out.
-		if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
+		if ( PLAYER_IsValidPlayer( playerNumber ) == false )
 			return;
 	}
 
 	// Finally, print out the chat string.
-	CHAT_PrintChatString( ulPlayer, ulMode, pszString );
+	CHAT_PrintChatString( playerNumber, mode, message );
 }
 
 //*****************************************************************************
 //
-static void client_PlayerTaunt( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerTaunt::Execute()
 {
-	ULONG	ulPlayer;
-
-	// Read in the player index who's taunting.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
 	// Don't taunt if we're not in a level!
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	if (( players[ulPlayer].bSpectating ) ||
-		( players[ulPlayer].health <= 0 ) ||
-		( players[ulPlayer].mo == NULL ) ||
+	if (( player->bSpectating ) ||
+		( player->health <= 0 ) ||
+		( player->mo == NULL ) ||
 		( zacompatflags & ZACOMPATF_DISABLETAUNTS ))
 	{
 		return;
@@ -5818,96 +4460,59 @@ static void client_PlayerTaunt( BYTESTREAM_s *pByteStream )
 
 	// Play the taunt sound!
 	if ( cl_taunts )
-		S_Sound( players[ulPlayer].mo, CHAN_VOICE, "*taunt", 1, ATTN_NORM );
+		S_Sound( player->mo, CHAN_VOICE, "*taunt", 1, ATTN_NORM );
 }
 
 //*****************************************************************************
 //
-static void client_PlayerRespawnInvulnerability( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerRespawnInvulnerability::Execute()
 {
-	ULONG		ulPlayer;
-	AActor		*pActor;
-	AInventory	*pInventory;
-
-	// Read in the player index who has respawn invulnerability.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
 	// Don't taunt if we're not in a level!
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// If this is an invalid player, break out.
-	if ( PLAYER_IsValidPlayer( ulPlayer ) == false )
-		return;
-
-	// We can't apply the effect to the player's body if the player's body doesn't exist!
-	pActor = players[ulPlayer].mo;
-	if ( pActor == NULL )
-		return;
-
 	// First, we need to adjust the blend color, so the player's screen doesn't go white.
-	pInventory = pActor->FindInventory( RUNTIME_CLASS( APowerInvulnerable ));
-	if ( pInventory == NULL )
+	APowerInvulnerable *invulnerability = player->mo->FindInventory<APowerInvulnerable>();
+
+	if ( invulnerability == NULL )
 		return;
 
-	static_cast<APowerup *>( pInventory )->BlendColor = 0;
+	invulnerability->BlendColor = 0;
 
 	// Apply respawn invulnerability effect.
 	switch ( cl_respawninvuleffect )
 	{
 	case 1:
-
-		pActor->RenderStyle = STYLE_Translucent;
-		pActor->effects |= FX_VISIBILITYFLICKER;
+		player->mo->RenderStyle = STYLE_Translucent;
+		player->mo->effects |= FX_VISIBILITYFLICKER;
 		break;
-	case 2:
 
-		pActor->effects |= FX_RESPAWNINVUL;
+	case 2:
+		player->mo->effects |= FX_RESPAWNINVUL;
 		break;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_PlayerUseInventory( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerUseInventory::Execute()
 {
-	ULONG			ulPlayer;
-	USHORT			usActorNetworkIndex;
-	const PClass	*pType;
-	AInventory		*pInventory;
-
-	// Read in the player using an inventory item.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read the name of the inventory item we shall use.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
-	pType = NETWORK_GetClassFromIdentification( usActorNetworkIndex );
-	if ( pType == NULL )
-		return;
-
 	// Try to find this object within the player's personal inventory.
-	pInventory = players[ulPlayer].mo->FindInventory( pType );
+	AInventory *item = player->mo->FindInventory( itemType );
 
 	// If the player doesn't have this type, give it to him.
-	if ( pInventory == NULL )
-		pInventory = players[ulPlayer].mo->GiveInventoryType( pType );
+	if ( item == NULL )
+		item = player->mo->GiveInventoryType( itemType );
 
 	// If he still doesn't have the object after trying to give it to him... then YIKES!
-	if ( pInventory == NULL )
+	if ( item == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_PlayerUseInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
+		CLIENT_PrintWarning( "client_PlayerUseInventory: Failed to give inventory type, %s!\n", itemType->TypeName.GetChars() );
 		return;
 	}
 
 	// Finally, use the item.
-	const bool bSuccess = players[ulPlayer].mo->UseInventory( pInventory );
+	const bool success = player->mo->UseInventory( item );
 
 	// [BB] The server only instructs the client to use the item, if the use was successful.
 	// So using it on the client also should be successful. If it is not, something went wrong,
@@ -5916,2103 +4521,1024 @@ static void client_PlayerUseInventory( BYTESTREAM_s *pByteStream )
 	// client about the effects of the use before it tells the client to use the item, the use
 	// on the client will fail. In this case at least reduce the inventory amount according to a
 	// successful use.
-	if ( ( bSuccess == false ) && !( dmflags2 & DF2_INFINITE_INVENTORY ) )
+	if ( ( success == false ) && !( dmflags2 & DF2_INFINITE_INVENTORY ) )
 	{
-		if (--pInventory->Amount <= 0 && !(pInventory->ItemFlags & IF_KEEPDEPLETED))
+		if (--item->Amount <= 0 && !(item->ItemFlags & IF_KEEPDEPLETED))
 		{
-			pInventory->Destroy ();
+			item->Destroy ();
 		}
 	}
 }
 
 //*****************************************************************************
 //
-static void client_PlayerDropInventory( BYTESTREAM_s *pByteStream )
+void ServerCommands::PlayerDropInventory::Execute()
 {
-	ULONG			ulPlayer;
-	USHORT			usActorNetworkIndex;
-	const PClass	*pType;
-	AInventory		*pInventory;
-
-	// Read in the player dropping an inventory item.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read the identification of the inventory item we shall drop.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
-		return;
-
-	pType = NETWORK_GetClassFromIdentification( usActorNetworkIndex );
-	if ( pType == NULL )
-		return;
-
 	// Try to find this object within the player's personal inventory.
-	pInventory = players[ulPlayer].mo->FindInventory( pType );
+	AInventory *item = player->mo->FindInventory( itemType );
 
 	// If the player doesn't have this type, give it to him.
-	if ( pInventory == NULL )
-		pInventory = players[ulPlayer].mo->GiveInventoryType( pType );
+	if ( item == NULL )
+		item = player->mo->GiveInventoryType( itemType );
 
 	// If he still doesn't have the object after trying to give it to him... then YIKES!
-	if ( pInventory == NULL )
+	if ( item == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_PlayerDropInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
+		CLIENT_PrintWarning( "client_PlayerDropInventory: Failed to give inventory type, %s!\n", itemType->TypeName.GetChars() );
 		return;
 	}
 
 	// Finally, drop the item.
-	players[ulPlayer].mo->DropInventory( pInventory );
+	player->mo->DropInventory( item );
 }
 
 //*****************************************************************************
 //
-static void client_SpawnThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::GiveWeaponHolder::Execute()
 {
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	USHORT			usActorNetworkIndex;
-	LONG			lID;
+	AWeaponHolder *holder = player->mo->FindInventory<AWeaponHolder>();
 
-	// Read in the XYZ location of the item.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+	if ( holder == NULL )
+		holder = static_cast<AWeaponHolder *>( player->mo->GiveInventoryType( RUNTIME_CLASS( AWeaponHolder ) ) );
 
-	// Read in the identification of the item class.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the item.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the thing.
-	CLIENT_SpawnThing( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, lID );
-}
-
-//*****************************************************************************
-//
-static void client_SpawnThingNoNetID( BYTESTREAM_s *pByteStream )
-{
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	USHORT			usActorNetworkIndex;
-
-	// Read in the XYZ location of the item.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the identification of the item class.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the thing.
-	CLIENT_SpawnThing( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, -1 );
-}
-
-//*****************************************************************************
-//
-static void client_SpawnThingExact( BYTESTREAM_s *pByteStream )
-{
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	USHORT			usActorNetworkIndex;
-	LONG			lID;
-
-	// Read in the XYZ location of the item.
-	X = NETWORK_ReadLong( pByteStream );
-	Y = NETWORK_ReadLong( pByteStream );
-	Z = NETWORK_ReadLong( pByteStream );
-
-	// Read in the identification of the item class.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the item.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the thing.
-	CLIENT_SpawnThing( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, lID );
-}
-
-//*****************************************************************************
-//
-static void client_SpawnThingExactNoNetID( BYTESTREAM_s *pByteStream )
-{
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	USHORT			usActorNetworkIndex;
-
-	// Read in the XYZ location of the item.
-	X = NETWORK_ReadLong( pByteStream );
-	Y = NETWORK_ReadLong( pByteStream );
-	Z = NETWORK_ReadLong( pByteStream );
-
-	// Read in the identification of the item class.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the thing.
-	CLIENT_SpawnThing( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, -1 );
-}
-
-//*****************************************************************************
-//
-static void client_MoveThing( BYTESTREAM_s *pByteStream )
-{
-	LONG	lID;
-	LONG	lBits;
-	AActor	*pActor;
-	fixed_t	X;
-	fixed_t	Y;
-	fixed_t	Z;
-
-	// Read in the network ID of the thing to update.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the data that will be updated.
-	lBits = NETWORK_ReadShort( pByteStream );
-
-	// Try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	if (( pActor == NULL ) || gamestate != GS_LEVEL )
+	if ( holder == NULL )
 	{
-		// No thing up update; skip the rest of the message.
-		if ( lBits & CM_X ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_Y ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_Z ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_LAST_X ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_LAST_Y ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_LAST_Z ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_ANGLE ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOMX ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_MOMY ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_MOMZ ) NETWORK_ReadShort( pByteStream );
-		if ( lBits & CM_PITCH ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOVEDIR ) NETWORK_ReadByte( pByteStream );
-
+		CLIENT_PrintWarning( "GiveWeaponHolder: Failed to give AWeaponHolder!\n" );
 		return;
 	}
 
-	X = pActor->x;
-	Y = pActor->y;
-	Z = pActor->z;
+	// Set the special fields. This is why this function exists in the first place.
+	holder->PieceMask = pieceMask;
+	holder->PieceWeapon = pieceWeapon;
+}
 
-	// Read in the position data.
-	if ( lBits & CM_X )
+//*****************************************************************************
+//
+void ServerCommands::SetHexenArmorSlots::Execute()
+{
+	AHexenArmor *hexenArmor = player->mo->FindInventory<AHexenArmor>();
+
+	if ( hexenArmor )
 	{
-		X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastX = X;
+		hexenArmor->Slots[0] = slot0;
+		hexenArmor->Slots[1] = slot1;
+		hexenArmor->Slots[2] = slot2;
+		hexenArmor->Slots[3] = slot3;
+		hexenArmor->Slots[4] = slot4;
 	}
-	if ( lBits & CM_Y )
+	else
 	{
-		Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastY = Y;
+		CLIENT_PrintWarning( "SetHexenArmorSlots: Player %td does not have HexenArmor!\n", player - players );
 	}
-	if ( lBits & CM_Z )
-	{
-		Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastZ = Z;
-	}
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SpawnThing::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, id, 0 );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SpawnThingNoNetID::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, -1 );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SpawnThingExact::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, id );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SpawnThingExactNoNetID::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, -1 );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::LevelSpawnThing::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, id, SPAWNFLAG_LEVELTHING );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::LevelSpawnThingNoNetID::Execute()
+{
+	CLIENT_SpawnThing( type, x, y, z, -1, SPAWNFLAG_LEVELTHING );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::MoveThing::Execute()
+{
+	if (( actor == NULL ) || gamestate != GS_LEVEL )
+		return;
+
+	fixed_t x = ContainsNewX() ? newX : actor->x;
+	fixed_t y = ContainsNewY() ? newY : actor->y;
+	fixed_t z = ContainsNewZ() ? newZ : actor->z;
+
+	if ( ContainsNewX() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastX = x;
+	if ( ContainsNewY() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastY = y;
+	if ( ContainsNewZ() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastZ = z;
 
 	// Read in the last position data.
-	if ( lBits & CM_LAST_X )
-		pActor->lastX = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	if ( lBits & CM_LAST_Y )
-		pActor->lastY = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	if ( lBits & CM_LAST_Z )
-		pActor->lastZ = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+	if ( ContainsLastX() )
+		actor->lastX = lastX;
+	if ( ContainsLastY() )
+		actor->lastY = lastY;
+	if ( ContainsLastZ() )
+		actor->lastZ = lastZ;
 
 	// [WS] Clients will reuse their last updated position.
-	if ( lBits & CM_REUSE_X )
-		X = pActor->lastX;
-	if ( lBits & CM_REUSE_Y )
-		Y = pActor->lastY;
-	if ( lBits & CM_REUSE_Z )
-		Z = pActor->lastZ;
+	if ( bits & CM_REUSE_X )
+		x = actor->lastX;
+	if ( bits & CM_REUSE_Y )
+		y = actor->lastY;
+	if ( bits & CM_REUSE_Z )
+		z = actor->lastZ;
 
 	// Update the thing's position.
-	if ( lBits & (CM_X|CM_Y|CM_Z|CM_REUSE_X|CM_REUSE_Y|CM_REUSE_Z) )
-		CLIENT_MoveThing( pActor, X, Y, Z );
+	if ( bits & ( CM_X|CM_Y|CM_Z|CM_REUSE_X|CM_REUSE_Y|CM_REUSE_Z ))
+		CLIENT_MoveThing( actor, x, y, z );
 
 	// Read in the angle data.
-	if ( lBits & CM_ANGLE )
-		pActor->angle = NETWORK_ReadLong( pByteStream );
+	if ( ContainsAngle() )
+		actor->angle = angle;
 
 	// Read in the momentum data.
-	if ( lBits & CM_MOMX )
-		pActor->velx = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	if ( lBits & CM_MOMY )
-		pActor->vely = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	if ( lBits & CM_MOMZ )
-		pActor->velz = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+	if ( ContainsVelX() )
+		actor->velx = velX;
+	if ( ContainsVelY() )
+		actor->vely = velY;
+	if ( ContainsVelZ() )
+		actor->velz = velZ;
 
-	// [Dusk] if the actor that's being moved is a player and his momentum
-	// is being zeroed (i.e. we're stopping him), we need to stop his bobbing
-	// as well.
-	if ((pActor->player != NULL) && (pActor->velx == 0) && (pActor->vely == 0)) {
-		pActor->player->velx = 0;
-		pActor->player->vely = 0;
-	}
+	// [TP] If this is a player that's being moved around, and his velocity becomes zero,
+	// we need to stop his bobbing as well.
+	if ( actor->player && ( actor->velx == 0 ) && ( actor->vely == 0 ))
+		actor->player->velx = actor->player->vely = 0;
 
 	// Read in the pitch data.
-	if ( lBits & CM_PITCH )
-		pActor->pitch = NETWORK_ReadLong( pByteStream );
+	if ( ContainsPitch() )
+		actor->pitch = pitch;
 
 	// Read in the movedir data.
-	if ( lBits & CM_MOVEDIR )
-		pActor->movedir = NETWORK_ReadByte( pByteStream );
+	if ( ContainsMovedir() )
+		actor->movedir = movedir;
 
 	// If the server is moving us, don't let our prediction get messed up.
-	if ( pActor == players[consoleplayer].mo )
+	if ( actor == players[consoleplayer].mo )
 	{
-		players[consoleplayer].ServerXYZ[0] = X;
-		players[consoleplayer].ServerXYZ[1] = Y;
-		players[consoleplayer].ServerXYZ[2] = Z;
+		players[consoleplayer].ServerXYZ[0] = x;
+		players[consoleplayer].ServerXYZ[1] = y;
+		players[consoleplayer].ServerXYZ[2] = z;
 		CLIENT_PREDICT_PlayerTeleported( );
 	}
 }
 
 //*****************************************************************************
 //
-static void client_MoveThingExact( BYTESTREAM_s *pByteStream )
+void ServerCommands::MoveThingExact::Execute()
 {
-	LONG	lID;
-	LONG	lBits;
-	AActor	*pActor;
-	fixed_t	X;
-	fixed_t	Y;
-	fixed_t	Z;
-
-	// Read in the network ID of the thing to update.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the data that will be updated.
-	lBits = NETWORK_ReadShort( pByteStream );
-
-	// Try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	if (( pActor == NULL ) || gamestate != GS_LEVEL )
-	{
-		// No thing up update; skip the rest of the message.
-		if ( lBits & CM_X ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_Y ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_Z ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_LAST_X ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_LAST_Y ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_LAST_Z ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_ANGLE ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOMX ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOMY ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOMZ ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_PITCH ) NETWORK_ReadLong( pByteStream );
-		if ( lBits & CM_MOVEDIR ) NETWORK_ReadByte( pByteStream );
-
+	if (( actor == NULL ) || gamestate != GS_LEVEL )
 		return;
-	}
 
-	X = pActor->x;
-	Y = pActor->y;
-	Z = pActor->z;
+	fixed_t x = ContainsNewX() ? newX : actor->x;
+	fixed_t y = ContainsNewY() ? newY : actor->y;
+	fixed_t z = ContainsNewZ() ? newZ : actor->z;
 
 	// Read in the position data.
-	if ( lBits & CM_X )
-	{
-		X = NETWORK_ReadLong( pByteStream );
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastX = X;
-	}
-	if ( lBits & CM_Y )
-	{
-		Y = NETWORK_ReadLong( pByteStream );
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastY = Y;
-	}
-	if ( lBits & CM_Z )
-	{
-		Z = NETWORK_ReadLong( pByteStream );
-		if ( !(lBits & CM_NOLAST) )
-			pActor->lastZ = Z;
-	}
+	if ( ContainsNewX() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastX = x;
+	if ( ContainsNewY() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastY = y;
+	if ( ContainsNewZ() && (( bits & CM_NOLAST ) == 0 ))
+		actor->lastZ = z;
 
 	// Read in the last position data.
-	if ( lBits & CM_LAST_X )
-		pActor->lastX = NETWORK_ReadLong( pByteStream );
-	if ( lBits & CM_LAST_Y )
-		pActor->lastY = NETWORK_ReadLong( pByteStream );
-	if ( lBits & CM_LAST_Z )
-		pActor->lastZ = NETWORK_ReadLong( pByteStream );
+	if ( ContainsLastX() )
+		actor->lastX = lastX;
+	if ( ContainsLastY() )
+		actor->lastY = lastY;
+	if ( ContainsLastZ() )
+		actor->lastZ = lastZ;
 
 	// [WS] Clients will reuse their last updated position.
-	if ( lBits & CM_REUSE_X )
-		X = pActor->lastX;
-	if ( lBits & CM_REUSE_Y )
-		Y = pActor->lastY;
-	if ( lBits & CM_REUSE_Z )
-		Z = pActor->lastZ;
+	if ( bits & CM_REUSE_X )
+		x = actor->lastX;
+	if ( bits & CM_REUSE_Y )
+		y = actor->lastY;
+	if ( bits & CM_REUSE_Z )
+		z = actor->lastZ;
 
 	// Update the thing's position.
-	if ( lBits & (CM_X|CM_Y|CM_Z|CM_REUSE_X|CM_REUSE_Y|CM_REUSE_Z) )
-		CLIENT_MoveThing( pActor, X, Y, Z );
+	if ( bits & ( CM_X|CM_Y|CM_Z|CM_REUSE_X|CM_REUSE_Y|CM_REUSE_Z ))
+		CLIENT_MoveThing( actor, x, y, z );
 
 	// Read in the angle data.
-	if ( lBits & CM_ANGLE )
-		pActor->angle = NETWORK_ReadLong( pByteStream );
+	if ( ContainsAngle() )
+		actor->angle = angle;
 
 	// Read in the momentum data.
-	if ( lBits & CM_MOMX )
-		pActor->velx = NETWORK_ReadLong( pByteStream );
-	if ( lBits & CM_MOMY )
-		pActor->vely = NETWORK_ReadLong( pByteStream );
-	if ( lBits & CM_MOMZ )
-		pActor->velz = NETWORK_ReadLong( pByteStream );
+	if ( ContainsVelX() )
+		actor->velx = velX;
+	if ( ContainsVelY() )
+		actor->vely = velY;
+	if ( ContainsVelZ() )
+		actor->velz = velZ;
 
-	// [Dusk] if the actor that's being moved is a player and his momentum
-	// is being zeroed (i.e. we're stopping him), we need to stop his bobbing
-	// as well.
-	if ((pActor->player != NULL) && (pActor->velx == 0) && (pActor->vely == 0)) {
-		pActor->player->velx = 0;
-		pActor->player->vely = 0;
-	}
+	// [TP] If this is a player that's being moved around, and his velocity becomes zero,
+	// we need to stop his bobbing as well.
+	if ( actor->player && ( actor->velx == 0 ) && ( actor->vely == 0 ))
+		actor->player->velx = actor->player->vely = 0;
 
 	// Read in the pitch data.
-	if ( lBits & CM_PITCH )
-		pActor->pitch = NETWORK_ReadLong( pByteStream );
+	if ( ContainsPitch() )
+		actor->pitch = pitch;
 
 	// Read in the movedir data.
-	if ( lBits & CM_MOVEDIR )
-		pActor->movedir = NETWORK_ReadByte( pByteStream );
+	if ( ContainsMovedir() )
+		actor->movedir = movedir;
 }
 
 //*****************************************************************************
 //
-static void client_DamageThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::KillThing::Execute()
 {
-	LONG		lID;
-	AActor		*pActor;
-
-	// Read in ID of the thing being damaged.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Not in a level; nothing to do!
-	if ( gamestate != GS_LEVEL )
-		return;
-
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	// Nothing to damage.
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DamageThing: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Damage the thing.
-	P_DamageMobj( pActor, NULL, NULL, 0, NAME_None );
-}
-
-//*****************************************************************************
-//
-static void client_KillThing( BYTESTREAM_s *pByteStream )
-{
-	LONG		lID;
-	LONG		lHealth;
-	FName		DamageType;
-	LONG		lSourceID;
-	LONG		lInflictorID;
-	AActor		*pActor;
-	AActor		*pSource;
-	AActor		*pInflictor;
-
-	// Read in the network ID of the thing that died.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's health.
-	lHealth = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's damage type.
-	DamageType = NETWORK_ReadString( pByteStream );
-
-	// Read in the actor that killed the player.Thi
-	lSourceID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the inflictor.
-	lInflictorID = NETWORK_ReadShort( pByteStream );
-
 	// Level not loaded; ingore.
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// Find the actor that matches the given network ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_KillThing: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Find the actor associated with the source. It's okay if this actor does not exist.
-	if ( lSourceID != -1 )
-		pSource = CLIENT_FindThingByNetID( lSourceID );
-	else
-		pSource = NULL;
-
-	// Find the actor associated with the inflictor. It's okay if this actor does not exist.
-	if ( lInflictorID != -1 )
-		pInflictor = CLIENT_FindThingByNetID( lInflictorID );
-	else
-		pInflictor = NULL;
-
 	// Set the thing's health. This should enable the proper death state to play.
-	pActor->health = lHealth;
+	victim->health = health;
 
 	// Set the thing's damage type.
-	pActor->DamageType = DamageType;
+	victim->DamageType = damageType;
 
 	// Kill the thing.
-	pActor->Die( pSource, pInflictor );
+	victim->Die( source, inflictor );
 }
 
 //*****************************************************************************
 //
-static void client_SetThingState( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingState::Execute()
 {
-	AActor		*pActor;
-	LONG		lID;
-	LONG		lState;
-	FState		*pNewState = NULL;
+	FState *newState = NULL;
 
-	// Read in the network ID for the object to have its state changed.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the state.
-	lState = NETWORK_ReadByte( pByteStream );
-
-	// Not in a level; nothing to do (shouldn't happen!)
-	if ( gamestate != GS_LEVEL )
-		return;
-
-	// Find the actor associated with the ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-		// There should probably be the potential for a warning message here.
-		return;
-	}
-
-	switch ( lState )
+	switch ( state )
 	{
 	case STATE_SEE:
 
-		pNewState = pActor->SeeState;
+		newState = actor->SeeState;
 		break;
 	case STATE_SPAWN:
 
-		pNewState = pActor->SpawnState;
+		newState = actor->SpawnState;
 		break;
 	case STATE_PAIN:
 
-		pNewState = pActor->FindState(NAME_Pain);
+		newState = actor->FindState(NAME_Pain);
 		break;
 	case STATE_MELEE:
 
-		pNewState = pActor->MeleeState;
+		newState = actor->MeleeState;
 		break;
 	case STATE_MISSILE:
 
-		pNewState = pActor->MissileState;
+		newState = actor->MissileState;
 		break;
 	case STATE_DEATH:
 
-		pNewState = pActor->FindState(NAME_Death);
+		newState = actor->FindState(NAME_Death);
 		break;
 	case STATE_XDEATH:
 
-		pNewState = pActor->FindState(NAME_XDeath);
+		newState = actor->FindState(NAME_XDeath);
 		break;
 	case STATE_RAISE:
 
 		// When an actor raises, we need to do a whole bunch of other stuff.
-		P_Thing_Raise( pActor, true );
+		P_Thing_Raise( actor, true );
 		return;
 	case STATE_HEAL:
+	case STATE_ARCHVILE_HEAL:
 
 		// [BB] The monster count is increased when STATE_RAISE is set, so
 		// don't do it here.
-		if ( pActor->FindState(NAME_Heal) )
+		if ( actor->FindState(NAME_Heal) )
 		{
-			pNewState = pActor->FindState(NAME_Heal);
-			S_Sound( pActor, CHAN_BODY, "vile/raise", 1, ATTN_IDLE );
+			newState = actor->FindState(NAME_Heal);
 		}
-		else if ( pActor->IsKindOf( PClass::FindClass("Archvile")))
+		else if ( state == STATE_ARCHVILE_HEAL )
 		{
 			const PClass *archvile = PClass::FindClass("Archvile");
 			if (archvile != NULL)
 			{
-				pNewState = archvile->ActorInfo->FindState(NAME_Heal);
+				newState = archvile->ActorInfo->FindState(NAME_Heal);
 			}
-			S_Sound( pActor, CHAN_BODY, "vile/raise", 1, ATTN_IDLE );
 		}
-		else
-			return;
-
 		break;
 
 	case STATE_IDLE:
 
-		pActor->SetIdle();
+		actor->SetIdle();
 		return;
 
 	// [Dusk]
 	case STATE_WOUND:
 
-		pNewState = pActor->FindState( NAME_Wound );
+		newState = actor->FindState( NAME_Wound );
 		break;
 	default:
 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingState: Unknown state: %d\n", lState );
-#endif
-		return; 
+		CLIENT_PrintWarning( "client_SetThingState: Unknown state: %d\n", state );
+		return;
 	}
 
 	// [BB] We don't allow pNewState == NULL here. This function should set a state
 	// not destroy the thing, which happens if you call SetState with NULL as argument.
-	if( pNewState == NULL )
-		return;
-	// Set the angle.
-//	pActor->angle = Angle;
-	pActor->SetState( pNewState );
-//	pActor->SetStateNF( pNewState );
+	if ( newState )
+		actor->SetState( newState );
 }
 
 //*****************************************************************************
 //
-static void client_SetThingTarget( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingTarget::Execute()
 {
-	AActor		*pActor;
-	AActor		*pTarget;
-	LONG		lID;
-	LONG		lTargetID;
-
-	// Read in the network ID for the object to have its target changed.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the new target.
-	lTargetID = NETWORK_ReadShort( pByteStream );
-
-	// Find the actor associated with the ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-		// There should probably be the potential for a warning message here.
-		return;
-	}
-
-	// Find the target associated with the ID.
-	pTarget = CLIENT_FindThingByNetID( lTargetID );
-	if ( pTarget == NULL )
-	{
-		// There should probably be the potential for a warning message here.
-		return;
-	}
-
-	pActor->target = pTarget;
+	actor->target = target;
 }
 
 //*****************************************************************************
 //
-static void client_DestroyThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::DestroyThing::Execute()
 {
-	AActor	*pActor;
-	LONG	lID;
-
-	// Read the actor's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Find the actor based on the net ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyThing: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
 	// [BB] If we spied the actor we are supposed to destory, reset our camera.
-	if ( pActor->CheckLocalView( consoleplayer ) )
+	if ( actor->CheckLocalView( consoleplayer ) )
 		CLIENT_ResetConsolePlayerCamera( );
 
 	// [BB] If we are destroying a player's body here, we must NULL the corresponding pointer.
-	if ( pActor->player && ( pActor->player->mo == pActor ) )
+	if ( actor->player && ( actor->player->mo == actor ) )
 	{
-		// [BB] We also have to stop all its associated CLIENTSIDE scripts. Otherwise 
+		// [BB] We also have to stop all its associated CLIENTSIDE scripts. Otherwise
 		// they would get disassociated and continue to run even if the player disconnects later.
 		if ( !( zacompatflags & ZACOMPATF_DONT_STOP_PLAYER_SCRIPTS_ON_DISCONNECT ) )
-			FBehavior::StaticStopMyScripts ( pActor->player->mo );
+			FBehavior::StaticStopMyScripts ( actor->player->mo );
 
-		pActor->player->mo = NULL;
+		actor->player->mo = NULL;
 	}
 
 	// Destroy the thing.
-	pActor->Destroy( );
+	actor->Destroy( );
 }
 
 //*****************************************************************************
 //
-static void client_SetThingAngle( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingAngle::Execute()
 {
-	AActor		*pActor;
-	LONG		lID;
-	fixed_t		Angle;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new angle.
-	Angle = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Now try to find the thing.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingAngle: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, set the angle.
-	pActor->angle = Angle;
+	actor->angle = angle;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingAngleExact( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingAngleExact::Execute()
 {
-	AActor		*pActor;
-	LONG		lID;
-	fixed_t		Angle;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new angle.
-	Angle = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the thing.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingAngleExact: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, set the angle.
-	pActor->angle = Angle;
+	actor->angle = angle;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingWaterLevel( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingWaterLevel::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-	LONG	lWaterLevel;
-
-	// Get the ID of the actor whose water level is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the water level.
-	lWaterLevel = NETWORK_ReadByte( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingWaterLevel: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	pActor->waterlevel = lWaterLevel;
+	actor->waterlevel = waterlevel;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingFlags( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingFlags::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-	FlagSet flagset;
-	ULONG	ulFlags;
-
-	// Get the ID of the actor whose flags are being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the which flags are being updated.
-	flagset = static_cast<FlagSet>( NETWORK_ReadByte( pByteStream ) );
-
-	// Read in the flags.
-	ulFlags = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingFlags: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	switch ( flagset )
+	switch ( static_cast<FlagSet>( flagset ))
 	{
 	case FLAGSET_FLAGS:
 		{
 			// [BB/EP] Before changing MF_NOBLOCKMAP and MF_NOSECTOR, we have to unlink the actor from all blocks.
-			const bool relinkActor = ( ( ulFlags & ( MF_NOBLOCKMAP | MF_NOSECTOR ) ) ^ ( pActor->flags & ( MF_NOBLOCKMAP | MF_NOSECTOR ) ) ) != 0;
+			const bool relinkActor = ( ( flags & ( MF_NOBLOCKMAP | MF_NOSECTOR ) ) ^ ( actor->flags & ( MF_NOBLOCKMAP | MF_NOSECTOR ) ) ) != 0;
 			// [BB] Unlink based on the old flags.
 			if ( relinkActor )
-				pActor->UnlinkFromWorld ();
+				actor->UnlinkFromWorld ();
 
-			pActor->flags = ulFlags;
+			actor->flags = flags;
 
 			// [BB] Link based on the new flags.
 			if ( relinkActor )
-				pActor->LinkToWorld ();
+				actor->LinkToWorld ();
 		}
 		break;
 	case FLAGSET_FLAGS2:
 
-		pActor->flags2 = ulFlags;
+		actor->flags2 = flags;
 		break;
 	case FLAGSET_FLAGS3:
 
-		pActor->flags3 = ulFlags;
+		actor->flags3 = flags;
 		break;
 	case FLAGSET_FLAGS4:
 
-		pActor->flags4 = ulFlags;
+		actor->flags4 = flags;
 		break;
 	case FLAGSET_FLAGS5:
 
-		pActor->flags5 = ulFlags;
+		actor->flags5 = flags;
 		break;
 	case FLAGSET_FLAGS6:
 
-		pActor->flags6 = ulFlags;
+		actor->flags6 = flags;
+		break;
+	case FLAGSET_FLAGS7:
+
+		actor->flags7 = flags;
 		break;
 	case FLAGSET_FLAGSST:
 
-		pActor->ulSTFlags = ulFlags;
+		actor->ulSTFlags = flags;
 		break;
 	default:
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingFlags: Received an unknown flagset value: %d\n", static_cast<int>( flagset ) );
-#endif
+		CLIENT_PrintWarning( "client_SetThingFlags: Received an unknown flagset value: %d\n", static_cast<int>( flagset ) );
 		break;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetThingArguments( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingArguments::Execute()
 {
-	LONG lID = NETWORK_ReadShort( pByteStream );
-	AActor* pActor = CLIENT_FindThingByNetID( lID );
-
-	int args[5];
-	for ( unsigned int i = 0; i < countof( args ); ++i )
-		args[i] = NETWORK_ReadLong( pByteStream );
-
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingArguments: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	for ( unsigned int i = 0; i < countof( args ); ++i )
-		pActor->args[i] = args[i];
+	actor->args[0] = arg0;
+	actor->args[1] = arg1;
+	actor->args[2] = arg2;
+	actor->args[3] = arg3;
+	actor->args[4] = arg4;
 
 	// Gross hack for invisible bridges, since they set their height/radius
 	// based on their args the instant they're spawned.
 	// [WS] Added check for CustomBridge
-	if (( pActor->IsKindOf( PClass::FindClass( "InvisibleBridge" ) )) ||
-		( pActor->IsKindOf( PClass::FindClass( "AmbientSound" ) )) ||
-		( pActor->IsKindOf( PClass::FindClass( "CustomBridge" ) )))
+	if (( actor->IsKindOf( PClass::FindClass( "InvisibleBridge" ) )) ||
+		( actor->IsKindOf( PClass::FindClass( "AmbientSound" ) )) ||
+		( actor->IsKindOf( PClass::FindClass( "CustomBridge" ) )))
 	{
-		pActor->BeginPlay( );
+		actor->BeginPlay( );
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetThingTranslation( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingTranslation::Execute()
 {
-	LONG	lID;
-	LONG	lTranslation;
-	AActor	*pActor;
-
-	// Get the ID of the actor whose translation is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the actor's translation.
-	lTranslation = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingTranslation: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, set the thing's translation.
-	pActor->Translation = lTranslation;
+	actor->Translation = translation;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingProperty( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingProperty::Execute()
 {
-	LONG	lID;
-	ULONG	ulProperty;
-	ULONG	ulPropertyValue;
-	AActor	*pActor;
-
-	// Get the ID of the actor whose translation is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in which property is being updated.
-	ulProperty = NETWORK_ReadByte( pByteStream );
-
-	// Read in the actor's property.
-	ulPropertyValue = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingProperty: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
 	// Set one of the actor's properties, depending on what was read in.
-	switch ( ulProperty )
+	switch ( property )
 	{
 	case APROP_Speed:
-
-		pActor->Speed = ulPropertyValue;
+		actor->Speed = value;
 		break;
+
 	case APROP_Alpha:
-
-		pActor->alpha = ulPropertyValue;
+		actor->alpha = value;
 		break;
+
 	case APROP_RenderStyle:
-
-		pActor->RenderStyle.AsDWORD = ulPropertyValue;
+		actor->RenderStyle.AsDWORD = value;
 		break;
+
 	case APROP_JumpZ:
-
-		if ( pActor->IsKindOf( RUNTIME_CLASS( APlayerPawn )))
-			static_cast<APlayerPawn *>( pActor )->JumpZ = ulPropertyValue;
+		if ( actor->IsKindOf( RUNTIME_CLASS( APlayerPawn )))
+			static_cast<APlayerPawn *>( actor )->JumpZ = value;
 		break;
-	default:
 
-		Printf( "client_SetThingProperty: Unknown property, %d!\n", static_cast<unsigned int> (ulProperty) );
+	default:
+		CLIENT_PrintWarning( "client_SetThingProperty: Unknown property, %d!\n", static_cast<unsigned int> (property) );
 		return;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetThingSound( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingSound::Execute()
 {
-	LONG		lID;
-	ULONG		ulSound;
-	const char	*pszSound;
-	AActor		*pActor;
-
-	// Get the ID of the actor whose translation is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in which sound is being updated.
-	ulSound = NETWORK_ReadByte( pByteStream );
-
-	// Read in the actor's new sound.
-	pszSound = NETWORK_ReadString( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingSound: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
 	// Set one of the actor's sounds, depending on what was read in.
-	switch ( ulSound )
+	switch ( soundType )
 	{
 	case ACTORSOUND_SEESOUND:
-
-		pActor->SeeSound = pszSound;
+		actor->SeeSound = sound;
 		break;
+
 	case ACTORSOUND_ATTACKSOUND:
-
-		pActor->AttackSound = pszSound;
+		actor->AttackSound = sound;
 		break;
+
 	case ACTORSOUND_PAINSOUND:
-
-		pActor->PainSound = pszSound;
+		actor->PainSound = sound;
 		break;
+
 	case ACTORSOUND_DEATHSOUND:
-
-		pActor->DeathSound = pszSound;
+		actor->DeathSound = sound;
 		break;
+
 	case ACTORSOUND_ACTIVESOUND:
-
-		pActor->ActiveSound = pszSound;
+		actor->ActiveSound = sound;
 		break;
+
 	default:
-
-		Printf( "client_SetThingSound: Unknown sound, %d!\n", static_cast<unsigned int> (ulSound) );
+		CLIENT_PrintWarning( "client_SetThingSound: Unknown sound, %d!\n", static_cast<unsigned int> (soundType) );
 		return;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetThingSpawnPoint( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingSpawnPoint::Execute()
 {
-	// [BB] Get the ID of the actor whose SpawnPoint is being updated.
-	const LONG lID = NETWORK_ReadShort( pByteStream );
-
-	// [BB] Get the actor's SpawnPoint.
-	const LONG lSpawnPointX = NETWORK_ReadLong( pByteStream );
-	const LONG lSpawnPointY = NETWORK_ReadLong( pByteStream );
-	const LONG lSpawnPointZ = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the corresponding actor.
-	AActor *pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingSpawnPoint: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// [BB] Set the actor's SpawnPoint.
-	pActor->SpawnPoint[0] = lSpawnPointX;
-	pActor->SpawnPoint[1] = lSpawnPointY;
-	pActor->SpawnPoint[2] = lSpawnPointZ;
+	actor->SpawnPoint[0] = spawnPointX;
+	actor->SpawnPoint[1] = spawnPointY;
+	actor->SpawnPoint[2] = spawnPointZ;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingSpecial1( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingSpecial1::Execute()
 {
-	LONG	lID;
-	LONG	lSpecial1;
-	AActor	*pActor;
-
-	// Get the ID of the actor whose special2 is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Get the actor's special2.
-	lSpecial1 = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingSpecial1: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Set one of the actor's special1.
-	pActor->special1 = lSpecial1;
+	actor->special1 = special1;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingSpecial2( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingSpecial2::Execute()
 {
-	LONG	lID;
-	LONG	lSpecial2;
-	AActor	*pActor;
-
-	// Get the ID of the actor whose special2 is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Get the actor's special2.
-	lSpecial2 = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingSpecial2: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Set one of the actor's special2.
-	pActor->special2 = lSpecial2;
+	actor->special1 = special2;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingTics( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingTics::Execute()
 {
-	AActor		*pActor;
-	LONG		lID;
-	LONG		lTics;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new tics.
-	lTics = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the thing.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingTics: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, set the tics.
-	pActor->tics = lTics;
+	actor->tics = tics;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingTID( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingTID::Execute()
 {
-	AActor		*pActor;
-	LONG		lID;
-	LONG		lTid;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new angle.
-	lTid = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the thing.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
+	// [BB] Set the tid, but be careful doing so (cf. FUNC(LS_Thing_ChangeTID)).
+	if (!(actor->ObjectFlags & OF_EuthanizeMe))
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingTID: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// [BB] Finally, set the tid, but be careful doing so (cf. FUNC(LS_Thing_ChangeTID)).
-	if (!(pActor->ObjectFlags & OF_EuthanizeMe))
-	{
-		pActor->RemoveFromHash ();
-		pActor->tid = lTid;
-		pActor->AddToHash();
+		actor->RemoveFromHash();
+		actor->tid = tid;
+		actor->AddToHash();
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetThingGravity( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingReactionTime::Execute()
 {
-	LONG	lID;
-	LONG	lGravity;
-	AActor	*pActor;
-
-	// Get the ID of the actor whose gravity is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Get the actor's gravity.
-	lGravity = NETWORK_ReadLong( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetThingGravity: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Set the actor's gravity.
-	pActor->gravity = lGravity;
+	actor->reactiontime = reactiontime;
 }
 
 //*****************************************************************************
 //
-static void client_SetThingFrame( BYTESTREAM_s *pByteStream, bool bCallStateFunction )
+void ServerCommands::SetThingGravity::Execute()
 {
-	LONG			lID;
-	const char		*pszState;
-	LONG			lOffset;
-	AActor			*pActor;
-	FState			*pNewState = NULL;
+	actor->gravity = gravity;
+}
 
-	// Read in the network ID for the object to have its state changed.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the state.
-	pszState = NETWORK_ReadString( pByteStream );
-
-	// Offset into the state label.
-	lOffset = NETWORK_ReadByte( pByteStream );
-
+//*****************************************************************************
+//
+static void client_SetThingFrame( AActor* pActor, const PClass *stateOwner, int offset, bool bCallStateFunction )
+{
 	// Not in a level; nothing to do (shouldn't happen!)
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// Find the actor associated with the ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
+	// [BB] While skipping to the next map, DThinker::RunThinkers is not called, which seems to invalidate
+	// the arguments of this command. Since we don't need to update the actors anyway, just skip this.
+	if ( CLIENTDEMO_IsSkippingToNextMap() == true )
+		return;
+
+	if ( stateOwner->ActorInfo == NULL )
+		return;
+
+	FState *state = stateOwner->ActorInfo->OwnedStates + offset;
+
+	// [BB] The offset is only guaranteed to work if the actor owns the state.
+	if ( stateOwner->ActorInfo->OwnsState( state ) == false )
 	{
-		// There should probably be the potential for a warning message here.
+		CLIENT_PrintWarning( "client_SetThingFrame: %s does not own its state at offset %d\n",
+		                     stateOwner->TypeName.GetChars(), offset );
 		return;
 	}
-
-	// [BB] In this case lOffset is just the offset from one of the default states of the actor or the state owner.
-	// Handle this accordingly.
-	if ( pszState[0] == ':' || pszState[0] == ';' || pszState[0] == '+' )
+	// [BB] Don't switch to a state belonging to a completely unrelated actor.
+	else if ( pActor->GetClass()->IsDescendantOf ( stateOwner ) == false )
 	{
-		FState* pBaseState = NULL;
-
-		if ( pszState[0] == ':' )
-		{
-			switch ( pszState[1] )
-			{
-			case 'S':
-				pBaseState = pActor->SpawnState;
-
-				break;
-			case 'M':
-				pBaseState = pActor->MissileState;
-
-				break;
-			case 'T':
-				pBaseState = pActor->SeeState;
-
-				break;
-			case 'N':
-				pBaseState = pActor->MeleeState;
-
-				break;
-			default:
-				// [BB] Unknown base state specified. We can't do anythig.
-				return;
-			}
-			// [BB] The offset is only guaranteed to work if the actor owns the state.
-			if ( ( lOffset != 0 ) && ( ( ActorOwnsState ( pActor, pBaseState ) == false ) || ( ActorOwnsState ( pActor, pBaseState + lOffset ) == false ) ) )
-			{
-#ifdef CLIENT_WARNING_MESSAGES
-				if ( ActorOwnsState ( pActor, pBaseState ) == false )
-					Printf ( "client_SetThingFrame: %s doesn't own %s\n", pActor->GetClass()->TypeName.GetChars(), pszState );
-				if ( ActorOwnsState ( pActor, pBaseState + lOffset ) == false )
-					Printf ( "client_SetThingFrame: %s doesn't own %s + %d\n", pActor->GetClass()->TypeName.GetChars(), pszState, lOffset );
-#endif
-				return;
-			}
-		}
-		else if ( pszState[0] == ';' || pszState[0] == '+' )
-		{
-			const PClass *pStateOwnerClass = PClass::FindClass ( pszState+1 );
-			const AActor *pStateOwner = ( pStateOwnerClass != NULL ) ? GetDefaultByType ( pStateOwnerClass ) : NULL;
-			if ( pStateOwner )
-			{
-				if ( pszState[0] == ';' )
-					pBaseState = pStateOwner->SpawnState;
-				else
-					pBaseState = pStateOwnerClass->ActorInfo->FindState(NAME_Death);
-				// [BB] The offset is only guaranteed to work if the actor owns the state and pBaseState.
-				// Note: Looks like one can't call GetClass() on an actor pointer obtained by GetDefaultByType.
-				if ( ( lOffset != 0 ) && ( ( ClassOwnsState ( pStateOwnerClass, pBaseState ) == false ) || ( ClassOwnsState ( pStateOwnerClass, pBaseState + lOffset ) == false ) ) )
-				{
-#ifdef CLIENT_WARNING_MESSAGES
-					Printf ( "client_SetThingFrame: %s doesn't own %s + %d\n", pStateOwnerClass->TypeName.GetChars(), pszState, lOffset );
-#endif
-					return;
-				}
-			}
-		}
-
-		// [BB] We can only set the state, if the actor has pBaseState. But unless the server
-		// is sending us garbage or this client has altered actor defintions, this check
-		// should always succeed.
-		if ( pBaseState )
-		{
-			if ( bCallStateFunction )
-				pActor->SetState( pBaseState + lOffset );
-			else
-				pActor->SetState( pBaseState + lOffset, true );
-		}
-		return;
+		CLIENT_PrintWarning( "client_SetThingFrame: %s is not a descendant of %s\n",
+		                     pActor->GetClass()->TypeName.GetChars(), stateOwner->TypeName.GetChars() );
 	}
-
-	// Build the state name list.
-	TArray<FName> &StateList = MakeStateNameList( pszState );
-
-	pNewState = RUNTIME_TYPE( pActor )->ActorInfo->FindState( StateList.Size( ), &StateList[0] );
-	if ( pNewState )
+	else
 	{
-		// [BB] The offset was calculated by SERVERCOMMANDS_SetThingFrame using GetNextState(),
-		// so we have to use this here, too, to propely find the target state.
-		for ( int i = 0; i < lOffset; i++ )
+		// [BB] Workaround for actors whose spawn state has NoDelay. Make them execute the
+		// spawn state function before jumping to the new state.
+		if ( (pActor->ObjectFlags & OF_JustSpawned) && pActor->state && pActor->state->GetNoDelay() )
 		{
-			if ( pNewState != NULL )
-				pNewState = pNewState->GetNextState( );
+			pActor->PostBeginPlay();
+			pActor->Tick();
 		}
 
-		if ( pNewState == NULL )
-			return;
-
-		if ( bCallStateFunction )
-			pActor->SetState( pNewState );
-		else
-			pActor->SetState( pNewState, true );
+		pActor->SetState( state, ( bCallStateFunction == false ));
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetWeaponAmmoGive( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingFrame::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-	ULONG	ulAmmoGive1;
-	ULONG	ulAmmoGive2;
-
-	// Get the ID of the actor whose water level is being updated.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the amount of ammo type 1 this weapon gives.
-	ulAmmoGive1 = NETWORK_ReadShort( pByteStream );
-
-	// Read in the amount of ammo type 2 this weapon gives.
-	ulAmmoGive2 = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetWeaponAmmoGive: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// If this actor isn't a weapon, break out.
-	if ( pActor->IsKindOf( RUNTIME_CLASS( AWeapon )) == false )
-		return;
-
-	// Finally, actually set the amount of ammo this weapon gives us.
-	static_cast<AWeapon *>( pActor )->AmmoGive1 = ulAmmoGive1;
-	static_cast<AWeapon *>( pActor )->AmmoGive2 = ulAmmoGive2;
+	client_SetThingFrame( actor, stateOwner, offset, true );
 }
 
 //*****************************************************************************
 //
-static void client_ThingIsCorpse( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetThingFrameNF::Execute()
 {
-	AActor	*pActor;
-	LONG	lID;
-	bool	bIsMonster;
+	client_SetThingFrame( actor, stateOwner, offset, false );
+}
 
-	// Read in the network ID of the thing to make dead.
-	lID = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SetThingScale::Execute()
+{
+	if ( ContainsScaleX() )
+		actor->scaleX = scaleX;
 
-	// Is this thing a monster?
-	bIsMonster = !!NETWORK_ReadByte( pByteStream );
+	if ( ContainsScaleY() )
+		actor->scaleY = scaleY;
+}
 
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ThingIsCorpse: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
+//*****************************************************************************
+//
+void ServerCommands::SetWeaponAmmoGive::Execute()
+{
+	weapon->AmmoGive1 = ammoGive1;
+	weapon->AmmoGive2 = ammoGive2;
+}
 
-	CALL_ACTION(A_NoBlocking, pActor );	// [RH] Use this instead of A_PainDie
+//*****************************************************************************
+//
+void ServerCommands::ThingIsCorpse::Execute()
+{
+	A_Unblock( actor, true, true );
 
 	// Do some other stuff done in AActor::Die.
-	pActor->flags &= ~(MF_SHOOTABLE|MF_FLOAT|MF_SKULLFLY|MF_NOGRAVITY);
-	pActor->flags |= MF_CORPSE|MF_DROPOFF;
-	pActor->height >>= 2;
+	actor->flags &= ~(MF_SHOOTABLE|MF_FLOAT|MF_SKULLFLY|MF_NOGRAVITY);
+	actor->flags |= MF_CORPSE|MF_DROPOFF;
+	actor->height >>= 2;
 
 	// Set the thing to the last frame of its death state.
-	CLIENT_SetActorToLastDeathStateFrame ( pActor );
+	CLIENT_SetActorToLastDeathStateFrame ( actor );
 
-	if ( bIsMonster )
+	if ( isMonster )
 		level.killed_monsters++;
 
 	// If this is a player, put the player in his dead state.
-	if ( pActor->player )
+	if ( actor->player )
 	{
-		pActor->player->playerstate = PST_DEAD;
+		actor->player->playerstate = PST_DEAD;
 		// [BB] Also set the health to 0.
-		pActor->player->health = pActor->health = 0;
+		actor->player->health = actor->health = 0;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_HideThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::HideThing::Execute()
 {
-	AActor	*pActor;
-	LONG	lID;
-
-	// Read in the network ID of the thing to hide.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Didn't find it.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_HideThing: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Put the item in a hidden state.
-	// [BB] You can call HideIndefinitely only on AInventory and descendants.
-	if ( !(pActor->IsKindOf( RUNTIME_CLASS( AInventory ))) )
-		return;
-	static_cast<AInventory *>( pActor )->HideIndefinitely( );
+	item->HideIndefinitely( );
 }
 
 //*****************************************************************************
 //
-static void client_TeleportThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::TeleportThing::Execute()
 {
-	LONG		lID;
-	fixed_t		NewX;
-	fixed_t		NewY;
-	fixed_t		NewZ;
-	fixed_t		NewMomX;
-	fixed_t		NewMomY;
-	fixed_t		NewMomZ;
-	LONG		lNewReactionTime;
-	angle_t		NewAngle;
-	bool		bSourceFog;
-	bool		bDestFog;
-	bool		bTeleZoom;
-	angle_t		Angle;
-	AActor		*pActor;
-
-	// Read in the network ID of the thing being teleported.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new position.
-	NewX = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	NewY = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	NewZ = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the thing's new momentum.
-	NewMomX = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	NewMomY = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	NewMomZ = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the thing's new reaction time.
-	lNewReactionTime = NETWORK_ReadShort( pByteStream );
-
-	// Read in the thing's new angle.
-	NewAngle = NETWORK_ReadLong( pByteStream );
-
-	// Should we spawn a teleport fog at the spot the thing is teleporting from?
-	// What about the spot the thing is teleporting to?
-	bSourceFog = !!NETWORK_ReadByte( pByteStream );
-	bDestFog = !!NETWORK_ReadByte( pByteStream );
-
-	// Should be do the teleport zoom?
-	bTeleZoom = !!NETWORK_ReadByte( pByteStream );
-
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-		return;
-
-	// Move the player to his new position.
-//	P_TeleportMove( pActor, NewX, NewY, NewZ, false );
-
 	// Spawn teleport fog at the source.
-	if ( bSourceFog )
-		Spawn<ATeleportFog>( pActor->x, pActor->y, pActor->z + (( pActor->flags & MF_MISSILE ) ? 0 : TELEFOGHEIGHT ), ALLOW_REPLACE );
+	if ( sourcefog )
+		Spawn<ATeleportFog>( actor->x, actor->y, actor->z + (( actor->flags & MF_MISSILE ) ? 0 : TELEFOGHEIGHT ), ALLOW_REPLACE );
 
 	// Set the thing's new position.
-	CLIENT_MoveThing( pActor, NewX, NewY, NewZ );
+	CLIENT_MoveThing( actor, x, y, z );
 
 	// Spawn a teleport fog at the destination.
-	if ( bDestFog )
+	if ( destfog )
 	{
 		// Spawn the fog slightly in front of the thing's destination.
-		Angle = NewAngle >> ANGLETOFINESHIFT;
+		angle_t fineangle = angle >> ANGLETOFINESHIFT;
 
-		Spawn<ATeleportFog>( pActor->x + ( 20 * finecosine[Angle] ),
-			pActor->y + ( 20 * finesine[Angle] ),
-			pActor->z + (( pActor->flags & MF_MISSILE ) ? 0 : TELEFOGHEIGHT ),
+		Spawn<ATeleportFog>( actor->x + ( 20 * finecosine[fineangle] ),
+			actor->y + ( 20 * finesine[fineangle] ),
+			actor->z + (( actor->flags & MF_MISSILE ) ? 0 : TELEFOGHEIGHT ),
 			ALLOW_REPLACE );
 	}
 
 	// Set the thing's new momentum.
-	pActor->velx = NewMomX;
-	pActor->vely = NewMomY;
-	pActor->velz = NewMomZ;
+	actor->velx = momx;
+	actor->vely = momy;
+	actor->velz = momz;
 
 	// Also, if this is a player, set his bobbing appropriately.
-	if ( pActor->player )
+	if ( actor->player )
 	{
-		pActor->player->velx = NewMomX;
-		pActor->player->vely = NewMomY;
+		actor->player->velx = momx;
+		actor->player->vely = momy;
 
 		// [BB] If the server is teleporting us, don't let our prediction get messed up.
-		if ( pActor == players[consoleplayer].mo )
-			CLIENT_AdjustPredictionToServerSideConsolePlayerMove( NewX, NewY, NewZ );
+		if ( actor == players[consoleplayer].mo )
+			CLIENT_AdjustPredictionToServerSideConsolePlayerMove( x, y, z );
 	}
 
 	// Reset the thing's new reaction time.
-	pActor->reactiontime = lNewReactionTime;
+	actor->reactiontime = reactiontime;
 
 	// Set the thing's new angle.
-	pActor->angle = NewAngle;
+	actor->angle = angle;
 
 	// User variable to do a weird zoom thingy when you teleport.
-	if (( bTeleZoom ) && ( telezoom ) && ( pActor->player ))
-		pActor->player->FOV = MIN( 175.f, pActor->player->DesiredFOV + 45.f );
+	if (( teleportzoom ) && ( telezoom ) && ( actor->player ))
+		actor->player->FOV = MIN( 175.f, actor->player->DesiredFOV + 45.f );
 }
 
 //*****************************************************************************
 //
-static void client_ThingActivate( BYTESTREAM_s *pByteStream )
+void ServerCommands::ThingActivate::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-	AActor	*pActivator;
-
-	// Get the ID of the actor to activate.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	// Get the ID of the activator.
-	lID = NETWORK_ReadShort( pByteStream );
-	if ( lID == -1 )
-		pActivator = NULL;
-	else
-		pActivator = CLIENT_FindThingByNetID( lID );
-
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ThingActivate: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, activate the actor.
-	pActor->Activate( pActivator );
+	actor->Activate( activator );
 }
 
 //*****************************************************************************
 //
-static void client_ThingDeactivate( BYTESTREAM_s *pByteStream )
+void ServerCommands::ThingDeactivate::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-	AActor	*pActivator;
-
-	// Get the ID of the actor to deactivate.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Now try to find the corresponding actor.
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	// Get the ID of the activator.
-	lID = NETWORK_ReadShort( pByteStream );
-	if ( lID == -1 )
-		pActivator = NULL;
-	else
-		pActivator = CLIENT_FindThingByNetID( lID );
-
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ThingDeactivate: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// Finally, deactivate the actor.
-	pActor->Deactivate( pActivator );
+	actor->Deactivate( activator );
 }
 
 //*****************************************************************************
 //
-static void client_RespawnDoomThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::RespawnDoomThing::Execute()
 {
-	LONG	lID;
-	bool	bFog;
-	AActor	*pActor;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Should a fog be spawned when the item respawns?
-	bFog = !!NETWORK_ReadByte( pByteStream );
-
 	// Nothing to do if the level isn't loaded!
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	pActor = CLIENT_FindThingByNetID( lID );
-
-	// Couldn't find a matching actor. Ignore...
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_RespawnDoomThing: Couldn't find thing: %d\n", lID );
-#endif
-		return; 
-	}
-
-	// Finally, respawn the item.
-	CLIENT_RestoreSpecialPosition( pActor );
-	CLIENT_RestoreSpecialDoomThing( pActor, bFog );
+	CLIENT_RestoreSpecialPosition( actor );
+	CLIENT_RestoreSpecialDoomThing( actor, fog );
 }
 
 //*****************************************************************************
 //
-static void client_RespawnRavenThing( BYTESTREAM_s *pByteStream )
+void ServerCommands::RespawnRavenThing::Execute()
 {
-	LONG	lID;
-	AActor	*pActor;
-
-	// Read in the thing's network ID.
-	lID = NETWORK_ReadShort( pByteStream );
-
 	// Nothing to do if the level isn't loaded!
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	pActor = CLIENT_FindThingByNetID( lID );
+	actor->renderflags &= ~RF_INVISIBLE;
+	S_Sound( actor, CHAN_VOICE, "misc/spawn", 1, ATTN_IDLE );
 
-	// Couldn't find a matching actor. Ignore...
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_RespawnSpecialThing1: Couldn't find thing: %d\n", lID );
-#endif
-		return; 
-	}
-
-	pActor->renderflags &= ~RF_INVISIBLE;
-	S_Sound( pActor, CHAN_VOICE, "misc/spawn", 1, ATTN_IDLE );
-
-	pActor->SetState( RUNTIME_CLASS ( AInventory )->ActorInfo->FindState("HideSpecial") + 3 );
+	actor->SetState( RUNTIME_CLASS ( AInventory )->ActorInfo->FindState("HideSpecial") + 3 );
 }
 
 //*****************************************************************************
 //
-static void client_SpawnBlood( BYTESTREAM_s *pByteStream )
+void ServerCommands::SpawnBlood::Execute()
 {
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	angle_t			Dir;
-	int				Damage;
-	LONG			lID;
-	AActor			*pOriginator;
-
-	// Read in the XYZ location of the blood.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the direction.
-	Dir = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the damage.
-	Damage = NETWORK_ReadByte( pByteStream );
-
-	// Read in the NetID of the originator.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Find the originator by its NetID.
-	pOriginator = CLIENT_FindThingByNetID( lID );
-
-	// [BB] P_SpawnBlood crashes if pOriginator is a NULL pointer.
-	if ( pOriginator )
-		P_SpawnBlood (X, Y, Z, Dir, Damage, pOriginator);
+	P_SpawnBlood( x, y, z, dir, damage, originator );
 }
 
 //*****************************************************************************
 //
-static void client_SpawnBloodSplatter( BYTESTREAM_s *pByteStream, bool bIsBloodSplatter2 )
+void ServerCommands::SpawnBloodSplatter::Execute()
 {
-	// Read in the XYZ location of the blood.
-	fixed_t X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	fixed_t Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	fixed_t Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the NetID of the originator.
-	LONG lID = NETWORK_ReadShort( pByteStream );
-
-	// Find the originator by its NetID.
-	AActor *pOriginator = CLIENT_FindThingByNetID( lID );
-
-	if ( pOriginator )
-	{
-		if ( bIsBloodSplatter2 )
-			P_BloodSplatter2 (X, Y, Z, pOriginator);
-		else
-			P_BloodSplatter (X, Y, Z, pOriginator);
-	}
+	P_BloodSplatter( x, y, z, originator );
 }
 
 //*****************************************************************************
 //
-static void client_SpawnPuff( BYTESTREAM_s *pByteStream )
+void ServerCommands::SpawnBloodSplatter2::Execute()
 {
-	fixed_t			X;
-	fixed_t			Y;
-	fixed_t			Z;
-	USHORT			usActorNetworkIndex;
-	ULONG			ulState;
-	bool			bReceiveTranslation;
-	AActor			*pActor;
-	FState			*pState;
+	P_BloodSplatter2( x, y, z, originator );
+}
 
-	// Read in the XYZ location of the item.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
+//*****************************************************************************
+//
+void ServerCommands::SpawnPuff::Execute()
+{
+	CLIENT_SpawnThing( pufftype, x, y, z, id, SPAWNFLAG_PUFF );
+}
 
-	// Read in the identification of the item.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SpawnPuffNoNetID::Execute()
+{
+	AActor *puff = CLIENT_SpawnThing( pufftype, x, y, z, -1, SPAWNFLAG_PUFF );
 
-	// Read in the state of the puff.
-	ulState = NETWORK_ReadByte( pByteStream );
-
-	// Read in whether or not the translation will be sent.
-	bReceiveTranslation = !!NETWORK_ReadByte( pByteStream );
-
-	// Finally, spawn the thing.
-	pActor = CLIENT_SpawnThing( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, -1 );
-	if ( pActor == NULL )
+	if ( puff == NULL )
 		return;
 
-	// [BB] If we are supposed to set the translation, read in the translation
-	// and set it, if we sucessfully spawned the actor.
-	if( bReceiveTranslation )
+	// [BB] If we are supposed to set the translation, set it, if we sucessfully spawned the actor.
+	if ( ContainsTranslation() )
 	{
-		LONG lTranslation = NETWORK_ReadLong( pByteStream );
-		if( pActor )
-			pActor->Translation = lTranslation;
+		puff->Translation = translation;
 	}
 
 	// Put the puff in the proper state.
-	switch ( ulState )
+	FState *state;
+	switch ( stateid )
 	{
 	case STATE_CRASH:
 
-		pState = pActor->FindState( NAME_Crash );
-		if ( pState )
-			pActor->SetState( pState );
+		state = puff->FindState( NAME_Crash );
+		if ( state )
+			puff->SetState( state );
 		break;
 	case STATE_MELEE:
 
-		pState = pActor->MeleeState;
-		if ( pState )
-			pActor->SetState( pState );
+		state = puff->MeleeState;
+		if ( state )
+			puff->SetState( state );
 		break;
 	}
 }
 
 //*****************************************************************************
 //
-static void client_Print( BYTESTREAM_s *pByteStream )
+void ServerCommands::Print::Execute()
 {
-	ULONG		ulPrintLevel;
-	const char	*pszString;
-
-	// Read in the print level.
-	ulPrintLevel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the string to be printed.
-	pszString = NETWORK_ReadString( pByteStream );
-
-	// Print out the message.
-	Printf( ulPrintLevel, "%s", pszString );
+	Printf( printlevel, "%s", message.GetChars() );
 }
 
 //*****************************************************************************
 //
-static void client_PrintMid( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintMid::Execute()
 {
-	const char	*pszString;
-	bool		bBold;
-
-	// Read in the string that's supposed to be printed.
-	pszString = NETWORK_ReadString( pByteStream );
-
-	// Read in whether or not it's a bold message.
-	bBold = !!NETWORK_ReadByte( pByteStream );
-
-	// Print the message.
-	if ( bBold )
-		C_MidPrintBold( SmallFont, pszString );
+	if ( bold )
+		C_MidPrintBold( SmallFont, message );
 	else
-		C_MidPrint( SmallFont, pszString );
+		C_MidPrint( SmallFont, message );
 }
 
 //*****************************************************************************
 //
-static void client_PrintMOTD( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintMOTD::Execute()
 {
 	// Read in the MOTD, and display it later.
-	g_MOTD = NETWORK_ReadString( pByteStream );
+	g_MOTD = motd;
 	// [BB] Some cleaning of the string since we can't trust the server.
 	V_RemoveTrailingCrapFromFString ( g_MOTD );
 }
 
 //*****************************************************************************
 //
-static void client_PrintHUDMessage( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintHUDMessage::Execute()
 {
-	char		szString[MAX_NETWORK_STRING];
-	float		fX;
-	float		fY;
-	LONG		lHUDWidth;
-	LONG		lHUDHeight;
-	LONG		lColor;
-	float		fHoldTime;
-	const char	*pszFont;
-	bool		bLog;
-	LONG		lID;
-	DHUDMessage	*pMsg;
-
-	// Read in the string.
-	strncpy( szString, NETWORK_ReadString( pByteStream ), MAX_NETWORK_STRING );
-	szString[MAX_NETWORK_STRING - 1] = 0;
-
-	// Read in the XY.
-	fX = NETWORK_ReadFloat( pByteStream );
-	fY = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the HUD size.
-	lHUDWidth = NETWORK_ReadShort( pByteStream );
-	lHUDHeight = NETWORK_ReadShort( pByteStream );
-
-	// Read in the color.
-	lColor = NETWORK_ReadByte( pByteStream );
-
-	// Read in the hold time.
-	fHoldTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the font being used.
-	pszFont = NETWORK_ReadString( pByteStream );
-
-	// Read in whether or not the message should be logged.
-	bLog = !!NETWORK_ReadByte( pByteStream );
-
-	// Read in the ID.
-	lID = NETWORK_ReadLong( pByteStream );
-
 	// We cannot create the message if there's no status bar to attach it to.
 	if ( StatusBar == NULL )
 		return;
 
 	// [BB] We can't create the message if the font doesn't exist.
-	FFont *font = V_GetFont( pszFont );
+	FFont *font = V_GetFont( fontName );
 	if ( font == NULL )
 		return;
 
 	// Create the message.
-	pMsg = new DHUDMessage( font, szString,
-		fX,
-		fY,
-		lHUDWidth,
-		lHUDHeight,
-		(EColorRange)lColor,
-		fHoldTime );
+	DHUDMessage *hudMessage = new DHUDMessage( font, message,
+		x,
+		y,
+		hudWidth,
+		hudHeight,
+		(EColorRange)color,
+		holdTime );
 
 	// Now attach the message.
-	StatusBar->AttachMessage( pMsg, lID );
+	StatusBar->AttachMessage( hudMessage, id );
 
 	// Log the message if desired.
-	if ( bLog )
-		CLIENT_LogHUDMessage( szString, lColor );
+	if ( log )
+		CLIENT_LogHUDMessage( message, color );
 }
 
 //*****************************************************************************
 //
-static void client_PrintHUDMessageFadeOut( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintHUDMessageFadeOut::Execute()
 {
-	char				szString[MAX_NETWORK_STRING];
-	float				fX;
-	float				fY;
-	LONG				lHUDWidth;
-	LONG				lHUDHeight;
-	LONG				lColor;
-	float				fHoldTime;
-	float				fFadeOutTime;
-	const char			*pszFont;
-	bool				bLog;
-	LONG				lID;
-	DHUDMessageFadeOut	*pMsg;
-
-	// Read in the string.
-	strncpy( szString, NETWORK_ReadString( pByteStream ), MAX_NETWORK_STRING );
-	szString[MAX_NETWORK_STRING - 1] = 0;
-
-	// Read in the XY.
-	fX = NETWORK_ReadFloat( pByteStream );
-	fY = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the HUD size.
-	lHUDWidth = NETWORK_ReadShort( pByteStream );
-	lHUDHeight = NETWORK_ReadShort( pByteStream );
-
-	// Read in the color.
-	lColor = NETWORK_ReadByte( pByteStream );
-
-	// Read in the hold time.
-	fHoldTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the fade time.
-	fFadeOutTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the font being used.
-	pszFont = NETWORK_ReadString( pByteStream );
-
-	// Read in whether or not the message should be logged.
-	bLog = !!NETWORK_ReadByte( pByteStream );
-
-	// Read in the ID.
-	lID = NETWORK_ReadLong( pByteStream );
-
 	// We cannot create the message if there's no status bar to attach it to.
 	if ( StatusBar == NULL )
 		return;
 
 	// [BB] We can't create the message if the font doesn't exist.
-	FFont *font = V_GetFont( pszFont );
+	FFont *font = V_GetFont( fontName );
 	if ( font == NULL )
 		return;
 
 	// Create the message.
-	pMsg = new DHUDMessageFadeOut( font, szString,
-		fX,
-		fY,
-		lHUDWidth,
-		lHUDHeight,
-		(EColorRange)lColor,
-		fHoldTime,
-		fFadeOutTime );
+	DHUDMessageFadeOut *hudMessage = new DHUDMessageFadeOut( font, message,
+		x,
+		y,
+		hudWidth,
+		hudHeight,
+		(EColorRange)color,
+		holdTime,
+		fadeOutTime );
 
 	// Now attach the message.
-	StatusBar->AttachMessage( pMsg, lID );
+	StatusBar->AttachMessage( hudMessage, id );
 
 	// Log the message if desired.
-	if ( bLog )
-		CLIENT_LogHUDMessage( szString, lColor );
+	if ( log )
+		CLIENT_LogHUDMessage( message, color );
 }
 
 //*****************************************************************************
 //
-static void client_PrintHUDMessageFadeInOut( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintHUDMessageFadeInOut::Execute()
 {
-	char					szString[MAX_NETWORK_STRING];
-	float					fX;
-	float					fY;
-	LONG					lHUDWidth;
-	LONG					lHUDHeight;
-	LONG					lColor;
-	float					fHoldTime;
-	float					fFadeInTime;
-	float					fFadeOutTime;
-	const char				*pszFont;
-	bool					bLog;
-	LONG					lID;
-	DHUDMessageFadeInOut	*pMsg;
-
-	// Read in the string.
-	strncpy( szString, NETWORK_ReadString( pByteStream ), MAX_NETWORK_STRING );
-	szString[MAX_NETWORK_STRING - 1] = 0;
-
-	// Read in the XY.
-	fX = NETWORK_ReadFloat( pByteStream );
-	fY = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the HUD size.
-	lHUDWidth = NETWORK_ReadShort( pByteStream );
-	lHUDHeight = NETWORK_ReadShort( pByteStream );
-
-	// Read in the color.
-	lColor = NETWORK_ReadByte( pByteStream );
-
-	// Read in the hold time.
-	fHoldTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the fade in time.
-	fFadeInTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the fade out time.
-	fFadeOutTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the font being used.
-	pszFont = NETWORK_ReadString( pByteStream );
-
-	// Read in whether or not the message should be logged.
-	bLog = !!NETWORK_ReadByte( pByteStream );
-
-	// Read in the ID.
-	lID = NETWORK_ReadLong( pByteStream );
-
 	// We cannot create the message if there's no status bar to attach it to.
 	if ( StatusBar == NULL )
 		return;
 
 	// [BB] We can't create the message if the font doesn't exist.
-	FFont *font = V_GetFont( pszFont );
+	FFont *font = V_GetFont( fontName );
 	if ( font == NULL )
 		return;
 
 	// Create the message.
-	pMsg = new DHUDMessageFadeInOut( font, szString,
-		fX,
-		fY,
-		lHUDWidth,
-		lHUDHeight,
-		(EColorRange)lColor,
-		fHoldTime,
-		fFadeInTime,
-		fFadeOutTime );
+	DHUDMessageFadeInOut *hudMessage = new DHUDMessageFadeInOut( font, message,
+		x,
+		y,
+		hudWidth,
+		hudHeight,
+		(EColorRange)color,
+		holdTime,
+		fadeInTime,
+		fadeOutTime );
 
 	// Now attach the message.
-	StatusBar->AttachMessage( pMsg, lID );
+	StatusBar->AttachMessage( hudMessage, id );
 
 	// Log the message if desired.
-	if ( bLog )
-		CLIENT_LogHUDMessage( szString, lColor );
+	if ( log )
+		CLIENT_LogHUDMessage( message, color );
 }
 
 //*****************************************************************************
 //
-static void client_PrintHUDMessageTypeOnFadeOut( BYTESTREAM_s *pByteStream )
+void ServerCommands::PrintHUDMessageTypeOnFadeOut::Execute()
 {
-	char						szString[MAX_NETWORK_STRING];
-	float						fX;
-	float						fY;
-	LONG						lHUDWidth;
-	LONG						lHUDHeight;
-	LONG						lColor;
-	float						fTypeOnTime;
-	float						fHoldTime;
-	float						fFadeOutTime;
-	const char					*pszFont;
-	bool						bLog;
-	LONG						lID;
-	DHUDMessageTypeOnFadeOut	*pMsg;
-
-	// Read in the string.
-	strncpy( szString, NETWORK_ReadString( pByteStream ), MAX_NETWORK_STRING );
-	szString[MAX_NETWORK_STRING - 1] = 0;
-
-	// Read in the XY.
-	fX = NETWORK_ReadFloat( pByteStream );
-	fY = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the HUD size.
-	lHUDWidth = NETWORK_ReadShort( pByteStream );
-	lHUDHeight = NETWORK_ReadShort( pByteStream );
-
-	// Read in the color.
-	lColor = NETWORK_ReadByte( pByteStream );
-
-	// Read in the type on time.
-	fTypeOnTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the hold time.
-	fHoldTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the fade out time.
-	fFadeOutTime = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the font being used.
-	pszFont = NETWORK_ReadString( pByteStream );
-
-	// Read in whether or not the message should be logged.
-	bLog = !!NETWORK_ReadByte( pByteStream );
-
-	// Read in the ID.
-	lID = NETWORK_ReadLong( pByteStream );
-
 	// We cannot create the message if there's no status bar to attach it to.
 	if ( StatusBar == NULL )
 		return;
 
 	// [BB] We can't create the message if the font doesn't exist.
-	FFont *font = V_GetFont( pszFont );
+	FFont *font = V_GetFont( fontName );
 	if ( font == NULL )
 		return;
 
 	// Create the message.
-	pMsg = new DHUDMessageTypeOnFadeOut( font, szString,
-		fX,
-		fY,
-		lHUDWidth,
-		lHUDHeight,
-		(EColorRange)lColor,
-		fTypeOnTime,
-		fHoldTime,
-		fFadeOutTime );
+	DHUDMessageTypeOnFadeOut *hudMessage = new DHUDMessageTypeOnFadeOut( font, message,
+		x,
+		y,
+		hudWidth,
+		hudHeight,
+		(EColorRange)color,
+		typeOnTime,
+		holdTime,
+		fadeOutTime );
 
 	// Now attach the message.
-	StatusBar->AttachMessage( pMsg, lID );
+	StatusBar->AttachMessage( hudMessage, id );
 
 	// Log the message if desired.
-	if ( bLog )
-		CLIENT_LogHUDMessage( szString, lColor );
+	if ( log )
+		CLIENT_LogHUDMessage( message, color );
 }
 
 //*****************************************************************************
@@ -8067,6 +5593,10 @@ static void client_SetGameDMFlags( BYTESTREAM_s *pByteStream )
 	Value.Int = NETWORK_ReadLong( pByteStream );
 	compatflags.ForceSet( Value, CVAR_Int );
 
+	// ... and compatflags.
+	Value.Int = NETWORK_ReadLong( pByteStream );
+	compatflags2.ForceSet( Value, CVAR_Int );
+
 	// [BB] ... and zacompatflags.
 	Value.Int = NETWORK_ReadLong( pByteStream );
 	zacompatflags.ForceSet( Value, CVAR_Int );
@@ -8110,7 +5640,9 @@ static void client_SetGameModeLimits( BYTESTREAM_s *pByteStream )
 	Value.Int = NETWORK_ReadByte( pByteStream );
 	sv_cheats.ForceSet( Value, CVAR_Int );
 	// [BB] This ensures that am_cheat respects the sv_cheats value we just set.
-	am_cheat = am_cheat;
+	am_cheat.Callback();
+	// [TP] Same for turbo
+	turbo.Callback();
 
 	// Read in, and set the value for sv_fastweapons.
 	Value.Int = NETWORK_ReadByte( pByteStream );
@@ -8542,863 +6074,309 @@ static void client_TeamFlagDropped( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SpawnMissile( BYTESTREAM_s *pByteStream )
+void ServerCommands::SpawnMissile::Execute()
 {
-	USHORT				usActorNetworkIndex;
-	fixed_t				X;
-	fixed_t				Y;
-	fixed_t				Z;
-	fixed_t				MomX;
-	fixed_t				MomY;
-	fixed_t				MomZ;
-	LONG				lID;
-	LONG				lTargetID;
-
-	// Read in the XYZ location of the missile.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the XYZ momentum of the missile.
-	MomX = NETWORK_ReadLong( pByteStream );
-	MomY = NETWORK_ReadLong( pByteStream );
-	MomZ = NETWORK_ReadLong( pByteStream );
-
-	// Read in the identification of the missile.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the missile, and its target.
-	lID = NETWORK_ReadShort( pByteStream );
-	lTargetID = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the missile.
-	CLIENT_SpawnMissile( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, MomX, MomY, MomZ, lID, lTargetID );
+	CLIENT_SpawnMissile( missileType, x, y, z, velX, velY, velZ, netID, targetNetID );
 }
 
 //*****************************************************************************
 //
-static void client_SpawnMissileExact( BYTESTREAM_s *pByteStream )
+void ServerCommands::SpawnMissileExact::Execute()
 {
-	USHORT				usActorNetworkIndex;
-	fixed_t				X;
-	fixed_t				Y;
-	fixed_t				Z;
-	fixed_t				MomX;
-	fixed_t				MomY;
-	fixed_t				MomZ;
-	LONG				lID;
-	LONG				lTargetID;
-
-	// Read in the XYZ location of the missile.
-	X = NETWORK_ReadLong( pByteStream );
-	Y = NETWORK_ReadLong( pByteStream );
-	Z = NETWORK_ReadLong( pByteStream );
-
-	// Read in the XYZ momentum of the missile.
-	MomX = NETWORK_ReadLong( pByteStream );
-	MomY = NETWORK_ReadLong( pByteStream );
-	MomZ = NETWORK_ReadLong( pByteStream );
-
-	// Read in the identification of the missile.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// Read in the network ID of the missile, and its target.
-	lID = NETWORK_ReadShort( pByteStream );
-	lTargetID = NETWORK_ReadShort( pByteStream );
-
-	// Finally, spawn the missile.
-	CLIENT_SpawnMissile( NETWORK_GetClassFromIdentification( usActorNetworkIndex ), X, Y, Z, MomX, MomY, MomZ, lID, lTargetID );
+	CLIENT_SpawnMissile( missileType, x, y, z, velX, velY, velZ, netID, targetNetID );
 }
 
 //*****************************************************************************
 //
-static void client_MissileExplode( BYTESTREAM_s *pByteStream )
+void ServerCommands::MissileExplode::Execute()
 {
-	AActor		*pActor;
-	LONG		lLine;
-	line_t		*pLine;
-	LONG		lID;
-	fixed_t		X;
-	fixed_t		Y;
-	fixed_t		Z;
+	line_t *line;
 
-	// Read in the network ID of the exploding missile.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the line that the missile struck.
-	lLine = NETWORK_ReadShort( pByteStream );
-	if ( lLine >= 0 && lLine < numlines )
-		pLine = &lines[lLine];
+	if ( lineId >= 0 && lineId < numlines )
+		line = &lines[lineId];
 	else
-		pLine = NULL;
-
-	// Read in the XYZ of the explosion point.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Find the actor associated with the given network ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_MissileExplode: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
+		line = NULL;
 
 	// Move the new actor to the position.
-	CLIENT_MoveThing( pActor, X, Y, Z );
+	CLIENT_MoveThing( missile, x, y, z );
 
 	// Blow it up!
 	// [BB] Only if it's not already in its death state.
-	if ( pActor->InState ( NAME_Death ) == false )
-		P_ExplodeMissile( pActor, pLine, NULL );
+	if ( missile->InState ( NAME_Death ) == false )
+		P_ExplodeMissile( missile, line, NULL );
 }
 
 //*****************************************************************************
 //
-static void client_WeaponSound( BYTESTREAM_s *pByteStream )
+void ServerCommands::WeaponSound::Execute()
 {
-	ULONG		ulPlayer;
-	const char	*pszSound;
-
-	// Read in the player who's creating a weapon sound.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sound that's being played.
-	pszSound = NETWORK_ReadString( pByteStream );
-
-	// Check to make sure everything is valid. If not, break out. Also, don't
-	// play the sound if the console player is spying through this player's eyes.
-	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) ||
-		( players[ulPlayer].mo == NULL ) ||
-		( players[ulPlayer].mo->CheckLocalView( consoleplayer )))
-	{
+	// Don't play the sound if the console player is spying through this player's eyes.
+	if ( player->mo->CheckLocalView( consoleplayer ) )
 		return;
-	}
 
-	// Finally, play the sound.
-	S_Sound( players[ulPlayer].mo, CHAN_WEAPON, pszSound, 1, ATTN_NORM );
+	S_Sound( player->mo, CHAN_WEAPON, sound, 1, ATTN_NORM );
 }
 
 //*****************************************************************************
 //
-static void client_WeaponChange( BYTESTREAM_s *pByteStream )
+void ServerCommands::WeaponChange::Execute()
 {
-	ULONG			ulPlayer;
-	USHORT			usActorNetworkIndex;
-	const PClass	*pType;
-	AWeapon			*pWeapon;
-
-	// Read in the player whose info is about to be updated.
-	ulPlayer = NETWORK_ReadByte( pByteStream );
-
-	// Read in the identification of the weapon we're supposed to switch to.
-	usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
-
-	// If the player doesn't exist, get out!
-	if ( PLAYER_IsValidPlayerWithMo( ulPlayer ) == false )
-		return;
-
-	// If it's an invalid class, or not a weapon, don't switch.
-	pType = NETWORK_GetClassFromIdentification( usActorNetworkIndex );
-	if (( pType == NULL ) || !( pType->IsDescendantOf( RUNTIME_CLASS( AWeapon ))))
-		return;
-
 	// If we dont have this weapon already, we do now!
-	pWeapon = static_cast<AWeapon *>( players[ulPlayer].mo->FindInventory( pType ));
-	if ( pWeapon == NULL )
-		pWeapon = static_cast<AWeapon *>( players[ulPlayer].mo->GiveInventoryType( pType ));
+	AWeapon *weapon = static_cast<AWeapon *>( player->mo->FindInventory( weaponType ));
+	if ( weapon == NULL )
+		weapon = static_cast<AWeapon *>( player->mo->GiveInventoryType( weaponType ));
 
 	// If he still doesn't have the object after trying to give it to him... then YIKES!
-	if ( pWeapon == NULL )
+	if ( weapon == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_WeaponChange: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
+		CLIENT_PrintWarning( "client_WeaponChange: Failed to give inventory type, %s!\n", weaponType->TypeName.GetChars() );
 		return;
 	}
 
 	// Bring the weapon up if necessary.
-	if ( ( players[ulPlayer].ReadyWeapon != pWeapon ) || ( ( players[ulPlayer].PendingWeapon != WP_NOCHANGE ) && ( players[ulPlayer].PendingWeapon != pWeapon ) ) )
-		players[ulPlayer].PendingWeapon = pWeapon;
+	if ( ( player->ReadyWeapon != weapon ) || ( ( player->PendingWeapon != WP_NOCHANGE ) && ( player->PendingWeapon != weapon ) ) )
+		player->PendingWeapon = weapon;
 
 	// Confirm to the server that this is the weapon we're using.
-	CLIENT_UpdatePendingWeapon( &players[ulPlayer] );
+	CLIENT_UpdatePendingWeapon( player );
 
 	// [BB] Ensure that the weapon is brought up. Note: Needs to be done after calling
 	// CLIENT_UpdatePendingWeapon because P_BringUpWeapon clears PendingWeapon to WP_NOCHANGE.
-	P_BringUpWeapon (&players[ulPlayer]);
+	P_BringUpWeapon( player );
 }
 
 //*****************************************************************************
 //
-static void client_WeaponRailgun( BYTESTREAM_s *pByteStream )
+void ServerCommands::WeaponRailgun::Execute()
 {
-	LONG		lID;
-	FVector3	Start;
-	FVector3	End;
-	LONG		lColor1;
-	LONG		lColor2;
-	float		fMaxDiff;
-	bool		bSilent;
-	AActor		*pActor;
-
-	// Read in the network ID of the source actor.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the XYZ position of the start of the trail.
-	Start.X = NETWORK_ReadFloat( pByteStream );
-	Start.Y = NETWORK_ReadFloat( pByteStream );
-	Start.Z = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the XYZ position of the end of the trail.
-	End.X = NETWORK_ReadFloat( pByteStream );
-	End.Y = NETWORK_ReadFloat( pByteStream );
-	End.Z = NETWORK_ReadFloat( pByteStream );
-
-	// Read in the colors of the trail.
-	lColor1 = NETWORK_ReadLong( pByteStream );
-	lColor2 = NETWORK_ReadLong( pByteStream );
-
-	// Read in maxdiff (whatever that is).
-	fMaxDiff = NETWORK_ReadFloat( pByteStream );
-
-	// Read in whether or not the trail should make a nosie.
-	bSilent = !!NETWORK_ReadByte( pByteStream );
-
-	// Find the actor associated with the given network ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
+	// If this is not an extended railgun command, we'll need to assume some defaults.
+	if ( CheckExtended() == false )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_WeaponRailgun: Couldn't find thing: %d\n", lID );
-#endif
-		return;
+		angleoffset = 0;
+		spawnclass = NULL;
+		duration = 0;
+		sparsity = 1.0f;
+		drift = 1.0f;
 	}
 
-	P_DrawRailTrail( pActor, Start, End, lColor1, lColor2, fMaxDiff, bSilent );
+	angle_t angle = source->angle + angleoffset;
+	P_DrawRailTrail( source, start, end, color1, color2, maxdiff, flags, spawnclass, angle, duration, sparsity, drift );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorFloorPlane( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorFloorPlane::Execute()
 {
-	LONG		lSectorID;
-	LONG		lHeight;
-	sector_t	*pSector;
-	LONG		lDelta;
-	LONG		lLastPos;
-
-	// Read in the sector network ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the height.
-	lHeight = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorFloorPlane: Couldn't find sector: %d\n", lSectorID );
-#endif
-		return;
-	}
-
 	// Calculate the change in floor height.
-	lDelta = lHeight - pSector->floorplane.d;
+	fixed_t delta = height - sector->floorplane.d;
 
 	// Store the original height position.
-	lLastPos = pSector->floorplane.d;
+	fixed_t lastPos = sector->floorplane.d;
 
 	// Change the height.
-	pSector->floorplane.ChangeHeight( -lDelta );
+	sector->floorplane.ChangeHeight( -delta );
 
 	// Call this to update various actor's within the sector.
-	P_ChangeSector( pSector, false, -lDelta, 0, false );
+	P_ChangeSector( sector, false, -delta, 0, false );
 
 	// Finally, adjust textures.
-	pSector->SetPlaneTexZ(sector_t::floor, pSector->GetPlaneTexZ(sector_t::floor) + pSector->floorplane.HeightDiff( lLastPos ) );
+	sector->SetPlaneTexZ(sector_t::floor, sector->GetPlaneTexZ(sector_t::floor) + sector->floorplane.HeightDiff( lastPos ) );
 
 	// [BB] We also need to move any linked sectors.
-	P_MoveLinkedSectors(pSector, false, -lDelta, false);
+	P_MoveLinkedSectors(sector, false, -delta, false);
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorCeilingPlane( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorCeilingPlane::Execute()
 {
-	LONG		lSectorID;
-	LONG		lHeight;
-	sector_t	*pSector;
-	LONG		lDelta;
-	LONG		lLastPos;
-
-	// Read in the sector network ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the height.
-	lHeight = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorCeilingPlane: Couldn't find sector: %d\n", lSectorID );
-#endif
-		return;
-	}
-
 	// Calculate the change in ceiling height.
-	lDelta = lHeight - pSector->ceilingplane.d;
+	fixed_t delta = height - sector->ceilingplane.d;
 
 	// Store the original height position.
-	lLastPos = pSector->ceilingplane.d;
+	fixed_t lastPos = sector->ceilingplane.d;
 
 	// Change the height.
-	pSector->ceilingplane.ChangeHeight( lDelta );
+	sector->ceilingplane.ChangeHeight( delta );
 
 	// Finally, adjust textures.
-	pSector->SetPlaneTexZ(sector_t::ceiling, pSector->GetPlaneTexZ(sector_t::ceiling) + pSector->ceilingplane.HeightDiff( lLastPos ) );
+	sector->SetPlaneTexZ(sector_t::ceiling, sector->GetPlaneTexZ(sector_t::ceiling) + sector->ceilingplane.HeightDiff( lastPos ) );
 
 	// [BB] We also need to move any linked sectors.
-	P_MoveLinkedSectors(pSector, false, lDelta, true);
+	P_MoveLinkedSectors(sector, false, delta, true);
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorFloorPlaneSlope( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorFloorPlaneSlope::Execute()
 {
-	LONG		lSectorID;
-	LONG		lA;
-	LONG		lB;
-	LONG		lC;
-	sector_t	*pSector;
-
-	// Read in the sector network ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the various variables needed to calculate the slope.
-	lA = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	lB = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	lC = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorFloorPlaneSlope: Couldn't find sector: %d\n", lSectorID );
-#endif
-		return;
-	}
-
-	pSector->floorplane.a = lA;
-	pSector->floorplane.b = lB;
-	pSector->floorplane.c = lC;
-	pSector->floorplane.ic = DivScale32( 1, pSector->floorplane.c );
+	sector->floorplane.a = a;
+	sector->floorplane.b = b;
+	sector->floorplane.c = c;
+	sector->floorplane.ic = DivScale32( 1, sector->floorplane.c );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorCeilingPlaneSlope( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorCeilingPlaneSlope::Execute()
 {
-	LONG		lSectorID;
-	LONG		lA;
-	LONG		lB;
-	LONG		lC;
-	sector_t	*pSector;
-
-	// Read in the sector network ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the various variables needed to calculate the slope.
-	lA = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	lB = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	lC = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorCeilingPlaneSlope: Couldn't find sector: %d\n", lSectorID );
-#endif
-		return;
-	}
-
-	pSector->ceilingplane.a = lA;
-	pSector->ceilingplane.b = lB;
-	pSector->ceilingplane.c = lC;
-	pSector->ceilingplane.ic = DivScale32( 1, pSector->ceilingplane.c );
+	sector->ceilingplane.a = a;
+	sector->ceilingplane.b = b;
+	sector->ceilingplane.c = c;
+	sector->ceilingplane.ic = DivScale32( 1, sector->ceilingplane.c );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorLightLevel( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorLightLevel::Execute()
 {
-	LONG		lSectorID;
-	LONG		lLightLevel;
-	sector_t	*pSector;
-
-	// Read in the sector network ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the new light level.
-	lLightLevel = NETWORK_ReadByte( pByteStream );
-
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorLightLevel: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Finally, set the light level.
-	pSector->lightlevel = lLightLevel;
+	sector->lightlevel = lightLevel;
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorColor( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag )
+void ServerCommands::SetSectorColor::Execute()
 {
-	LONG		lSectorIDOrTag;
-	LONG		lR;
-	LONG		lG;
-	LONG		lB;
-	LONG		lDesaturate;
-	sector_t	*pSector;
-	PalEntry	Color;
-
-	// Read in the sector to have its panning altered.
-	lSectorIDOrTag = NETWORK_ReadShort( pByteStream );
-
-	// Read in the RGB and desaturate.
-	lR = NETWORK_ReadByte( pByteStream );
-	lG = NETWORK_ReadByte( pByteStream );
-	lB = NETWORK_ReadByte( pByteStream );
-	lDesaturate = NETWORK_ReadByte( pByteStream );
-
-	if ( bIdentifySectorsByTag )
-	{
-		int secnum = -1;
-
-		while ((secnum = P_FindSectorFromTag (lSectorIDOrTag, secnum)) >= 0)
-			sectors[secnum].SetColor(lR, lG, lB, lDesaturate, false, true);
-	}
-	else
-	{
-		// Now find the sector.
-		pSector = CLIENT_FindSectorByID( lSectorIDOrTag );
-		if ( pSector == NULL )
-		{ 
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_SetSectorColor: Cannot find sector: %d\n", lSectorIDOrTag );
-#endif
-			return; 
-		}
-
-		// Finally, set the color.
-		pSector->SetColor(lR, lG, lB, lDesaturate, false, true);
-	}
+	sector->SetColor( red, green, blue, desaturate, false, true );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorFade( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag )
+void ServerCommands::SetSectorColorByTag::Execute()
 {
-	LONG		lSectorIDOrTag;
-	LONG		lR;
-	LONG		lG;
-	LONG		lB;
-	sector_t	*pSector;
-	PalEntry	Fade;
+	int secnum = -1;
 
-	// Read in the sector to have its panning altered.
-	lSectorIDOrTag = NETWORK_ReadShort( pByteStream );
-
-	// Read in the RGB.
-	lR = NETWORK_ReadByte( pByteStream );
-	lG = NETWORK_ReadByte( pByteStream );
-	lB = NETWORK_ReadByte( pByteStream );
-
-	if ( bIdentifySectorsByTag )
-	{
-		int secnum = -1;
-
-		while ((secnum = P_FindSectorFromTag (lSectorIDOrTag, secnum)) >= 0)
-			sectors[secnum].SetFade(lR, lG, lB, false, true);
-	}
-	else
-	{
-		// Now find the sector.
-		pSector = CLIENT_FindSectorByID( lSectorIDOrTag );
-		if ( pSector == NULL )
-		{ 
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_SetSectorFade: Cannot find sector: %d\n", lSectorIDOrTag );
-#endif
-			return; 
-		}
-
-		// Finally, set the fade.
-		pSector->SetFade(lR, lG, lB, false, true);
-	}
+	while (( secnum = P_FindSectorFromTag( tag, secnum )) >= 0 )
+		sectors[secnum].SetColor( red, green, blue, desaturate, false, true );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorFlat( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorFade::Execute()
 {
-	sector_t		*pSector;
-	LONG			lSectorID;
-	char			szCeilingFlatName[MAX_NETWORK_STRING];
-	const char		*pszFloorFlatName;
-	FTextureID		flatLump;
+	sector->SetFade( red, green, blue, false, true );
+}
 
-	// Read in the sector ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SetSectorFadeByTag::Execute()
+{
+	int secnum = -1;
 
-	// Read in the ceiling flat name.
-	sprintf( szCeilingFlatName, "%s", NETWORK_ReadString( pByteStream ));
+	while (( secnum = P_FindSectorFromTag( tag, secnum )) >= 0 )
+		sectors[secnum].SetFade( red, green, blue, false, true );
+}
 
-	// Read in the floor flat name.
-	pszFloorFlatName = NETWORK_ReadString( pByteStream );
-
+//*****************************************************************************
+//
+void ServerCommands::SetSectorFlat::Execute()
+{
 	// Not in a level. Nothing to do!
 	if ( gamestate != GS_LEVEL )
 		return;
 
-	// Find the sector associated with this network ID.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorFlat: Couldn't find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	flatLump = TexMan.GetTexture( szCeilingFlatName, FTexture::TEX_Flat );
-	pSector->SetTexture(sector_t::ceiling, flatLump);
-
-	flatLump = TexMan.GetTexture( pszFloorFlatName, FTexture::TEX_Flat );
-	pSector->SetTexture(sector_t::floor, flatLump);
+	sector->SetTexture( sector_t::ceiling, TexMan.GetTexture( ceilingFlatName, FTexture::TEX_Flat ));
+	sector->SetTexture( sector_t::floor, TexMan.GetTexture( floorFlatName, FTexture::TEX_Flat ));
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorPanning( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorPanning::Execute()
 {
-	LONG		lSectorID;
-	LONG		lCeilingXOffset;
-	LONG		lCeilingYOffset;
-	LONG		lFloorXOffset;
-	LONG		lFloorYOffset;
-	sector_t	*pSector;
-
-	// Read in the sector to have its panning altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read it's ceiling X offset.
-	lCeilingXOffset = NETWORK_ReadShort( pByteStream );
-
-	// Read it's ceiling Y offset.
-	lCeilingYOffset = NETWORK_ReadShort( pByteStream );
-
-	// Read it's floor X offset.
-	lFloorXOffset = NETWORK_ReadShort( pByteStream );
-
-	// Read it's floor Y offset.
-	lFloorYOffset = NETWORK_ReadShort( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorPanning: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
 	// Finally, set the offsets.
-	pSector->SetXOffset(sector_t::ceiling, lCeilingXOffset * FRACUNIT);
-	pSector->SetYOffset(sector_t::ceiling, lCeilingYOffset * FRACUNIT);
-
-	pSector->SetXOffset(sector_t::floor, lFloorXOffset * FRACUNIT);
-	pSector->SetYOffset(sector_t::floor, lFloorYOffset * FRACUNIT);
+	sector->SetXOffset( sector_t::ceiling, ceilingXOffset );
+	sector->SetYOffset( sector_t::ceiling, ceilingYOffset );
+	sector->SetXOffset( sector_t::floor, floorXOffset );
+	sector->SetYOffset( sector_t::floor, floorYOffset );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorRotation( BYTESTREAM_s *pByteStream, bool bIdentifySectorsByTag )
+void ServerCommands::SetSectorRotation::Execute()
 {
-	// Read in the sector to have its panning altered.
-	const LONG lSectorIDOrTag = NETWORK_ReadShort( pByteStream );
+	sector->SetAngle(sector_t::ceiling, ceilingRotation * ANGLE_1 );
+	sector->SetAngle(sector_t::floor, floorRotation * ANGLE_1 );
+}
 
-	// Read in the ceiling and floor rotation.
-	const LONG lCeilingRotation = NETWORK_ReadShort( pByteStream );
-	const LONG lFloorRotation = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SetSectorRotationByTag::Execute()
+{
+	int secnum = -1;
 
-	if ( bIdentifySectorsByTag )
+	while (( secnum = P_FindSectorFromTag( tag, secnum )) >= 0 )
 	{
-		int secnum = -1;
-
-		while ((secnum = P_FindSectorFromTag (lSectorIDOrTag, secnum)) >= 0)
-		{
-			sectors[secnum].SetAngle(sector_t::floor, lFloorRotation * ANGLE_1);
-			sectors[secnum].SetAngle(sector_t::ceiling, lCeilingRotation * ANGLE_1);
-		}
-	}
-	else
-	{
-		// Now find the sector.
-		sector_t *pSector = CLIENT_FindSectorByID( lSectorIDOrTag );
-		if ( pSector == NULL )
-		{ 
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_SetSectorRotation: Cannot find sector: %d\n", lSectorID );
-#endif
-			return; 
-		}
-
-		// Finally, set the rotation.
-		pSector->SetAngle(sector_t::ceiling, ( lCeilingRotation * ANGLE_1 ) );
-		pSector->SetAngle(sector_t::floor, ( lFloorRotation * ANGLE_1 ) );
+		sectors[secnum].SetAngle( sector_t::floor, floorRotation * ANGLE_1 );
+		sectors[secnum].SetAngle( sector_t::ceiling, ceilingRotation * ANGLE_1 );
 	}
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorScale( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorScale::Execute()
 {
-	LONG		lSectorID;
-	LONG		lCeilingXScale;
-	LONG		lCeilingYScale;
-	LONG		lFloorXScale;
-	LONG		lFloorYScale;
-	sector_t	*pSector;
-
-	// Read in the sector to have its panning altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the ceiling and floor scale.
-	lCeilingXScale = NETWORK_ReadShort( pByteStream ) * FRACBITS;
-	lCeilingYScale = NETWORK_ReadShort( pByteStream ) * FRACBITS;
-	lFloorXScale = NETWORK_ReadShort( pByteStream ) * FRACBITS;
-	lFloorYScale = NETWORK_ReadShort( pByteStream ) * FRACBITS;
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorScale: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Finally, set the scale.
-	pSector->SetXScale(sector_t::ceiling, lCeilingXScale);
-	pSector->SetYScale(sector_t::ceiling, lCeilingYScale);
-	pSector->SetXScale(sector_t::floor, lFloorXScale);
-	pSector->SetYScale(sector_t::floor, lFloorYScale);
+	sector->SetXScale( sector_t::ceiling, ceilingXScale );
+	sector->SetYScale( sector_t::ceiling, ceilingYScale );
+	sector->SetXScale( sector_t::floor, floorXScale );
+	sector->SetYScale( sector_t::floor, floorYScale );
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorSpecial( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorSpecial::Execute()
 {
-	LONG		lSectorID;
-	SHORT		sSpecial;
-	sector_t	*pSector;
-
-	// Read in the sector to have its special altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the new special.
-	sSpecial = NETWORK_ReadShort( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorSpecial: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Finally, set the special.
-	pSector->special = sSpecial;
+	sector->special = special;
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorFriction( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorFriction::Execute()
 {
-	LONG		lSectorID;
-	LONG		lFriction;
-	LONG		lMoveFactor;
-	sector_t	*pSector;
-
-	// Read in the sector to have its friction altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the ceiling and floor scale.
-	lFriction = NETWORK_ReadLong( pByteStream );
-	lMoveFactor = NETWORK_ReadLong( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorScale: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Set the friction.
-	pSector->friction = lFriction;
-	pSector->movefactor = lMoveFactor;
+	sector->friction = friction;
+	sector->movefactor = moveFactor;
 
 	// I'm not sure if we need to do this, but let's do it anyway.
-	if ( lFriction == ORIG_FRICTION )
-		pSector->special &= ~FRICTION_MASK;
+	if ( friction == ORIG_FRICTION )
+		sector->special &= ~FRICTION_MASK;
 	else
-		pSector->special |= FRICTION_MASK;
+		sector->special |= FRICTION_MASK;
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorAngleYOffset( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorAngleYOffset::Execute()
 {
-	LONG		lSectorID;
-	LONG		lCeilingAngle;
-	LONG		lCeilingYOffset;
-	LONG		lFloorAngle;
-	LONG		lFloorYOffset;
-	sector_t	*pSector;
-
-	// Read in the sector to have its friction altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's ceiling and floor angle and y-offset.
-	lCeilingAngle = NETWORK_ReadLong( pByteStream );
-	lCeilingYOffset = NETWORK_ReadLong( pByteStream );
-	lFloorAngle = NETWORK_ReadLong( pByteStream );
-	lFloorYOffset = NETWORK_ReadLong( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorScale: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Set the sector's angle and y-offset.
-	pSector->planes[sector_t::ceiling].xform.base_angle = lCeilingAngle;
-	pSector->planes[sector_t::ceiling].xform.base_yoffs = lCeilingYOffset;
-	pSector->planes[sector_t::floor].xform.base_angle = lFloorAngle;
-	pSector->planes[sector_t::floor].xform.base_yoffs = lFloorYOffset;
+	sector->planes[sector_t::ceiling].xform.base_angle = ceilingBaseAngle;
+	sector->planes[sector_t::ceiling].xform.base_yoffs = ceilingBaseYOffset;
+	sector->planes[sector_t::floor].xform.base_angle = floorBaseAngle;
+	sector->planes[sector_t::floor].xform.base_yoffs = floorBaseYOffset;
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorGravity( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorGravity::Execute()
 {
-	LONG		lSectorID;
-	float		fGravity;
-	sector_t	*pSector;
-
-	// Read in the sector to have its friction altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's gravity.
-	fGravity = NETWORK_ReadFloat( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorScale: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Set the sector's gravity.
-	pSector->gravity = fGravity;
+	sector->gravity = gravity;
 }
 
 //*****************************************************************************
 //
-static void client_SetSectorReflection( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorReflection::Execute()
 {
-	LONG		lSectorID;
-	float		fCeilingReflect;
-	float		fFloorReflect;
-	sector_t	*pSector;
-
-	// Read in the sector to have its reflection altered.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's ceiling and floor reflection.
-	fCeilingReflect = NETWORK_ReadFloat( pByteStream );
-	fFloorReflect = NETWORK_ReadFloat( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorScale: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Set the sector's reflection.
-	pSector->ceiling_reflect = fCeilingReflect;
-	pSector->floor_reflect = fFloorReflect;
+	sector->reflect[sector_t::ceiling] = ceilingReflection;
+	sector->reflect[sector_t::floor] = floorReflection;
 }
 
 //*****************************************************************************
 //
-static void client_StopSectorLightEffect( BYTESTREAM_s *pByteStream )
+void ServerCommands::StopSectorLightEffect::Execute()
 {
-	LONG							lSectorID;
-	sector_t						*pSector;
 	TThinkerIterator<DLighting>		Iterator;
 	DLighting						*pEffect;
 
-	// Read in the sector to have its light effect stopped.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_StopSectorLightEffect: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Finally, delete any effects this sector has.
 	while (( pEffect = Iterator.Next( )) != NULL )
 	{
-		if ( pEffect->GetSector( ) == pSector )
+		if ( pEffect->GetSector( ) == sector )
 		{
 			pEffect->Destroy( );
 			return;
@@ -9408,7 +6386,7 @@ static void client_StopSectorLightEffect( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_DestroyAllSectorMovers( BYTESTREAM_s *pByteStream )
+void ServerCommands::DestroyAllSectorMovers::Execute()
 {
 	ULONG	ulIdx;
 
@@ -9436,321 +6414,74 @@ static void client_DestroyAllSectorMovers( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetSectorLink( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSectorLink::Execute()
 {
-	// [BB] Read in the sector network ID.
-	ULONG ulSector = NETWORK_ReadShort( pByteStream );
-	int iArg1 = NETWORK_ReadShort( pByteStream );
-	int iArg2 = NETWORK_ReadByte( pByteStream );
-	int iArg3 = NETWORK_ReadByte( pByteStream );
-
-	// [BB] Find the sector associated with this network ID.
-	sector_t *pSector = CLIENT_FindSectorByID( ulSector );
-	if ( pSector == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetSectorLink: Couldn't find sector: %d\n", ulSector );
-#endif
-		return;
-	}
-
-	P_AddSectorLinks( pSector, iArg1, iArg2, iArg3);
+	P_AddSectorLinks( sector, tag, ceiling, moveType );
 }
 
 //*****************************************************************************
 //
-static void client_DoSectorLightFireFlicker( BYTESTREAM_s *pByteStream )
+void ServerCommands::DoSectorLightFireFlicker::Execute()
 {
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lMaxLight;
-	LONG			lMinLight;
-	DFireFlicker	*pFireFlicker;
+	new DFireFlicker( sector, maxLight, minLight );
+}
 
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::DoSectorLightFlicker::Execute()
+{
+	new DFlicker( sector, maxLight, minLight );
+}
 
-	// Read in the sector's light level when the light effect is in its bright phase.
-	lMaxLight = NETWORK_ReadByte( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::DoSectorLightLightFlash::Execute()
+{
+	new DLightFlash( sector, minLight, maxLight );
+}
 
-	// Read in the sector's light level when the light effect is in its dark phase.
-	lMinLight = NETWORK_ReadByte( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::DoSectorLightStrobe::Execute()
+{
+	DStrobe *strobe = new DStrobe( sector, maxLight, minLight, brightTime, darkTime );
+	strobe->SetCount( count );
+}
 
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightFireFlicker: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
+//*****************************************************************************
+//
+void ServerCommands::DoSectorLightGlow::Execute()
+{
+	new DGlow( sector );
+}
 
+//*****************************************************************************
+//
+void ServerCommands::DoSectorLightGlow2::Execute()
+{
 	// Create the light effect.
-	pFireFlicker = new DFireFlicker( pSector, lMaxLight, lMinLight );
+	DGlow2 *glow2 = new DGlow2( sector, startLight, endLight, maxTics, oneShot );
+	glow2->SetTics( tics );
 }
 
 //*****************************************************************************
 //
-static void client_DoSectorLightFlicker( BYTESTREAM_s *pByteStream )
+void ServerCommands::DoSectorLightPhased::Execute()
 {
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lMaxLight;
-	LONG			lMinLight;
-	DFlicker		*pFlicker;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its bright phase.
-	lMaxLight = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its dark phase.
-	lMinLight = NETWORK_ReadByte( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightFireFlicker: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pFlicker = new DFlicker( pSector, lMaxLight, lMinLight );
+	new DPhased( sector, baseLevel, phase );
 }
 
 //*****************************************************************************
 //
-static void client_DoSectorLightLightFlash( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetLineAlpha::Execute()
 {
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lMaxLight;
-	LONG			lMinLight;
-	DLightFlash		*pLightFlash;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its bright phase.
-	lMaxLight = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its dark phase.
-	lMinLight = NETWORK_ReadByte( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightLightFlash: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pLightFlash = new DLightFlash( pSector, lMinLight, lMaxLight );
+	line->Alpha = alpha;
 }
 
 //*****************************************************************************
 //
-static void client_DoSectorLightStrobe( BYTESTREAM_s *pByteStream )
+static void client_SetLineTextureHelper ( line_t *pLine, ULONG ulSide, ULONG ulPosition, FTextureID texture )
 {
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lDarkTime;
-	LONG			lBrightTime;
-	LONG			lMaxLight;
-	LONG			lMinLight;
-	LONG			lCount;
-	DStrobe			*pStrobe;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in how long the effect stays in its dark phase.
-	lDarkTime = NETWORK_ReadShort( pByteStream );
-
-	// Read in how long the effect stays in its bright phase.
-	lBrightTime = NETWORK_ReadShort( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its bright phase.
-	lMaxLight = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sector's light level when the light effect is in its dark phase.
-	lMinLight = NETWORK_ReadByte( pByteStream );
-
-	// Read in the amount of time left until the light changes from bright to dark, or vice
-	// versa.
-	lCount = NETWORK_ReadByte( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightStrobe: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pStrobe = new DStrobe( pSector, lMaxLight, lMinLight, lBrightTime, lDarkTime );
-	pStrobe->SetCount( lCount );
-}
-
-//*****************************************************************************
-//
-static void client_DoSectorLightGlow( BYTESTREAM_s *pByteStream )
-{
-	LONG			lSectorID;
-	sector_t		*pSector;
-	DGlow			*pGlow;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightGlow: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pGlow = new DGlow( pSector );
-}
-
-//*****************************************************************************
-//
-static void client_DoSectorLightGlow2( BYTESTREAM_s *pByteStream )
-{
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lStart;
-	LONG			lEnd;
-	LONG			lTics;
-	LONG			lMaxTics;
-	bool			bOneShot;
-	DGlow2			*pGlow2;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the start light level of the effect.
-	lStart = NETWORK_ReadByte( pByteStream );
-
-	// Read in the end light level of the effect.
-	lEnd = NETWORK_ReadByte( pByteStream );
-
-	// Read in the current progression of the effect.
-	lTics = NETWORK_ReadShort( pByteStream );
-
-	// Read in how many tics it takes to get from start to end.
-	lMaxTics = NETWORK_ReadShort( pByteStream );
-
-	// Read in whether or not the glow loops, or ends after one shot.
-	bOneShot = !!NETWORK_ReadByte( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightStrobe: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pGlow2 = new DGlow2( pSector, lStart, lEnd, lMaxTics, bOneShot );
-	pGlow2->SetTics( lTics );
-}
-
-//*****************************************************************************
-//
-static void client_DoSectorLightPhased( BYTESTREAM_s *pByteStream )
-{
-	LONG			lSectorID;
-	sector_t		*pSector;
-	LONG			lBaseLevel;
-	LONG			lPhase;
-	DPhased			*pPhased;
-
-	// Read in the sector the light effect is attached to.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the effect's base level parameter.
-	lBaseLevel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sector's phase parameter.
-	lPhase = NETWORK_ReadByte( pByteStream );
-
-	// Now find the sector.
-	pSector = CLIENT_FindSectorByID( lSectorID );
-	if ( pSector == NULL )
-	{ 
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoSectorLightFireFlicker: Cannot find sector: %d\n", lSectorID );
-#endif
-		return; 
-	}
-
-	// Create the light effect.
-	pPhased = new DPhased( pSector, lBaseLevel, lPhase );
-}
-
-//*****************************************************************************
-//
-static void client_SetLineAlpha( BYTESTREAM_s *pByteStream )
-{
-	line_t	*pLine;
-	ULONG	ulLineIdx;
-	fixed_t	alpha;
-
-	// Read in the line to have its alpha altered.
-	ulLineIdx = NETWORK_ReadShort( pByteStream );
-
-	// Read in the new alpha.
-	alpha = NETWORK_ReadLong( pByteStream );
-
-	pLine = &lines[ulLineIdx];
-	if (( pLine == NULL ) || ( ulLineIdx >= static_cast<ULONG>(numlines) ))
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetLineAlpha: Couldn't find line: %d\n", ulLineIdx );
-#endif
-		return;
-	}
-
-	// Finally, set the alpha.
-	pLine->Alpha = alpha;
-}
-
-//*****************************************************************************
-//
-static void client_SetLineTextureHelper ( ULONG ulLineIdx, ULONG ulSide, ULONG ulPosition, FTextureID texture )
-{
-	line_t *pLine = NULL;
-
-	if ( ulLineIdx < static_cast<ULONG>(numlines) )
-		pLine = &lines[ulLineIdx];
-
-	if ( pLine == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetLineTexture: Couldn't find line: %d\n", ulLineIdx );
-#endif
-		return;
-	}
-
 	if ( pLine->sidedef[ulSide] == NULL )
 		return;
 
@@ -9775,136 +6506,59 @@ static void client_SetLineTextureHelper ( ULONG ulLineIdx, ULONG ulSide, ULONG u
 		break;
 	}
 }
+//*****************************************************************************
+//
+void ServerCommands::SetLineTexture::Execute()
+{
+	FTextureID texture = TexMan.GetTexture( textureName, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
+
+	if ( texture.Exists() )
+		client_SetLineTextureHelper( line, side, position, texture );
+	else
+		CLIENT_PrintWarning( "SetLineTexture: unknown texture: %s\n", textureName.GetChars() );
+}
 
 //*****************************************************************************
 //
-static void client_SetLineTexture( BYTESTREAM_s *pByteStream, bool bIdentifyLinesByID )
+void ServerCommands::SetLineTextureByID::Execute()
 {
-	ULONG		ulLineIdx;
-	const char	*pszTextureName;
-	ULONG		ulSide;
-	ULONG		ulPosition;
-	FTextureID	texture;
+	FTextureID texture = TexMan.GetTexture( textureName, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
 
-	// Read in the line to have its alpha altered.
-	ulLineIdx = NETWORK_ReadShort( pByteStream );
-
-	// Read in the new texture name.
-	pszTextureName = NETWORK_ReadString( pByteStream );
-
-	// Read in the side.
-	ulSide = !!NETWORK_ReadByte( pByteStream );
-
-	// Read in the position.
-	ulPosition = NETWORK_ReadByte( pByteStream );
-
-	texture = TexMan.GetTexture( pszTextureName, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
-
-	if ( !texture.Exists() )
-		return;
-
-	if ( bIdentifyLinesByID )
+	if ( texture.Exists() )
 	{
 		int linenum = -1;
-		while ((linenum = P_FindLineFromID (ulLineIdx, linenum)) >= 0)
-			client_SetLineTextureHelper ( linenum, ulSide, ulPosition, texture );
+		while (( linenum = P_FindLineFromID( lineID, linenum )) >= 0)
+			client_SetLineTextureHelper( &lines[linenum], side, position, texture );
 	}
 	else
-	{
-		client_SetLineTextureHelper ( ulLineIdx, ulSide, ulPosition, texture );
-	}
+		CLIENT_PrintWarning( "SetLineTextureByID: unknown texture: %s\n", textureName.GetChars() );
 }
 
 //*****************************************************************************
 //
-static void client_SetSomeLineFlags( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSomeLineFlags::Execute()
 {
-	LONG	lLine;
-	LONG	lBlockFlags;
-
-	// Read in the line ID.
-	lLine = NETWORK_ReadShort( pByteStream );
-
-	// Read in the blocking flags.
-	lBlockFlags = NETWORK_ReadLong( pByteStream );
-
-	// Invalid line ID.
-	if (( lLine >= numlines ) || ( lLine < 0 ))
-		return;
-
-	lines[lLine].flags &= ~(ML_BLOCKING|ML_BLOCK_PLAYERS|ML_BLOCKEVERYTHING|ML_RAILING|ML_ADDTRANS);
-	lines[lLine].flags |= lBlockFlags;
+	line->flags &= ~(ML_BLOCKING|ML_BLOCK_PLAYERS|ML_BLOCKEVERYTHING|ML_RAILING|ML_ADDTRANS);
+	line->flags |= blockFlags;
 }
 
 //*****************************************************************************
 //
-static void client_SetSideFlags( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetSideFlags::Execute()
 {
-	LONG	lSide;
-	LONG	lFlags;
-
-	// Read in the side ID.
-	lSide = NETWORK_ReadLong( pByteStream );
-
-	// Read in the flags.
-	lFlags = NETWORK_ReadByte( pByteStream );
-
-	// Invalid line ID.
-	if (( lSide >= numsides ) || ( lSide < 0 ))
-		return;
-
-	sides[lSide].Flags = lFlags;
+	side->Flags = flags;
 }
 
 //*****************************************************************************
 //
-static void client_ACSScriptExecute( BYTESTREAM_s *pByteStream )
+void ServerCommands::ACSScriptExecute::Execute()
 {
-	ULONG			ulScript;
-	LONG			lID;
-	LONG			lLineIdx;
-	bool			bBackSide;
-	int				args[3] = {0};
-	bool			bAlways;
-	AActor			*pActor;
-	line_t			*pLine;
-	FString			mapname;
-	level_info_t*	levelinfo;
-	int				levelnum;
-	BYTE			argheader;
-
-	// Read in the script to be executed.
-	ulScript = NETWORK_ReadShort( pByteStream );
-
-	// Read in the ID of the activator.
-	lID = NETWORK_ReadShort( pByteStream );
-
-	// Read in the line index.
-	lLineIdx = NETWORK_ReadShort( pByteStream );
-
-	// [TP] Read in the levelnum of the map to execute the script on
-	levelnum = NETWORK_ReadByte( pByteStream );
-
-	// [TP] Argument header, see notes in sv_commands.cpp
-	argheader = NETWORK_ReadByte( pByteStream );
-
-	// [TP] Read in the arguments using the argument header data
-	for( int i = 0; i < 3; ++i )
-	{
-		switch (( argheader >> ( 2 * i )) & 3 )
-		{
-			case 1: args[i] = static_cast<SBYTE>( NETWORK_ReadByte( pByteStream )); break;
-			case 2: args[i] = NETWORK_ReadShort( pByteStream ); break;
-			case 3: args[i] = NETWORK_ReadLong( pByteStream ); break;
-			default: break;
-		}
-	}
-
-	// [TP] Unpack bBackSide and bAlways
-	bBackSide = !!(( argheader >> 6 ) & 1 );
-	bAlways = !!(( argheader >> 7 ) & 1 );
+	// [TP] Resolve the script netid into a script number
+	int scriptNum = NETWORK_ACSScriptFromNetID( netid );
 
 	// [TP] Make a name out of the levelnum
+	FString mapname;
+	level_info_t *levelinfo;
 	if ( levelnum == 0 )
 	{
 		mapname = level.mapname;
@@ -9915,203 +6569,97 @@ static void client_ACSScriptExecute( BYTESTREAM_s *pByteStream )
 	}
 	else
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ACSScriptExecute: Couldn't find map by levelnum: %d\n", levelnum );
-#endif
+		CLIENT_PrintWarning( "client_ACSScriptExecute: Couldn't find map by levelnum: %d\n", levelnum );
 		return;
 	}
 
-	// Find the actor that matches the given network ID.
-	// [BB] If the netID is invalid, assume that there is no activator, i.e. the world activated the script.
-	if ( lID == -1 )
-		pActor = NULL;
+	line_t* line;
+	if (( lineid <= 0 ) || ( lineid >= numlines ))
+		line = NULL;
 	else
-	{
-		pActor = CLIENT_FindThingByNetID( lID );
-		if ( pActor == NULL )
-		{
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_ACSScriptExecute: Couldn't find thing: %d\n", lID );
-#endif
-			return;
-		}
-	}
+		line = &lines[lineid];
 
-	if (( lLineIdx <= 0 ) || ( lLineIdx >= numlines ))
-		pLine = NULL;
-	else
-		pLine = &lines[lLineIdx];
-
-	P_StartScript( pActor, pLine, ulScript, mapname, bBackSide, args[0], args[1], args[2], bAlways, false );
+	int args[4] = { arg0, arg1, arg2, arg3 };
+	P_StartScript( activator, line, scriptNum, mapname, args, 4, ( backSide ? ACS_BACKSIDE : 0 ) | ( always ? ACS_ALWAYS : 0 ) );
 }
 
 //*****************************************************************************
 //
-static void client_Sound( BYTESTREAM_s *pByteStream )
+void ServerCommands::Sound::Execute()
 {
-	const char	*pszSoundString;
-	LONG		lChannel;
-	LONG		lVolume;
-	LONG		lAttenuation;
+	if ( volume > 127 )
+		volume = 127;
 
-	// Read in the channel.
-	lChannel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the name of the sound to play.
-	pszSoundString = NETWORK_ReadString( pByteStream );
-
-	// Read in the volume.
-	lVolume = NETWORK_ReadByte( pByteStream );
-	if ( lVolume > 127 )
-		lVolume = 127;
-
-	// Read in the attenuation.
-	lAttenuation = NETWORK_ReadByte( pByteStream );
-
-	// Finally, play the sound.
-	S_Sound( lChannel, pszSoundString, (float)lVolume / 127.f, NETWORK_AttenuationIntToFloat ( lAttenuation ) );
+	S_Sound( channel, sound, (float)volume / 127.f, NETWORK_AttenuationIntToFloat ( attenuation ) );
 }
 
 //*****************************************************************************
 //
-static void client_SoundActor( BYTESTREAM_s *pByteStream, bool bRespectActorPlayingSomething )
+void ServerCommands::SoundActor::Execute()
 {
-	LONG		lID;
-	const char	*pszSoundString;
-	LONG		lChannel;
-	LONG		lVolume;
-	LONG		lAttenuation;
-	AActor		*pActor;
+	if ( volume > 127 )
+		volume = 127;
 
-	// Read in the spot ID.
-	lID = NETWORK_ReadShort( pByteStream );
+	S_Sound( actor, channel, sound, (float)volume / 127.f, NETWORK_AttenuationIntToFloat ( attenuation ) );
+}
 
-	// Read in the channel.
-	lChannel = NETWORK_ReadShort( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SoundActorIfNotPlaying::Execute()
+{
+	if ( volume > 127 )
+		volume = 127;
 
-	// Read in the name of the sound to play.
-	pszSoundString = NETWORK_ReadString( pByteStream );
-
-	// Read in the volume.
-	lVolume = NETWORK_ReadByte( pByteStream );
-	if ( lVolume > 127 )
-		lVolume = 127;
-
-	// Read in the attenuation.
-	lAttenuation = NETWORK_ReadByte( pByteStream );
-
-	// Find the actor from the ID.
-	pActor = CLIENT_FindThingByNetID( lID );
-	if ( pActor == NULL )
-	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SoundActor: Couldn't find thing: %d\n", lID );
-#endif
-		return;
-	}
-
-	// [BB] If instructed to, check whether the actor is already playing something.
+	// [BB] Check whether the actor is already playing something.
 	// Note: The checking may not include CHAN_LOOP.
-	if ( bRespectActorPlayingSomething && S_IsActorPlayingSomething (pActor, lChannel & (~CHAN_LOOP), S_FindSound ( pszSoundString ) ) )
+	if ( S_IsActorPlayingSomething (actor, channel & (~CHAN_LOOP), S_FindSound ( sound ) ) )
 		return;
+
+	S_Sound( actor, channel, sound, (float)volume / 127.f, NETWORK_AttenuationIntToFloat ( attenuation ) );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SoundSector::Execute()
+{
+	if ( volume > 127 )
+		volume = 127;
+
+	S_Sound( sector, channel, sound, (float)volume / 127.f, NETWORK_AttenuationIntToFloat ( attenuation ) );
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SoundPoint::Execute()
+{
+	if ( volume > 127 )
+		volume = 127;
 
 	// Finally, play the sound.
-	S_Sound( pActor, lChannel, pszSoundString, (float)lVolume / 127.f, NETWORK_AttenuationIntToFloat ( lAttenuation ) );
+	S_Sound( x, y, z, channel, S_FindSound(sound), (float)volume / 127.f, NETWORK_AttenuationIntToFloat ( attenuation ) );
 }
 
 //*****************************************************************************
 //
-static void client_SoundPoint( BYTESTREAM_s *pByteStream )
+void ServerCommands::AnnouncerSound::Execute()
 {
-	const char	*pszSoundString;
-	LONG		lChannel;
-	LONG		lVolume;
-	LONG		lAttenuation;
-	fixed_t		X;
-	fixed_t		Y;
-	fixed_t		Z;
-
-	// Read in the XY of the sound.
-	X = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Y = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-	Z = NETWORK_ReadShort( pByteStream ) << FRACBITS;
-
-	// Read in the channel.
-	lChannel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the name of the sound to play.
-	pszSoundString = NETWORK_ReadString( pByteStream );
-
-	// Read in the volume.
-	lVolume = NETWORK_ReadByte( pByteStream );
-	if ( lVolume > 127 )
-		lVolume = 127;
-
-	// Read in the attenuation.
-	lAttenuation = NETWORK_ReadByte( pByteStream );
-
-	// Finally, play the sound.
-	S_Sound ( X, Y, Z, lChannel, S_FindSound(pszSoundString), (float)lVolume / 127.f, NETWORK_AttenuationIntToFloat ( lAttenuation ) );
+	ANNOUNCER_PlayEntry( cl_announcer, sound );
 }
 
 //*****************************************************************************
 //
-static void client_AnnouncerSound( BYTESTREAM_s *pByteStream )
+void ServerCommands::StartSectorSequence::Execute()
 {
-	const char	*pszEntry;
-
-	pszEntry = NETWORK_ReadString( pByteStream );
-	ANNOUNCER_PlayEntry ( cl_announcer, pszEntry );
+	SN_StartSequence( sector, channel, sequence.GetChars(), modeNum );
 }
 
 //*****************************************************************************
 //
-static void client_StartSectorSequence( BYTESTREAM_s *pByteStream )
+void ServerCommands::StopSectorSequence::Execute()
 {
-	LONG		lSectorID;
-	const char	*pszSequence;
-	sector_t	*pSector;
-
-	// Read in the sector ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	const int channel = NETWORK_ReadByte( pByteStream );
-
-	// Read in the sound sequence to play.
-	pszSequence = NETWORK_ReadString( pByteStream );
-
-	const int modenum = NETWORK_ReadByte( pByteStream );
-
-	// Make sure the sector ID is valid.
-	if (( lSectorID >= 0 ) && ( lSectorID < numsectors ))
-		pSector = &sectors[lSectorID];
-	else
-		return;
-
-	// Finally, play the given sound sequence for this sector.
-	SN_StartSequence( pSector, channel, pszSequence, modenum );
-}
-
-//*****************************************************************************
-//
-static void client_StopSectorSequence( BYTESTREAM_s *pByteStream )
-{
-	LONG		lSectorID;
-	sector_t	*pSector;
-
-	// Read in the sector ID.
-	lSectorID = NETWORK_ReadShort( pByteStream );
-
-	// Make sure the sector ID is valid.
-	if (( lSectorID >= 0 ) && ( lSectorID < numsectors ))
-		pSector = &sectors[lSectorID];
-	else
-		return;
-
-	// Finally, stop the sound sequence for this sector.
 	// [BB] We don't know which channel is supposed to stop, so just stop floor and ceiling for now.
-	SN_StopSequence( pSector, CHAN_CEILING );
-	SN_StopSequence( pSector, CHAN_FLOOR );
+	SN_StopSequence( sector, CHAN_CEILING );
+	SN_StopSequence( sector, CHAN_FLOOR );
 }
 
 //*****************************************************************************
@@ -10172,25 +6720,26 @@ static void client_VoteEnded( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_MapLoad( BYTESTREAM_s *pByteStream )
+void ServerCommands::MapLoad::Execute()
 {
-	bool	bPlaying;
-	const char	*pszMap;
-	
-	// Read in the lumpname of the map we're about to load.
-	pszMap = NETWORK_ReadString( pByteStream );
+	// [BB] We are about to change the map, so if we are playing a demo right now
+	// and wanted to skip the current map, we are done with it now.
+	CLIENTDEMO_SetSkippingToNextMap ( false );
 
 	// Check to see if we have the map.
-	if ( P_CheckIfMapExists( pszMap ))
+	if ( P_CheckIfMapExists( mapName ))
 	{
 		// Save our demo recording status since G_InitNew resets it.
-		bPlaying = CLIENTDEMO_IsPlaying( );
+		bool playing = CLIENTDEMO_IsPlaying( );
 
 		// Start new level.
-		G_InitNew( pszMap, false );
+		G_InitNew( mapName, false );
+
+		// [BB] We'll receive a full update for the new map from the server.
+		g_bFullUpdateIncomplete = true;
 
 		// Restore our demo recording status.
-		CLIENTDEMO_SetPlaying( bPlaying );
+		CLIENTDEMO_SetPlaying( playing );
 
 		// [BB] viewactive is set in G_InitNew
 		// For right now, the view is not active.
@@ -10200,20 +6749,25 @@ static void client_MapLoad( BYTESTREAM_s *pByteStream )
 		C_HideConsole( );
 	}
 	else
-		Printf( "client_MapLoad: Unknown map: %s\n", pszMap );
+		CLIENT_PrintWarning( "client_MapLoad: Unknown map: %s\n", mapName.GetChars() );
 }
 
 //*****************************************************************************
 //
-static void client_MapNew( BYTESTREAM_s *pByteStream )
+void ServerCommands::MapNew::Execute()
 {
-	const char	*pszMapName;
-
-	// Read in the new mapname the server is switching the level to.
-	pszMapName = NETWORK_ReadString( pByteStream );
+	// [BB] We are about to change the map, so if we are playing a demo right now
+	// and wanted to skip the current map, we are done with it now.
+	if ( CLIENTDEMO_IsSkippingToNextMap() == true )
+	{
+		// [BB] All the skipping seems to mess up the information which player is in game.
+		// Clearing everything will take care of this.
+		CLIENT_ClearAllPlayers();
+		CLIENTDEMO_SetSkippingToNextMap ( false );
+	}
 
 	// Clear out our local buffer.
-	NETWORK_ClearBuffer( &g_LocalBuffer );
+	g_LocalBuffer.Clear();
 
 	// Back to the full console.
 	gameaction = ga_fullconsole;
@@ -10221,10 +6775,7 @@ static void client_MapNew( BYTESTREAM_s *pByteStream )
 	// Also, the view is no longer active.
 	viewactive = false;
 
-	// [Dusk] We're also no longer in line at this point.
-	JOINQUEUE_SetClientPositionInLine( -1 );
-
-	Printf( "Connecting to %s\n%s\n", NETWORK_AddressToString( g_AddressServer ), pszMapName );
+	Printf( "Connecting to %s\n%s\n", g_AddressServer.ToString(), mapName.GetChars() );
 
 	// Update the connection state, and begin trying to reconnect.
 	CLIENT_SetConnectionState( CTS_ATTEMPTINGCONNECTION );
@@ -10233,16 +6784,11 @@ static void client_MapNew( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_MapExit( BYTESTREAM_s *pByteStream )
+void ServerCommands::MapExit::Execute()
 {
-	LONG	lPos;
-	const char	*pszNextMap;
-
-	// Read in the position we're supposed to spawn at (is this needed?).
-	lPos = NETWORK_ReadByte( pByteStream );
-
-	// Read in the next map.
-	pszNextMap = NETWORK_ReadString( pByteStream );
+	// [BB] We are about to change the map, so if we are playing a demo right now
+	// and wanted to skip the current map, we are done with it now.
+	CLIENTDEMO_SetSkippingToNextMap ( false );
 
 	if (( gamestate == GS_FULLCONSOLE ) ||
 		( gamestate == GS_INTERMISSION ))
@@ -10250,17 +6796,13 @@ static void client_MapExit( BYTESTREAM_s *pByteStream )
 		return;
 	}
 
-	G_ChangeLevel( pszNextMap, lPos, true );
+	G_ChangeLevel( nextMap, position, true );
 }
 
 //*****************************************************************************
 //
-static void client_MapAuthenticate( BYTESTREAM_s *pByteStream )
+void ServerCommands::MapAuthenticate::Execute()
 {
-	const char	*pszMapName;
-
-	pszMapName = NETWORK_ReadString( pByteStream );
-
 	// Nothing to do in demo mode.
 	if ( CLIENTDEMO_IsPlaying( ))
 		return;
@@ -10269,94 +6811,77 @@ static void client_MapAuthenticate( BYTESTREAM_s *pByteStream )
 
 	// [BB] Send the name of the map we are authenticating, this allows the
 	// server to check whether we try to authenticate the correct map.
-	NETWORK_WriteString( &g_LocalBuffer.ByteStream, pszMapName );
+	NETWORK_WriteString( &g_LocalBuffer.ByteStream, mapName );
 
 	// Send a checksum of our verticies, linedefs, sidedefs, and sectors.
-	CLIENT_AuthenticateLevel( pszMapName );
+	CLIENT_AuthenticateLevel( mapName );
 }
 
 //*****************************************************************************
 //
-static void client_SetMapTime( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapTime::Execute()
 {
-	level.time = NETWORK_ReadLong( pByteStream );
+	level.time = time;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapNumKilledMonsters( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumKilledMonsters::Execute()
 {
-	level.killed_monsters = NETWORK_ReadShort( pByteStream );
+	level.killed_monsters = killedMonsters;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapNumFoundItems( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumFoundItems::Execute()
 {
-	level.found_items = NETWORK_ReadShort( pByteStream );
+	level.found_items = foundItems;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapNumFoundSecrets( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumFoundSecrets::Execute()
 {
-	level.found_secrets = NETWORK_ReadShort( pByteStream );
+	level.found_secrets = foundSecrets;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapNumTotalMonsters( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumTotalMonsters::Execute()
 {
-	level.total_monsters = NETWORK_ReadShort( pByteStream );
+	level.total_monsters = totalMonsters;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapNumTotalItems( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumTotalItems::Execute()
 {
-	level.total_items = NETWORK_ReadShort( pByteStream );
+	level.total_items = totalItems;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapMusic( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapNumTotalSecrets::Execute()
 {
-	const char	*pszMusicString;
-
-	// Read in the music string.
-	pszMusicString = NETWORK_ReadString( pByteStream );
-
-	// [TP] Read in the music order.
-	int order = NETWORK_ReadByte( pByteStream );
-
-	// Change the music.
-	S_ChangeMusic( pszMusicString, order );
+	level.total_secrets = totalSecrets;
 }
 
 //*****************************************************************************
 //
-static void client_SetMapSky( BYTESTREAM_s *pByteStream )
+void ServerCommands::SetMapMusic::Execute()
 {
-	const char	*pszSky1;
-	const char	*pszSky2;
+	S_ChangeMusic( music, order );
+}
 
-	// Read in the texture name of the first sky.
-	pszSky1 = NETWORK_ReadString( pByteStream );
+//*****************************************************************************
+//
+void ServerCommands::SetMapSky::Execute()
+{
+	strncpy( level.skypic1, sky1, 8 );
+	sky1texture = TexMan.GetTexture( sky1, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
 
-	if ( pszSky1 != NULL )
-	{
-		strncpy( level.skypic1, pszSky1, 8 );
-		sky1texture = TexMan.GetTexture( pszSky1, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
-	}
-
-	// Read in the texture name of the second sky.
-	pszSky2 = NETWORK_ReadString( pByteStream );
-
-	if ( pszSky2 != NULL )
-	{
-		strncpy( level.skypic2, pszSky2, 8 );
-		sky2texture = TexMan.GetTexture( pszSky2, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
-	}
+	strncpy( level.skypic2, sky2, 8 );
+	sky2texture = TexMan.GetTexture( sky2, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
 
 	// Set some other sky properties.
 	R_InitSkyMap( );
@@ -10431,12 +6956,14 @@ static void client_GiveInventory( BYTESTREAM_s *pByteStream )
 		}
 	}
 
-	// If he still doesn't have the object after trying to give it to him... then YIKES!
 	if ( pInventory == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_GiveInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
+		// If he still doesn't have the object after trying to give it to him... then YIKES!
+		if ( ( pType->IsDescendantOf( RUNTIME_CLASS( ABasicArmorPickup ) ) == false ) 
+			 && ( pType->IsDescendantOf( RUNTIME_CLASS( ABasicArmorBonus ) ) == false )
+			 && ( pType->IsDescendantOf( RUNTIME_CLASS( AHealth ) ) == false )
+			 && ( players[ulPlayer].mo->FindInventory( pType ) == NULL ) )
+			CLIENT_PrintWarning( "client_GiveInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
 		return;
 	}
 
@@ -10487,15 +7014,15 @@ static void client_TakeInventory( BYTESTREAM_s *pByteStream )
 {
 	const PClass	*pType;
 	ULONG			ulPlayer;
-	const char		*pszName;
+	USHORT			actorNetworkIndex;
 	LONG			lAmount;
 	AInventory		*pInventory;
 
 	// Read in the player ID.
 	ulPlayer = NETWORK_ReadByte( pByteStream );
 
-	// Read in the name of the type of item to take away.
-	pszName = NETWORK_ReadString( pByteStream );
+	// Read in the identification of the type of item to take away.
+	actorNetworkIndex = NETWORK_ReadShort( pByteStream );
 
 	// Read in the new amount of this inventory type the player has.
 	lAmount = NETWORK_ReadLong( pByteStream );
@@ -10504,34 +7031,42 @@ static void client_TakeInventory( BYTESTREAM_s *pByteStream )
 	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
 		return;
 
-	pType = PClass::FindClass( pszName );
+	pType = NETWORK_GetClassFromIdentification( actorNetworkIndex );
 	if ( pType == NULL )
+		return;
+
+	if ( pType->IsDescendantOf( RUNTIME_CLASS( AInventory )) == false )
 		return;
 
 	// Try to find this object within the player's personal inventory.
 	pInventory = players[ulPlayer].mo->FindInventory( pType );
 
-	// If the player doesn't have this type, give it to him.
-	if ( pInventory == NULL )
-		pInventory = players[ulPlayer].mo->GiveInventoryType( pType );
-
-	// If he still doesn't have the object after trying to give it to him... then YIKES!
-	if ( pInventory == NULL )
+	// [TP] If we're trying to set the item amount to 0, then destroy the item if the player has it.
+	if ( lAmount <= 0 )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_TakeInventory: Failed to give inventory type, %s!\n", pszName );
-#endif
-		return;
+		if ( pInventory )
+		{
+			if ( pInventory->ItemFlags & IF_KEEPDEPLETED )
+				pInventory->Amount = 0;
+			else
+				pInventory->Destroy( );
+		}
 	}
-
-	// Set the new amount of the inventory object.
-	pInventory->Amount = lAmount;
-	if ( pInventory->Amount <= 0 )
+	else if ( lAmount > 0 )
 	{
-		if ( pInventory->ItemFlags & IF_KEEPDEPLETED )
-			pInventory->Amount = 0;
-		else
-			pInventory->Destroy( );
+		// If the player doesn't have this type, give it to him.
+		if ( pInventory == NULL )
+			pInventory = players[ulPlayer].mo->GiveInventoryType( pType );
+
+		// If he still doesn't have the object after trying to give it to him... then YIKES!
+		if ( pInventory == NULL )
+		{
+			CLIENT_PrintWarning( "client_TakeInventory: Failed to give inventory type, %s!\n", pType->TypeName.GetChars());
+			return;
+		}
+
+		// Set the new amount of the inventory object.
+		pInventory->Amount = lAmount;
 	}
 
 	// Since an item displayed on the HUD may have been taken away, refresh the HUD.
@@ -10558,8 +7093,11 @@ static void client_GivePowerup( BYTESTREAM_s *pByteStream )
 	// Read in the amount of this inventory type the player has.
 	lAmount = NETWORK_ReadShort( pByteStream );
 
+	// [TP]
+	bool isRune = !!NETWORK_ReadByte( pByteStream );
+
 	// Read in the amount of time left on this powerup.
-	lEffectTics = NETWORK_ReadShort( pByteStream );
+	lEffectTics = ( isRune == false ) ? NETWORK_ReadShort( pByteStream ) : 0;
 
 	// Check to make sure everything is valid. If not, break out.
 	if (( PLAYER_IsValidPlayer( ulPlayer ) == false ) || ( players[ulPlayer].mo == NULL ))
@@ -10583,9 +7121,7 @@ static void client_GivePowerup( BYTESTREAM_s *pByteStream )
 	// If he still doesn't have the object after trying to give it to him... then YIKES!
 	if ( pInventory == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_TakeInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
-#endif
+		CLIENT_PrintWarning( "client_TakeInventory: Failed to give inventory type, %s!\n", NETWORK_GetClassNameFromIdentification( usActorNetworkIndex ));
 		return;
 	}
 
@@ -10598,7 +7134,13 @@ static void client_GivePowerup( BYTESTREAM_s *pByteStream )
 	}
 
 	if ( pInventory )
+	{
 		static_cast<APowerup *>( pInventory )->EffectTics = lEffectTics;
+
+		// [TP]
+		if ( isRune )
+			pInventory->Owner->Rune = static_cast<APowerup *>( pInventory );
+	}
 
 	// Since an item displayed on the HUD may have been given, refresh the HUD.
 	SCOREBOARD_RefreshHUD( );
@@ -10692,7 +7234,7 @@ static void client_DestroyAllInventory( BYTESTREAM_s *pByteStream )
 	// Finally, destroy the player's inventory.
 	// [BB] Be careful here, we may not use mo->DestroyAllInventory( ), otherwise
 	// AHexenArmor messes up.
-	DoClearInv ( players[ulPlayer].mo );
+	players[ulPlayer].mo->ClearInventory();
 }
 
 //*****************************************************************************
@@ -10700,7 +7242,7 @@ static void client_DestroyAllInventory( BYTESTREAM_s *pByteStream )
 static void client_SetInventoryIcon( BYTESTREAM_s *pByteStream )
 {
 	const ULONG ulPlayer = NETWORK_ReadByte( pByteStream );
-	const ULONG usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
+	const USHORT usActorNetworkIndex = NETWORK_ReadShort( pByteStream );
 	const FString iconTexName = NETWORK_ReadString( pByteStream );
 
 	// Check to make sure everything is valid. If not, break out.
@@ -10763,9 +7305,7 @@ static void client_DoDoor( BYTESTREAM_s *pByteStream )
 	// If door already has a thinker, we can't spawn a new door on it.
 	if ( pSector->ceilingdata )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoDoor: WARNING! Door's sector already has a ceiling mover attached to it!" );
-#endif
+		CLIENT_PrintWarning( "client_DoDoor: WARNING! Door's sector already has a ceiling mover attached to it!\n" );
 		return;
 	}
 
@@ -10790,9 +7330,7 @@ static void client_DestroyDoor( BYTESTREAM_s *pByteStream )
 	pDoor = P_GetDoorByID( lDoorID );
 	if ( pDoor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyDoor: Couldn't find door with ID: %d!\n", lDoorID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyDoor: Couldn't find door with ID: %ld!\n", lDoorID );
 		return;
 	}
 
@@ -10822,9 +7360,7 @@ static void client_ChangeDoorDirection( BYTESTREAM_s *pByteStream )
 	pDoor = P_GetDoorByID( lDoorID );
 	if ( pDoor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeDoorDirection: Couldn't find door with ID: %d!\n", lDoorID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeDoorDirection: Couldn't find door with ID: %ld!\n", lDoorID );
 		return;
 	}
 
@@ -10869,7 +7405,7 @@ static void client_DoFloor( BYTESTREAM_s *pByteStream )
 	Crush = static_cast<SBYTE>( NETWORK_ReadByte( pByteStream ) );
 
 	// Read in the floor's crush type.
-	Hexencrush = NETWORK_ReadByte( pByteStream );
+	Hexencrush = !!NETWORK_ReadByte( pByteStream );
 
 	// Read in the floor's network ID.
 	lFloorID = NETWORK_ReadShort( pByteStream );
@@ -10913,9 +7449,7 @@ static void client_DestroyFloor( BYTESTREAM_s *pByteStream )
 	pFloor = P_GetFloorByID( lFloorID );
 	if ( pFloor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeFloorType: Couldn't find ceiling with ID: %d!\n", lFloorID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeFloorType: Couldn't find floor with ID: %ld!\n", lFloorID );
 		return;
 	}
 
@@ -10946,9 +7480,7 @@ static void client_ChangeFloorDirection( BYTESTREAM_s *pByteStream )
 	pFloor = P_GetFloorByID( lFloorID );
 	if ( pFloor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeFloorType: Couldn't find ceiling with ID: %d!\n", lFloorID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeFloorType: Couldn't find floor with ID: %ld!\n", lFloorID );
 		return;
 	}
 
@@ -10972,9 +7504,7 @@ static void client_ChangeFloorType( BYTESTREAM_s *pByteStream )
 	pFloor = P_GetFloorByID( lFloorID );
 	if ( pFloor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeFloorType: Couldn't find ceiling with ID: %d!\n", lFloorID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeFloorType: Couldn't find ceiling with ID: %ld!\n", lFloorID );
 		return;
 	}
 
@@ -10998,9 +7528,7 @@ static void client_ChangeFloorDestDist( BYTESTREAM_s *pByteStream )
 	pFloor = P_GetFloorByID( lFloorID );
 	if ( pFloor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeFloorType: Couldn't find ceiling with ID: %d!\n", lFloorID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeFloorType: Couldn't find floor with ID: %ld!\n", lFloorID );
 		return;
 	}
 
@@ -11020,9 +7548,7 @@ static void client_StartFloorSound( BYTESTREAM_s *pByteStream )
 	pFloor = P_GetFloorByID( lFloorID );
 	if ( pFloor == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_StartFloorSound: Couldn't find ceiling with ID: %d!\n", lFloorID );
-#endif
+		CLIENT_PrintWarning( "client_StartFloorSound: Couldn't find floor with ID: %ld!\n", lFloorID );
 		return;
 	}
 
@@ -11053,7 +7579,7 @@ static void client_BuildStair( BYTESTREAM_s *pByteStream )
 	int Crush = static_cast<SBYTE>( NETWORK_ReadByte( pByteStream ) );
 
 	// Read in the floor's crush type.
-	bool Hexencrush = NETWORK_ReadByte( pByteStream );
+	bool Hexencrush = !!NETWORK_ReadByte( pByteStream );
 
 	// Read in the floor's reset count.
 	int ResetCount = NETWORK_ReadLong( pByteStream );
@@ -11137,7 +7663,7 @@ static void client_DoCeiling( BYTESTREAM_s *pByteStream )
 	lCrush = static_cast<SBYTE>( NETWORK_ReadByte( pByteStream ) );
 
 	// Is this ceiling crush Hexen style?
-	Hexencrush = NETWORK_ReadByte( pByteStream );
+	Hexencrush = !!NETWORK_ReadByte( pByteStream );
 
 	// Does this ceiling make noise?
 	lSilent = NETWORK_ReadShort( pByteStream );
@@ -11179,9 +7705,7 @@ static void client_DestroyCeiling( BYTESTREAM_s *pByteStream )
 	pCeiling = P_GetCeilingByID( lCeilingID );
 	if ( pCeiling == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyCeiling: Couldn't find ceiling with ID: %d!\n", lCeilingID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyCeiling: Couldn't find ceiling with ID: %ld!\n", lCeilingID );
 		return;
 	}
 
@@ -11212,9 +7736,7 @@ static void client_ChangeCeilingDirection( BYTESTREAM_s *pByteStream )
 	pCeiling = P_GetCeilingByID( lCeilingID );
 	if ( pCeiling == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeCeilingDirection: Couldn't find ceiling with ID: %d!\n", lCeilingID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeCeilingDirection: Couldn't find ceiling with ID: %ld!\n", lCeilingID );
 		return;
 	}
 
@@ -11239,9 +7761,7 @@ static void client_ChangeCeilingSpeed( BYTESTREAM_s *pByteStream )
 	pCeiling = P_GetCeilingByID( lCeilingID );
 	if ( pCeiling == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangeCeilingSpeed: Couldn't find ceiling with ID: %d!\n", lCeilingID );
-#endif
+		CLIENT_PrintWarning( "client_ChangeCeilingSpeed: Couldn't find ceiling with ID: %ld!\n", lCeilingID );
 		return;
 	}
 
@@ -11261,9 +7781,7 @@ static void client_PlayCeilingSound( BYTESTREAM_s *pByteStream )
 	pCeiling = P_GetCeilingByID( lCeilingID );
 	if ( pCeiling == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_PlayCeilingSound: Couldn't find ceiling with ID: %d!\n", lCeilingID );
-#endif
+		CLIENT_PrintWarning( "client_PlayCeilingSound: Couldn't find ceiling with ID: %ld!\n", lCeilingID );
 		return;
 	}
 
@@ -11341,9 +7859,7 @@ static void client_DestroyPlat( BYTESTREAM_s *pByteStream )
 	pPlat = P_GetPlatByID( lPlatID );
 	if ( pPlat == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyPlat: Couldn't find plat with ID: %d!\n", lPlatID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyPlat: Couldn't find plat with ID: %ld!\n", lPlatID );
 		return;
 	}
 
@@ -11367,9 +7883,7 @@ static void client_ChangePlatStatus( BYTESTREAM_s *pByteStream )
 	pPlat = P_GetPlatByID( lPlatID );
 	if ( pPlat == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_ChangePlatStatus: Couldn't find plat with ID: %d!\n", lPlatID );
-#endif
+		CLIENT_PrintWarning( "client_ChangePlatStatus: Couldn't find plat with ID: %ld!\n", lPlatID );
 		return;
 	}
 
@@ -11393,9 +7907,7 @@ static void client_PlayPlatSound( BYTESTREAM_s *pByteStream )
 	pPlat = P_GetPlatByID( lPlatID );
 	if ( pPlat == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_PlayPlatSound: Couldn't find plat with ID: %d!\n", lPlatID );
-#endif
+		CLIENT_PrintWarning( "client_PlayPlatSound: Couldn't find plat with ID: %ld!\n", lPlatID );
 		return;
 	}
 
@@ -11490,9 +8002,7 @@ static void client_DestroyElevator( BYTESTREAM_s *pByteStream )
 	pElevator = P_GetElevatorByID( lElevatorID );
 	if ( pElevator == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyElevator: Couldn't find elevator with ID: %d!\n", lElevatorID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyElevator: Couldn't find elevator with ID: %ld!\n", lElevatorID );
 		return;
 	}
 
@@ -11520,9 +8030,7 @@ static void client_StartElevatorSound( BYTESTREAM_s *pByteStream )
 	pElevator = P_GetElevatorByID( lElevatorID );
 	if ( pElevator == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_StartElevatorSound: Couldn't find elevator with ID: %d!\n", lElevatorID );
-#endif
+		CLIENT_PrintWarning( "client_StartElevatorSound: Couldn't find elevator with ID: %ld!\n", lElevatorID );
 		return;
 	}
 
@@ -11562,7 +8070,7 @@ static void client_DoPillar( BYTESTREAM_s *pByteStream )
 
 	// Read in the crush info.
 	Crush = static_cast<SBYTE>( NETWORK_ReadByte( pByteStream ) );
-	Hexencrush = NETWORK_ReadByte( pByteStream );
+	Hexencrush = !!NETWORK_ReadByte( pByteStream );
 
 	// Read in the pillar ID.
 	lPillarID = NETWORK_ReadShort( pByteStream );
@@ -11604,9 +8112,7 @@ static void client_DestroyPillar( BYTESTREAM_s *pByteStream )
 	pPillar = P_GetPillarByID( lPillarID );
 	if ( pPillar == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyPillar: Couldn't find pillar with ID: %d!\n", lPillarID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyPillar: Couldn't find pillar with ID: %ld!\n", lPillarID );
 		return;
 	}
 
@@ -11688,9 +8194,7 @@ static void client_DestroyWaggle( BYTESTREAM_s *pByteStream )
 	pWaggle = P_GetWaggleByID( lWaggleID );
 	if ( pWaggle == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyWaggle: Couldn't find waggle with ID: %d!\n", lWaggleID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyWaggle: Couldn't find waggle with ID: %ld!\n", lWaggleID );
 		return;
 	}
 
@@ -11715,9 +8219,7 @@ static void client_UpdateWaggle( BYTESTREAM_s *pByteStream )
 	pWaggle = P_GetWaggleByID( lWaggleID );
 	if ( pWaggle == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DestroyWaggle: Couldn't find waggle with ID: %d!\n", lWaggleID );
-#endif
+		CLIENT_PrintWarning( "client_DestroyWaggle: Couldn't find waggle with ID: %ld!\n", lWaggleID );
 		return;
 	}
 
@@ -11744,9 +8246,7 @@ static void client_DoRotatePoly( BYTESTREAM_s *pByteStream )
 	pPoly = PO_GetPolyobj( lPolyNum );
 	if ( pPoly == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoRotatePoly: Invalid polyobj number: %d\n", lPolyNum );
-#endif
+		CLIENT_PrintWarning( "client_DoRotatePoly: Invalid polyobj number: %ld\n", lPolyNum );
 		return;
 	}
 
@@ -11809,9 +8309,7 @@ static void client_DoMovePoly( BYTESTREAM_s *pByteStream )
 	pPoly = PO_GetPolyobj( lPolyNum );
 	if ( pPoly == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoRotatePoly: Invalid polyobj number: %d\n", lPolyNum );
-#endif
+		CLIENT_PrintWarning( "client_DoRotatePoly: Invalid polyobj number: %ld\n", lPolyNum );
 		return;
 	}
 
@@ -11881,9 +8379,7 @@ static void client_DoPolyDoor( BYTESTREAM_s *pByteStream )
 	pPoly = PO_GetPolyobj( lPolyNum );
 	if ( pPoly == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoPolyDoor: Invalid polyobj number: %d\n", lPolyNum );
-#endif
+		CLIENT_PrintWarning( "client_DoPolyDoor: Invalid polyobj number: %ld\n", lPolyNum );
 		return;
 	}
 
@@ -12009,7 +8505,7 @@ static void client_PlayPolyobjSound( BYTESTREAM_s *pByteStream )
 	lID = NETWORK_ReadShort( pByteStream );
 
 	// Read in the polyobject mode.
-	PolyMode = NETWORK_ReadByte( pByteStream );
+	PolyMode = !!NETWORK_ReadByte( pByteStream );
 
 	pPoly = PO_GetPolyobj( lID );
 	if ( pPoly == NULL )
@@ -12057,9 +8553,7 @@ static void client_SetPolyobjPosition( BYTESTREAM_s *pByteStream )
 	pPoly = PO_GetPolyobj( lPolyNum );
 	if ( pPoly == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetPolyobjPosition: Invalid polyobj number: %d\n", lPolyNum );
-#endif
+		CLIENT_PrintWarning( "client_SetPolyobjPosition: Invalid polyobj number: %ld\n", lPolyNum );
 		return;
 	}
 
@@ -12091,9 +8585,7 @@ static void client_SetPolyobjRotation( BYTESTREAM_s *pByteStream )
 	pPoly = PO_GetPolyobj( lPolyNum );
 	if ( pPoly == NULL )
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_SetPolyobjRotation: Invalid polyobj number: %d\n", lPolyNum );
-#endif
+		CLIENT_PrintWarning( "client_SetPolyobjRotation: Invalid polyobj number: %ld\n", lPolyNum );
 		return;
 	}
 
@@ -12140,35 +8632,6 @@ static void client_EarthQuake( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-static void client_SetQueuePosition( BYTESTREAM_s *pByteStream )
-{
-	LONG	lPosition;
-
-	// Read in our position in the join queue.
-	lPosition = NETWORK_ReadByte( pByteStream );
-
-	// [BB] We were removed from the queue for whatever reason.
-	if ( lPosition == 255 )
-	{
-		JOINQUEUE_SetClientPositionInLine( -1 );
-		return;
-	}
-	// [BB] This should never happen!
-	else if ( lPosition == MAXPLAYERS )
-	{
-		Printf( "Join queue full!\n" );
-		JOINQUEUE_SetClientPositionInLine( -1 );
-		return;
-	}
-	else
-		Printf( "Your position in line is: %d\n", static_cast<int> (lPosition + 1) );
-
-	// Update the joinqueue module with our position in line.
-	JOINQUEUE_SetClientPositionInLine( lPosition );
-}
-
-//*****************************************************************************
-//
 static void client_DoScroller( BYTESTREAM_s *pByteStream )
 {
 	DScroller::EScrollType	Type;
@@ -12193,7 +8656,7 @@ static void client_DoScroller( BYTESTREAM_s *pByteStream )
 	if (( Type != DScroller::sc_floor ) && ( Type != DScroller::sc_ceiling ) &&
 		( Type != DScroller::sc_carry ) && ( Type != DScroller::sc_carry_ceiling ) && ( Type != DScroller::sc_side ) )
 	{
-		Printf( "client_DoScroller: Unknown type: %d!\n", static_cast<int> (Type) );
+		CLIENT_PrintWarning( "client_DoScroller: Unknown type: %d!\n", static_cast<int> (Type) );
 		return;
 	}
 
@@ -12201,17 +8664,13 @@ static void client_DoScroller( BYTESTREAM_s *pByteStream )
 	{
 		if (( lAffectee < 0 ) || ( lAffectee >= numsides ))
 		{
-#ifdef CLIENT_WARNING_MESSAGES
-			Printf( "client_DoScroller: Invalid side ID: %d!\n", lAffectee );
-#endif
+			CLIENT_PrintWarning( "client_DoScroller: Invalid side ID: %ld!\n", lAffectee );
 			return;
 		}
 	}
 	else if (( lAffectee < 0 ) || ( lAffectee >= numsectors ))
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "client_DoScroller: Invalid sector ID: %d!\n", lAffectee );
-#endif
+		CLIENT_PrintWarning( "client_DoScroller: Invalid sector ID: %ld!\n", lAffectee );
 		return;
 	}
 
@@ -12247,7 +8706,7 @@ static void client_SetScroller( BYTESTREAM_s *pByteStream )
 	if (( Type != DScroller::sc_floor ) && ( Type != DScroller::sc_ceiling ) &&
 		( Type != DScroller::sc_carry ) && ( Type != DScroller::sc_carry_ceiling ))
 	{
-		Printf( "client_SetScroller: Unknown type: %d!\n", static_cast<int> (Type) );
+		CLIENT_PrintWarning( "client_SetScroller: Unknown type: %d!\n", static_cast<int> (Type) );
 		return;
 	}
 
@@ -12374,7 +8833,7 @@ static void client_SetCameraToTexture( BYTESTREAM_s *pByteStream )
 	picNum = TexMan.CheckForTexture( pszTexture, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable );
 	if ( !picNum.Exists() )
 	{
-		Printf( "client_SetCameraToTexture: %s is not a texture\n", pszTexture );
+		CLIENT_PrintWarning( "client_SetCameraToTexture: %s is not a texture\n", pszTexture );
 		return;
 	}
 
@@ -12454,7 +8913,7 @@ static void client_IgnorePlayer( BYTESTREAM_s *pByteStream )
 		players[ulPlayer].bIgnoreChat = true;
 		players[ulPlayer].lIgnoreChatTicks = lTicks;
 
-		Printf( "%s\\c- will be ignored, because you're ignoring %s IP.\n", players[ulPlayer].userinfo.netname, players[ulPlayer].userinfo.gender == GENDER_MALE ? "his" : players[ulPlayer].userinfo.gender == GENDER_FEMALE ? "her" : "its" );
+		Printf( "%s\\c- will be ignored, because you're ignoring %s IP.\n", players[ulPlayer].userinfo.GetName(), players[ulPlayer].userinfo.GetGender() == GENDER_MALE ? "his" : players[ulPlayer].userinfo.GetGender() == GENDER_FEMALE ? "her" : "its" );
 	}
 }
 
@@ -12487,13 +8946,9 @@ static void client_AdjustPusher( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-void STClient::ReplaceTextures( BYTESTREAM_s *pByteStream )
+void ServerCommands::ReplaceTextures::Execute()
 {
-	int iFromname = NETWORK_ReadLong( pByteStream );
-	int iToname = NETWORK_ReadLong( pByteStream );
-	int iTexFlags = NETWORK_ReadByte( pByteStream );
-
-	DLevelScript::ReplaceTextures ( iFromname, iToname, iTexFlags );
+	DLevelScript::ReplaceTextures( fromTexture, toTexture, textureFlags );
 }
 
 //*****************************************************************************
@@ -12513,10 +8968,31 @@ void APathFollower::InitFromStream ( BYTESTREAM_s *pByteStream )
 	}
 	else
 	{
-#ifdef CLIENT_WARNING_MESSAGES
-		Printf( "APathFollower::InitFromStream: Couldn't find actor.\n" );
-#endif
+		CLIENT_PrintWarning( "APathFollower::InitFromStream: Couldn't find actor.\n" );
 		return;
+	}
+}
+
+//*****************************************************************************
+//
+void ServerCommands::SyncJoinQueue::Execute()
+{
+	JOINQUEUE_ClearList();
+
+	for ( unsigned int i = 0; i < slots.Size(); ++i )
+		JOINQUEUE_AddPlayer( slots[i].player, slots[i].team );
+}
+
+//*****************************************************************************
+//
+void STACK_ARGS CLIENT_PrintWarning( const char* format, ... )
+{
+	if ( cl_showwarnings )
+	{
+		va_list args;
+		va_start( args, format );
+		VPrintf( PRINT_HIGH, format, args );
+		va_end( args );
 	}
 }
 
@@ -12540,7 +9016,9 @@ CCMD( connect )
 	}
 
 	// Potentially disconnect from the current server.
-	CLIENT_QuitNetworkGame( NULL );
+	// [EP] Makes sense only for clients.
+	if ( NETWORK_GetState() == NETSTATE_CLIENT )
+		CLIENT_QuitNetworkGame( NULL );
 
 	// Put the game in client mode.
 	NETWORK_SetState( NETSTATE_CLIENT );
@@ -12554,11 +9032,11 @@ CCMD( connect )
 	R_SetVisibility( 8.0f );
 
 	// Create a server IP from the given string.
-	NETWORK_StringToAddress( argv[1], &g_AddressServer );
+	g_AddressServer.LoadFromString( argv[1] );
 
 	// If the user didn't specify a port, use the default port.
 	if ( g_AddressServer.usPort == 0 )
-		NETWORK_SetAddressPort( g_AddressServer, DEFAULT_SERVER_PORT );
+		g_AddressServer.SetPort( DEFAULT_SERVER_PORT );
 
 	g_AddressLastConnected = g_AddressServer;
 
@@ -12585,9 +9063,7 @@ CCMD( disconnect )
 	if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
 		return;
 
-	// [BB] While disconnecting is not an error, I_Error is a convenient way to abort the current game and reset everything.
-	// [Dusk] Use a whitespace to suppress GCC warnings.
-	I_Error ( " " );
+	CLIENT_QuitNetworkGame ( NULL );
 }
 
 //*****************************************************************************
@@ -12610,7 +9086,7 @@ CCMD( timeout )
 		if ( g_lBytesSent > g_lMaxBytesSent )
 			g_lMaxBytesSent = g_lBytesSent;
 		NETWORK_LaunchPacket( g_LocalBuffer, g_AddressServer );
-		NETWORK_ClearBuffer( &g_LocalBuffer );
+		g_LocalBuffer.Clear();
 	}
 */
 	// Clear out our copy of the server address.
@@ -12742,7 +9218,7 @@ CVAR( Bool, cl_predict_players, true, CVAR_ARCHIVE )
 //CVAR( Int, cl_maxmonstercorpses, 0, CVAR_ARCHIVE )
 CVAR( Float, cl_motdtime, 5.0, CVAR_ARCHIVE )
 CVAR( Bool, cl_taunts, true, CVAR_ARCHIVE )
-CVAR( Int, cl_showcommands, 0, CVAR_ARCHIVE )
+CVAR( Int, cl_showcommands, 0, CVAR_ARCHIVE|CVAR_DEBUGONLY )
 CVAR( Int, cl_showspawnnames, 0, CVAR_ARCHIVE )
 CVAR( Int, cl_connect_flags, CCF_STARTASSPECTATOR, CVAR_ARCHIVE );
 CVAR( Flag, cl_startasspectator, cl_connect_flags, CCF_STARTASSPECTATOR );

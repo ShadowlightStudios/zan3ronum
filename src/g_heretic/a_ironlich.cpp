@@ -19,12 +19,12 @@ class AWhirlwind : public AActor
 {
 	DECLARE_CLASS (AWhirlwind, AActor)
 public:
-	int DoSpecialDamage (AActor *target, int damage);
+	int DoSpecialDamage (AActor *target, int damage, FName damagetype);
 };
 
 IMPLEMENT_CLASS(AWhirlwind)
 
-int AWhirlwind::DoSpecialDamage (AActor *target, int damage)
+int AWhirlwind::DoSpecialDamage (AActor *target, int damage, FName damagetype)
 {
 	int randVal;
 
@@ -70,8 +70,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 	int dist;
 
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -90,8 +89,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 	if (self->CheckMeleeRange ())
 	{
 		int damage = pr_atk.HitDice (6);
-		P_DamageMobj (target, self, self, damage, NAME_Melee);
-		P_TraceBleed (damage, target, self);
+		int newdam = P_DamageMobj (target, self, self, damage, NAME_Melee);
+		P_TraceBleed (newdam > 0 ? newdam : damage, target, self);
 		return;
 	}
 	dist = P_AproxDistance (self->x-target->x, self->y-target->y)
@@ -99,15 +98,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 	randAttack = pr_atk ();
 	if (randAttack < atkResolve1[dist])
 	{ // Ice ball
-		AActor *missile = P_SpawnMissile (self, target, PClass::FindClass("HeadFX1"));
-		S_Sound (self, CHAN_BODY, "ironlich/attack2", 1, ATTN_NORM);
-
-		// [BB] If we're the server, tell the clients to spawn this missile and play the sound.
-		if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && missile )
-		{
-			SERVERCOMMANDS_SpawnMissile( missile );
-			SERVERCOMMANDS_SoundActor( self, CHAN_BODY, "ironlich/attack2", 1, ATTN_NORM );
-		}
+		P_SpawnMissile (self, target, PClass::FindClass("HeadFX1"), NULL, true); // [BB] Inform clients
+		S_Sound (self, CHAN_BODY, "ironlich/attack2", 1, ATTN_NORM, true);	// [BB] Inform the clients.
 	}
 	else if (randAttack < atkResolve2[dist])
 	{ // Fire column
@@ -128,11 +120,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 					baseFire->z, ALLOW_REPLACE);
 				if (i == 0)
 				{
-					S_Sound (self, CHAN_BODY, "ironlich/attack1", 1, ATTN_NORM);
-
-					// [BB] If we're the server, tell the clients to play the sound.
-					if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
-						SERVERCOMMANDS_SoundActor( self, CHAN_BODY, "ironlich/attack1", 1, ATTN_NORM );
+					S_Sound (self, CHAN_BODY, "ironlich/attack1", 1, ATTN_NORM, true);	// [BB] Inform the clients.
 				}
 				fire->target = baseFire->target;
 				fire->angle = baseFire->angle;
@@ -147,7 +135,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 				if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
 					SERVERCOMMANDS_SpawnMissile( fire );
 
-				P_CheckMissileSpawn (fire);
+				P_CheckMissileSpawn (fire, self->radius);
 			}
 		}
 	}
@@ -161,13 +149,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichAttack)
 			mo->special1 = 60;
 			mo->special2 = 50; // Timer for active sound
 			mo->health = 20*TICRATE; // Duration
-			S_Sound (self, CHAN_BODY, "ironlich/attack3", 1, ATTN_NORM);
+			S_Sound (self, CHAN_BODY, "ironlich/attack3", 1, ATTN_NORM, true);	// [BB] Inform the clients.
 
-			// [BB] If we're the server, the tell clients to spawn this missile and play the sound.
+			// [BB] If we're the server, the tell clients to spawn this missile.
 			if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
 			{
 				SERVERCOMMANDS_SpawnMissile( mo );
-				SERVERCOMMANDS_SoundActor( self, CHAN_BODY, "ironlich/attack3", 1, ATTN_NORM );
  			}
 		}
 	}
@@ -209,7 +196,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_WhirlwindSeek)
 
 DEFINE_ACTION_FUNCTION(AActor, A_LichIceImpact)
 {
-	int i;
+	unsigned int i;
 	angle_t angle;
 	AActor *shard;
 
@@ -223,7 +210,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichIceImpact)
 		shard->velx = FixedMul (shard->Speed, finecosine[angle]);
 		shard->vely = FixedMul (shard->Speed, finesine[angle]);
 		shard->velz = -FRACUNIT*6/10;
-		P_CheckMissileSpawn (shard);
+		P_CheckMissileSpawn (shard, self->radius);
 	}
 }
 
@@ -236,8 +223,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_LichIceImpact)
 DEFINE_ACTION_FUNCTION(AActor, A_LichFireGrow)
 {
 	// [BB] This is server-side. The client can't do it, cause it doesn't know the health of the fire.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

@@ -109,8 +109,8 @@ void SERVER_MASTER_Construct( void )
 	const char *pszPort;
 
 	// Setup our message buffer.
-	NETWORK_InitBuffer( &g_MasterServerBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	g_MasterServerBuffer.Clear();
 
 	// Allow the user to specify which port the master server is on.
 	pszPort = Args->CheckValue( "-masterport" );
@@ -149,15 +149,13 @@ void SERVER_MASTER_Construct( void )
 void SERVER_MASTER_Destruct( void )
 {
 	// Free our local buffer.
-	NETWORK_FreeBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Free();
 }
 
 //*****************************************************************************
 //
 void SERVER_MASTER_Tick( void )
 {
-	UCVarValue		Val;
-
 	while (( g_lStoredQueryIPHead != g_lStoredQueryIPTail ) && ( gametic >= g_StoredQueryIPs[g_lStoredQueryIPHead].lNextAllowedGametic ))
 	{
 		g_lStoredQueryIPHead++;
@@ -172,18 +170,18 @@ void SERVER_MASTER_Tick( void )
 	if ( sv_updatemaster == false )
 		return;
 
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
-
-	Val = masterhostname.GetGenericRep( CVAR_String );
+	g_MasterServerBuffer.Clear();
 
 	// [BB] If we can't find the master address, we can't tick the master.
-	if ( NETWORK_StringToAddress( Val.String, &g_AddressMasterServer ) == false )
+	bool ok = g_AddressMasterServer.LoadFromString( masterhostname );
+
+	if ( ok == false )
 	{
-		Printf ( "Warning: Can't find masterhostname %s! Either correct masterhostname or set sv_updatemaster to false.\n", Val.String );
+		Printf ( "Warning: Can't find masterhostname %s! Either correct masterhostname or set sv_updatemaster to false.\n", *masterhostname );
 		return;
 	}
 
-	NETWORK_SetAddressPort( g_AddressMasterServer, g_usMasterPort );
+	g_AddressMasterServer.SetPort( g_usMasterPort );
 
 	// Write to our packet a challenge to the master server.
 	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_CHALLENGE );
@@ -203,9 +201,6 @@ void SERVER_MASTER_Tick( void )
 //
 void SERVER_MASTER_Broadcast( void )
 {
-	NETADDRESS_s	AddressBroadcast;
-	sockaddr_in		broadcast_addr;
-
 	// Send an update to the master server every second.
 	if ( gametic % TICRATE )
 		return;
@@ -214,12 +209,14 @@ void SERVER_MASTER_Broadcast( void )
 	if (( sv_broadcast == false ) || ( Args->CheckParm( "-nobroadcast" )))
 		return;
 
-//	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+//	g_MasterServerBuffer.Clear();
 
+	sockaddr_in broadcast_addr;
 	broadcast_addr.sin_family = AF_INET;
 	broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
 	broadcast_addr.sin_port = htons( DEFAULT_BROADCAST_PORT );
-	NETWORK_SocketAddressToNetAddress( &broadcast_addr, &AddressBroadcast );
+	NETADDRESS_s AddressBroadcast;
+	AddressBroadcast.LoadFromSocketAddress( broadcast_addr );
 
 	// [BB] Under all Windows versions broadcasts to INADDR_BROADCAST seem to work fine
 	// while class A broadcasts don't work under Vista/7. So just use INADDR_BROADCAST.
@@ -263,13 +260,12 @@ void SERVER_MASTER_Broadcast( void )
 //
 void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ulTime, bool bBroadcasting )
 {
-	UCVarValue	Val;
 	char		szAddress[4][4];
 	ULONG		ulIdx;
 	ULONG		ulBits;
 
 	// Let's just use the master server buffer! It gets cleared again when we need it anyway!
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Clear();
 
 	if ( bBroadcasting == false )
 	{
@@ -281,7 +277,7 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			{
 				// Check to see if this IP exists in our stored query IP list. If it does, then
 				// ignore it, since it queried us less than 10 seconds ago.
-				if ( NETWORK_CompareAddress( Address, g_StoredQueryIPs[ulIdx].Address, true ))
+				if ( Address.CompareNoPort( g_StoredQueryIPs[ulIdx].Address ))
 				{
 					// Write our header.
 					NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_LAUNCHER_IGNORING );
@@ -306,7 +302,7 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 		}
 	
 		// Now, check to see if this IP has been banend from this server.
-		NETWORK_AddressToIPStringArray( Address, szAddress );
+		Address.ToIPStringArray( szAddress );
 		if ( SERVERBAN_IsIPBanned( szAddress ))
 		{
 			// Write our header.
@@ -361,23 +357,8 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 
 	// If the launcher desires to know the team score, but we're not in a game mode where
 	// teams have scores, then don't send back team score information.
-	if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) == false )
-	{
-		if ( ulBits & SQF_TEAMSCORES )
-			ulBits &= ~SQF_TEAMSCORES;
-
-		// [CW] Don't send these either.
-		{
-			if ( ulBits & SQF_TEAMINFO_NUMBER )
-				ulBits &= ~SQF_TEAMINFO_NUMBER;
-			if ( ulBits & SQF_TEAMINFO_NAME )
-				ulBits &= ~SQF_TEAMINFO_NAME;
-			if ( ulBits & SQF_TEAMINFO_COLOR )
-				ulBits &= ~SQF_TEAMINFO_COLOR;
-			if ( ulBits & SQF_TEAMINFO_SCORE )
-				ulBits &= ~SQF_TEAMINFO_SCORE;
-		}
-	}
+	if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) == false )
+		ulBits &= ~( SQF_TEAMSCORES | SQF_TEAMINFO_NUMBER | SQF_TEAMINFO_NAME | SQF_TEAMINFO_COLOR | SQF_TEAMINFO_SCORE );
 
 	// If the launcher wants to know player data, then we have to tell them how many players
 	// are in the server.
@@ -396,24 +377,15 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 
 	// Send the server name.
 	if ( ulBits & SQF_NAME )
-	{
-		Val = sv_hostname.GetGenericRep( CVAR_String );
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, Val.String );
-	}
+		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_hostname );
 
 	// Send the website URL.
 	if ( ulBits & SQF_URL )
-	{
-		Val = sv_website.GetGenericRep( CVAR_String );
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, Val.String );
-	}
+		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_website );
 
 	// Send the host's e-mail address.
 	if ( ulBits & SQF_EMAIL )
-	{
-		Val = sv_hostemail.GetGenericRep( CVAR_String );
-		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, Val.String );
-	}
+		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, sv_hostemail );
 
 	if ( ulBits & SQF_MAPNAME )
 		NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, level.mapname );
@@ -492,7 +464,7 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			NETWORK_WriteFloat( &g_MasterServerBuffer.ByteStream, teamdamage );
 	}
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		// [CW] This command is now deprecated as there are now more than two teams.
 		// Send the team scores.
@@ -500,9 +472,9 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 		{
 			for ( ulIdx = 0; ulIdx < 2; ulIdx++ )
 			{
-				if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+				if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetFragCount( ulIdx ));
-				else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+				else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetWinCount( ulIdx ));
 				else
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetScore( ulIdx ));
@@ -520,12 +492,12 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			if ( playeringame[ulIdx] == false )
 				continue;
 
-			NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, players[ulIdx].userinfo.netname );
-			if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+			NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, players[ulIdx].userinfo.GetName() );
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].lPointCount );
-			else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].ulWins );
-			else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].fragcount );
 			else
 				NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, players[ulIdx].killcount );
@@ -534,7 +506,7 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, PLAYER_IsTrueSpectator( &players[ulIdx] ));
 			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, players[ulIdx].bIsBot );
 
-			if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			{
 				if ( players[ulIdx].bOnTeam == false )
 					NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 255 );
@@ -546,7 +518,7 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 		}
 	}
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		if ( ulBits & SQF_TEAMINFO_NUMBER )
 			NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, TEAM_GetNumAvailableTeams( ));
@@ -563,9 +535,9 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 		{
 			for ( ulIdx = 0; ulIdx < TEAM_GetNumAvailableTeams( ); ulIdx++ )
 			{
-				if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+				if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetFragCount( ulIdx ));
-				else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+				else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetWinCount( ulIdx ));
 				else
 					NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, TEAM_GetScore( ulIdx ));
@@ -595,12 +567,13 @@ void SERVER_MASTER_SendServerInfo( NETADDRESS_s Address, ULONG ulFlags, ULONG ul
 	// [BB] Send all dmflags and compatflags.
 	if ( ulBits & SQF_ALL_DMFLAGS )
 	{
-		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 5 );
+		NETWORK_WriteByte( &g_MasterServerBuffer.ByteStream, 6 );
 		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags );
 		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, dmflags2 );
 		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, zadmflags );
 		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, compatflags );
 		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, zacompatflags );
+		NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, compatflags2 );
 	}
 
 	// [BB] Send special security settings like sv_enforcemasterbanlist.
@@ -671,7 +644,7 @@ void SERVER_MASTER_HandleVerificationRequest( BYTESTREAM_s *pByteStream  )
 {
 	LONG lVerificationNumber = NETWORK_ReadLong( pByteStream );
 
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Clear();
 	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_VERIFICATION );
 	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_GetMasterBanlistVerificationString().GetChars() );
 	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, lVerificationNumber );
@@ -684,7 +657,7 @@ void SERVER_MASTER_HandleVerificationRequest( BYTESTREAM_s *pByteStream  )
 //
 void SERVER_MASTER_SendBanlistReceipt ( void )
 {
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Clear();
 	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, SERVER_MASTER_BANLIST_RECEIPT );
 	NETWORK_WriteString( &g_MasterServerBuffer.ByteStream, SERVER_GetMasterBanlistVerificationString().GetChars() );
 
@@ -701,32 +674,32 @@ void SERVER_MASTER_SendBanlistReceipt ( void )
 void SERVERCONSOLE_UpdateBroadcasting( void );
 void SERVERCONSOLE_UpdateTitleString( const char *pszString );
 // Should the server inform the master server of its existence?
-CUSTOM_CVAR( Bool, sv_updatemaster, true, CVAR_SERVERINFO )
+CUSTOM_CVAR( Bool, sv_updatemaster, true, CVAR_SERVERINFO|CVAR_NOSETBYACS )
 {
 	SERVERCONSOLE_UpdateBroadcasting( );
 }
 
 // Should the server broadcast so LAN clients can hear it?
-CUSTOM_CVAR( Bool, sv_broadcast, true, CVAR_ARCHIVE )
+CUSTOM_CVAR( Bool, sv_broadcast, true, CVAR_ARCHIVE|CVAR_NOSETBYACS )
 {
 	SERVERCONSOLE_UpdateBroadcasting( );
 }
 
 // Name of this server on launchers.
-CUSTOM_CVAR( String, sv_hostname, "Unnamed " GAMENAME " server", CVAR_ARCHIVE )
+CUSTOM_CVAR( String, sv_hostname, "Unnamed " GAMENAME " server", CVAR_ARCHIVE|CVAR_NOSETBYACS )
 {
 	SERVERCONSOLE_UpdateTitleString( (const char *)self );
 }
 
 // Website that has the wad this server is using, possibly with other info.
-CVAR( String, sv_website, "", CVAR_ARCHIVE )
+CVAR( String, sv_website, "", CVAR_ARCHIVE|CVAR_NOSETBYACS )
 
 // E-mail address of the person running this server.
-CVAR( String, sv_hostemail, "", CVAR_ARCHIVE )
+CVAR( String, sv_hostemail, "", CVAR_ARCHIVE|CVAR_NOSETBYACS )
 
 // IP address of the master server.
 // [BB] Client and server use this now, therefore the name doesn't begin with "sv_"
-CVAR( String, masterhostname, "master.zandronum.com", CVAR_ARCHIVE|CVAR_GLOBALCONFIG )
+CVAR( String, masterhostname, "master.zandronum.com", CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOSETBYACS )
 
 CCMD( wads )
 {

@@ -79,11 +79,12 @@
 #include "cmdlib.h"
 #include "g_level.h"
 #include "doomstat.h"
-#include "r_main.h"
+#include "r_utility.h"
 // [BB] New #includes.
 #include "serverconsole/serverconsole.h"
 #include "network.h"
 #include "p_acs.h"
+#include "za_misc.h"
 
 #include "stats.h"
 #include "st_start.h"
@@ -110,6 +111,7 @@ LRESULT CALLBACK WndProc (HWND, UINT, WPARAM, LPARAM);
 void CreateCrashLog (char *custominfo, DWORD customsize, HWND richedit);
 void DisplayCrashLog ();
 extern BYTE *ST_Util_BitsForBitmap (BITMAPINFO *bitmap_info);
+void I_FlushBufferedConsoleStuff();
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
@@ -132,6 +134,7 @@ HANDLE			MainThread;
 DWORD			MainThreadID;
 HANDLE			StdOut;
 bool			FancyStdOut, AttachedStdOut;
+bool			ConWindowHidden;
 
 // The main window
 HWND			Window;
@@ -259,20 +262,6 @@ static void UnWTS (void)
 
 //==========================================================================
 //
-// FinalGC
-//
-// If this doesn't free everything, the debug CRT will let us know.
-//
-//==========================================================================
-
-static void FinalGC()
-{
-	Args = NULL;
-	GC::FullGC();
-}
-
-//==========================================================================
-//
 // LayoutErrorPane
 //
 // Lays out the error pane to the desired width, returning the required
@@ -361,7 +350,7 @@ void LayoutMainWindow (HWND hWnd, HWND pane)
 	w = rect.right;
 	h = rect.bottom;
 
-	if (DoomStartupInfo != NULL && GameTitleWindow != NULL)
+	if (DoomStartupInfo.Name.IsNotEmpty() && GameTitleWindow != NULL)
 	{
 		bannerheight = GameTitleFontHeight + 5;
 		MoveWindow (GameTitleWindow, 0, 0, w, bannerheight, TRUE);
@@ -403,6 +392,19 @@ void LayoutMainWindow (HWND hWnd, HWND pane)
 		MoveWindow (ConWindow, leftside, bannerheight, w - leftside,
 			h - bannerheight - errorpaneheight - progressheight - netpaneheight, TRUE);
 	}
+}
+
+
+//==========================================================================
+//
+// I_SetIWADInfo
+//
+//==========================================================================
+
+void I_SetIWADInfo()
+{
+	// Make the startup banner show itself
+	LayoutMainWindow(Window, NULL);
 }
 
 //==========================================================================
@@ -507,7 +509,7 @@ LRESULT CALLBACK LConProc (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 	case WM_DRAWITEM:
 		// Draw title banner.
-		if (wParam == IDC_STATIC_TITLE && DoomStartupInfo != NULL)
+		if (wParam == IDC_STATIC_TITLE && DoomStartupInfo.Name.IsNotEmpty())
 		{
 			const PalEntry *c;
 
@@ -517,7 +519,7 @@ LRESULT CALLBACK LConProc (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			// Draw the background.
 			rect = drawitem->rcItem;
 			rect.bottom -= 1;
-			c = (const PalEntry *)&DoomStartupInfo->BkColor;
+			c = (const PalEntry *)&DoomStartupInfo.BkColor;
 			hbr = CreateSolidBrush (RGB(c->r,c->g,c->b));
 			FillRect (drawitem->hDC, &drawitem->rcItem, hbr);
 			DeleteObject (hbr);
@@ -525,14 +527,14 @@ LRESULT CALLBACK LConProc (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			// Calculate width of the title string.
 			SetTextAlign (drawitem->hDC, TA_TOP);
 			oldfont = SelectObject (drawitem->hDC, GameTitleFont != NULL ? GameTitleFont : (HFONT)GetStockObject (DEFAULT_GUI_FONT));
-			titlelen = (int)strlen (DoomStartupInfo->Name);
-			GetTextExtentPoint32 (drawitem->hDC, DoomStartupInfo->Name, titlelen, &size);
+			titlelen = (int)DoomStartupInfo.Name.Len();
+			GetTextExtentPoint32 (drawitem->hDC, DoomStartupInfo.Name, titlelen, &size);
 
 			// Draw the title.
-			c = (const PalEntry *)&DoomStartupInfo->FgColor;
+			c = (const PalEntry *)&DoomStartupInfo.FgColor;
 			SetTextColor (drawitem->hDC, RGB(c->r,c->g,c->b));
 			SetBkMode (drawitem->hDC, TRANSPARENT);
-			TextOut (drawitem->hDC, rect.left + (rect.right - rect.left - size.cx) / 2, 2, DoomStartupInfo->Name, titlelen);
+			TextOut (drawitem->hDC, rect.left + (rect.right - rect.left - size.cx) / 2, 2, DoomStartupInfo.Name, titlelen);
 			SelectObject (drawitem->hDC, oldfont);
 			return TRUE;
 		}
@@ -653,6 +655,7 @@ void I_SetWndProc()
 		SetWindowLongPtr (Window, GWLP_USERDATA, 1);
 		SetWindowLongPtr (Window, GWLP_WNDPROC, (WLONG_PTR)WndProc);
 		ShowWindow (ConWindow, SW_HIDE);
+		ConWindowHidden = true;
 		ShowWindow (GameTitleWindow, SW_HIDE);
 		I_InitInput (Window);
 	}
@@ -684,8 +687,10 @@ void RestoreConView()
 
 	SetWindowLongPtr (Window, GWLP_WNDPROC, (WLONG_PTR)LConProc);
 	ShowWindow (ConWindow, SW_SHOW);
+	ConWindowHidden = false;
 	ShowWindow (GameTitleWindow, SW_SHOW);
 	I_ShutdownInput ();		// Make sure the mouse pointer is available.
+	I_FlushBufferedConsoleStuff();
 	// Make sure the progress bar isn't visible.
 	if (StartScreen != NULL)
 	{
@@ -722,7 +727,7 @@ void ShowErrorPane(const char *text)
 	if (text != NULL)
 	{
 		char caption[100];
-		mysnprintf(caption, countof(caption), "Fatal Error - "GAMESIG" %s "X64" (%s)", GetVersionString(), GetGitTime());
+		mysnprintf(caption, countof(caption), "Fatal Error - " GAMESIG " %s " X64 " (%s)", GetVersionString(), GetGitTime());
 		SetWindowText (Window, caption);
 		ErrorIcon = CreateWindowEx (WS_EX_NOPARENTNOTIFY, "STATIC", NULL, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0, 0, 0, Window, NULL, g_hInst, NULL);
 		if (ErrorIcon != NULL)
@@ -822,7 +827,10 @@ void DoMain (HINSTANCE hInstance)
 #endif
 
 		Args = new DArgs(__argc, __argv);
-		atterm(FinalGC);
+
+		// [SB] Zandronum version
+		if ( ZA_PrintVersion( ) )
+			return;
 
 		// Under XP, get our session ID so we can know when the user changes/locks sessions.
 		// Since we need to remain binary compatible with older versions of Windows, we
@@ -918,23 +926,6 @@ void DoMain (HINSTANCE hInstance)
 		progdir.Truncate((long)strlen(program));
 		progdir.UnlockBuffer();
 
-		// [BB] To allow an external program to check our version, output this info to a file.
-		{
-			FString *args;
-			if ( Args->CheckParmList( "--version", &args) == 1 )
-			{
-				FILE *file = fopen( args[0].GetChars(), "w" );
-				if ( file == NULL )
-					return;
-				fputs( GetVersionStringRev(), file );
-				fputs( "\n", file );
-				fputs( GetGitDescription(), file );
-
-				fclose( file );
-				return;
-			}
-		}
-
 		// [BC] When hosting, spawn a console dialog box instead of creating a window.
 		if ( Args->CheckParm( "-host" ))
 		{
@@ -981,7 +972,7 @@ void DoMain (HINSTANCE hInstance)
 		
 			/* create window */
 			char caption[100];
-			mysnprintf(caption, countof(caption), ""GAMESIG" %s "X64" (%s)", GetVersionString(), GetGitTime());
+			mysnprintf(caption, countof(caption), "" GAMESIG " %s " X64 " (%s)", GetVersionString(), GetGitTime());
 			Window = CreateWindowEx(
 					WS_EX_APPWINDOW,
 					(LPCTSTR)WinClassName,
@@ -1036,13 +1027,6 @@ void DoMain (HINSTANCE hInstance)
 
 		I_DetectOS ();
 		D_DoomMain ();
-	}
-	catch (class CNoIWADError &/*error*/) // [RC] No IWADs were found! Show a setup dialog.
-	{
-		ShowWindow( Window, SW_HIDE );
-		I_ShutdownGraphics( );
-		I_ShowNoIWADsScreen( );
-		exit( 0 );
 	}
 	catch (class CNoRunExit &)
 	{
@@ -1304,14 +1288,14 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 
 	InitCommonControls ();			// Load some needed controls and be pretty under XP
 
+	// We need to load riched20.dll so that we can create the control.
 	if (NULL == LoadLibrary ("riched20.dll"))
 	{
-		// Technically, it isn't really Internet Explorer that is needed, but this
-		// is an example of a specific program that will provide riched20.dll.
-		// But considering how much extra stuff needs to be installed to make Windows 95
-		// useable with pretty much any recent software, the chances are high that
-		// the user already has riched20.dll installed.
-		I_FatalError ("Sorry, you need to install Internet Explorer 3 or higher to play "GAMENAME" on Windows 95.");
+		// This should only happen on basic Windows 95 installations, but since we
+		// don't support Windows 95, we have no obligation to provide assistance in
+		// getting it installed.
+		MessageBoxA(NULL, "Could not load riched20.dll", "ZDoom Error", MB_OK | MB_ICONSTOP);
+		exit(0);
 	}
 
 #if !defined(__GNUC__) && defined(_DEBUG)
@@ -1365,7 +1349,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 	_CrtSetDbgFlag (_CrtSetDbgFlag(0) | _CRTDBG_LEAK_CHECK_DF);
 
 	// Use this to break at a specific allocation number.
-	//_crtBreakAlloc = 30055;
+	//_crtBreakAlloc = 77624;
 #endif
 
 	DoMain (hInstance);
@@ -1393,12 +1377,6 @@ DWORD WINAPI MainDoomThread( LPVOID )
 	try
 	{
 		D_DoomMain( );
-	}
-	catch (class CNoIWADError &/*error*/) // [RC] No IWADs were found! Show a setup dialog.
-	{
-		SERVERCONSOLE_Hide( );
-		I_ShowNoIWADsScreen( );
-		exit( 0 );
 	}
 	catch (class CDoomError &error)
 	{

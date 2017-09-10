@@ -88,9 +88,8 @@
 extern FRandom pr_spawnmobj;
 extern FRandom pr_acs;
 extern FRandom pr_chase;
-extern FRandom pr_lost;
-extern FRandom pr_slam;
 extern FRandom pr_exrandom;
+extern FRandom pr_damagemobj;
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -98,6 +97,42 @@ FRandom M_Random;
 
 // Global seed. This is modified predictably to initialize every RNG.
 DWORD rngseed;
+
+// Static RNG marker. This is only used when the RNG is set for each new game.
+DWORD staticrngseed;
+bool use_staticrng;
+
+// Allows checking or staticly setting the global seed.
+CCMD(rngseed)
+{
+	if (argv.argc() == 1)
+	{
+		Printf("Usage: rngseed get|set|clear\n");
+		return;
+	}
+	if (stricmp(argv[1], "get") == 0)
+	{
+		Printf("rngseed is %d\n", rngseed);
+	}
+	else if (stricmp(argv[1], "set") == 0)
+	{
+		if (argv.argc() == 2)
+		{
+			Printf("You need to specify a value to set\n");
+		}
+		else
+		{
+			staticrngseed = atoi(argv[2]);
+			use_staticrng = true;
+			Printf("Static rngseed %d will be set for next game\n", staticrngseed);
+		}
+	}
+	else if (stricmp(argv[1], "clear") == 0)
+	{
+		use_staticrng = false;
+		Printf("Static rngseed cleared\n");
+	}
+}
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -267,8 +302,7 @@ DWORD FRandom::StaticSumSeeds ()
 		pr_spawnmobj.sfmt.u[0] + pr_spawnmobj.idx +
 		pr_acs.sfmt.u[0] + pr_acs.idx +
 		pr_chase.sfmt.u[0] + pr_chase.idx +
-		pr_lost.sfmt.u[0] + pr_lost.idx +
-		pr_slam.sfmt.u[0] + pr_slam.idx;
+		pr_damagemobj.sfmt.u[0] + pr_damagemobj.idx;
 }
 
 //==========================================================================

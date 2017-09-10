@@ -154,7 +154,7 @@ void DOMINATION_Tick(void)
 		return;
 
 	// [BB] Scoring is server-side.
-	if ( ( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )) )
+	if ( NETWORK_InClientMode() )
 		return;
 
 	if(!(level.maptime % SCORERATE))
@@ -196,7 +196,7 @@ void DOMINATION_SetOwnership(unsigned int point, player_t *toucher)
 	unsigned int team = toucher->ulTeam;
 
 	PointOwners[point] = team;
-	Printf ( "%s\\c- has taken control of %s\n", toucher->userinfo.netname, (*level.info->SectorInfo.PointNames[point]).GetChars() );
+	Printf ( "%s\\c- has taken control of %s\n", toucher->userinfo.GetName(), (*level.info->SectorInfo.PointNames[point]).GetChars() );
 	for(unsigned int i = 0;i < level.info->SectorInfo.Points[point]->Size();i++)
 	{
 		unsigned int secnum = (*level.info->SectorInfo.Points[point])[i];
@@ -212,8 +212,7 @@ void DOMINATION_EnterSector(player_t *toucher)
 		return;
 
 	// [BB] This is server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

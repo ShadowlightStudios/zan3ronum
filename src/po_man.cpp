@@ -14,7 +14,6 @@
 
 #include "doomdef.h"
 #include "p_local.h"
-#include "r_local.h"
 #include "i_system.h"
 #include "w_wad.h"
 #include "m_swap.h"
@@ -22,13 +21,14 @@
 #include "tables.h"
 #include "s_sndseq.h"
 #include "a_sharedglobal.h"
-#include "r_main.h"
+#include "p_3dmidtex.h"
 #include "p_lnspec.h"
-#include "r_interpolate.h"
+#include "r_data/r_interpolate.h"
 #include "g_level.h"
 #include "po_man.h"
 #include "p_setup.h"
 #include "vectors.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "cl_demo.h"
 #include "network.h"
@@ -51,6 +51,16 @@ inline vertex_t *side_t::V2() const
 	return this == linedef->sidedef[0]? linedef->v2 : linedef->v1;
 }
 
+
+FArchive &operator<< (FArchive &arc, FPolyObj *&poly)
+{
+	return arc.SerializePointer (polyobjs, (BYTE **)&poly, sizeof(FPolyObj));
+}
+
+FArchive &operator<< (FArchive &arc, const FPolyObj *&poly)
+{
+	return arc.SerializePointer (polyobjs, (BYTE **)&poly, sizeof(FPolyObj));
+}
 
 inline FArchive &operator<< (FArchive &arc, podoortype_t &type)
 {
@@ -179,6 +189,17 @@ private:
 	DPolyDoor ();
 };
 */
+class FPolyMirrorIterator
+{
+	FPolyObj *CurPoly;
+	int UsedPolys[100];	// tracks mirrored polyobjects we've seen
+	int NumUsedPolys;
+
+public:
+	FPolyMirrorIterator(FPolyObj *poly);
+	FPolyObj *NextMirror();
+};
+
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
 void PO_Init (void);
@@ -510,21 +531,25 @@ void DRotatePoly::Tick ()
 	if (poly == NULL) return;
 
 	// [BC] For clients, just tick them and get out.
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 	{
 		poly->RotatePolyobj( m_Speed );
 		return;
 	}
 
+	// Don't let non-perpetual polyobjs overshoot their targets.
+	if (m_Dist != -1 && (unsigned int)m_Dist < (unsigned int)abs(m_Speed))
+	{
+		m_Speed = m_Speed < 0 ? -m_Dist : m_Dist;
+	}
+
 	if (poly->RotatePolyobj (m_Speed))
 	{
-		unsigned int absSpeed = abs (m_Speed);
-
 		if (m_Dist == -1)
 		{ // perpetual polyobj
 			return;
 		}
-		m_Dist -= absSpeed;
+		m_Dist -= abs(m_Speed);
 		if (m_Dist == 0)
 		{
 
@@ -542,15 +567,10 @@ void DRotatePoly::Tick ()
 			SN_StopSequence (poly);
 			Destroy ();
 		}
-		else if ((unsigned int)m_Dist < absSpeed)
-		{
-			m_Speed = m_Dist * (m_Speed < 0 ? -1 : 1);
-		}
 	}
 	else if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		// [WS] The poly object is blocked, tell clients the rotation!
 	{
-		FPolyObj *poly = PO_GetPolyobj (m_PolyObj);
 		SERVERCOMMANDS_SetPolyobjRotation( m_PolyObj );
 	}
 }
@@ -565,61 +585,25 @@ void DRotatePoly::Tick ()
 bool EV_RotatePoly (line_t *line, int polyNum, int speed, int byteAngle,
 					int direction, bool overRide)
 {
-	int mirror;
-	DRotatePoly *pe;
+	DRotatePoly *pe = NULL;
 	FPolyObj *poly;
 
-	if ( (poly = PO_GetPolyobj(polyNum)) )
-	{
-		if (poly->specialdata && !overRide)
-		{ // poly is already moving
-			return false;
-		}
-	}
-	else
+	if ((poly = PO_GetPolyobj(polyNum)) == NULL)
 	{
 		Printf("EV_RotatePoly: Invalid polyobj num: %d\n", polyNum);
 		return false;
 	}
-	pe = new DRotatePoly (polyNum);
-	if (byteAngle)
-	{
-		if (byteAngle == 255)
-		{
-			pe->m_Dist = ~0;
-		}
-		else
-		{
-			pe->m_Dist = byteAngle*(ANGLE_90/64); // Angle
-		}
-	}
-	else
-	{
-		pe->m_Dist = ANGLE_MAX-1;
-	}
-	pe->m_Speed = (speed*direction*(ANGLE_90/64))>>3;
-	poly->specialdata = pe;
-	SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
-	
-	// [BC] If we're the server, tell clients to create the rotate poly.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_DoRotatePoly( pe->m_Speed, pe->m_PolyObj );
+	FPolyMirrorIterator it(poly);
 
-	while ( (mirror = poly->GetMirror()) )
+	while ((poly = it.NextMirror()) != NULL)
 	{
-		poly = PO_GetPolyobj(mirror);
-		if (poly == NULL)
-		{
-			Printf ("EV_RotatePoly: Invalid polyobj num: %d\n", polyNum);
+		if (poly->specialdata != NULL && !overRide)
+		{ // poly is already in motion
 			break;
 		}
-		if (poly->specialdata && !overRide)
-		{ // mirroring poly is already in motion
-			break;
-		}
-		pe = new DRotatePoly (mirror);
+		pe = new DRotatePoly(poly->tag);
 		poly->specialdata = pe;
-		if (byteAngle)
+		if (byteAngle != 0)
 		{
 			if (byteAngle == 255)
 			{
@@ -634,16 +618,15 @@ bool EV_RotatePoly (line_t *line, int polyNum, int speed, int byteAngle,
 		{
 			pe->m_Dist = ANGLE_MAX-1;
 		}
-		direction = -direction;
-		pe->m_Speed = (speed*direction*(ANGLE_90/64))>>3;
-		polyNum = mirror;
+		pe->m_Speed = speed*direction*(ANGLE_90/(64<<3));
 		SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
+		direction = -direction;	// Reverse the direction
 
 		// [BC] If we're the server, tell clients to create the rotate poly.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_DoRotatePoly( pe->m_Speed, pe->m_PolyObj );
 	}
-	return true;
+	return pe != NULL;	// Return true if something started moving.
 }
 
 //==========================================================================
@@ -657,7 +640,7 @@ void DMovePoly::Tick ()
 	FPolyObj *poly = PO_GetPolyobj (m_PolyObj);
 
 	// [BC] For clients, just tick them and get out.
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 	{
 		if ( poly )
 			poly->MovePolyobj( m_xSpeed, m_ySpeed );
@@ -697,7 +680,6 @@ void DMovePoly::Tick ()
 		else if ( NETWORK_GetState ( ) == NETSTATE_SERVER )
 			// [WS] The poly object is blocked, tell clients the position!
 		{
-			poly = PO_GetPolyobj (m_PolyObj);
 			SERVERCOMMANDS_SetPolyobjPosition( m_PolyObj );
 		}
 	}
@@ -712,75 +694,48 @@ void DMovePoly::Tick ()
 bool EV_MovePoly (line_t *line, int polyNum, int speed, angle_t angle,
 				  fixed_t dist, bool overRide)
 {
-	int mirror;
-	DMovePoly *pe;
+	DMovePoly *pe = NULL;
 	FPolyObj *poly;
-	angle_t an;
+	angle_t an = angle;
 
-	if ( (poly = PO_GetPolyobj(polyNum)) )
-	{
-		if (poly->specialdata && !overRide)
-		{ // poly is already moving
-			return false;
-		}
-	}
-	else
+	if ((poly = PO_GetPolyobj(polyNum)) == NULL)
 	{
 		Printf("EV_MovePoly: Invalid polyobj num: %d\n", polyNum);
 		return false;
 	}
-	pe = new DMovePoly (polyNum);
-	pe->m_Dist = dist; // Distance
-	pe->m_Speed = speed;
-	poly->specialdata = pe;
+	FPolyMirrorIterator it(poly);
 
-	an = angle;
-
-	pe->m_Angle = an>>ANGLETOFINESHIFT;
-	pe->m_xSpeed = FixedMul (pe->m_Speed, finecosine[pe->m_Angle]);
-	pe->m_ySpeed = FixedMul (pe->m_Speed, finesine[pe->m_Angle]);
-	SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
-
-	// [BC] If we're the server, tell clients to create the move poly.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_DoMovePoly( pe->m_xSpeed, pe->m_ySpeed, pe->m_PolyObj );
-
-	// Do not interpolate very fast moving polyobjects. The minimum tic count is
-	// 3 instead of 2, because the moving crate effect in Massmouth 2, Hostitality
-	// that this fixes isn't quite fast enough to move the crate back to its start
-	// in just 1 tic.
-	if (dist/speed <= 2)
+	while ((poly = it.NextMirror()) != NULL)
 	{
-		pe->StopInterpolation ();
-	}
-
-	while ( (mirror = poly->GetMirror()) )
-	{
-		poly = PO_GetPolyobj(mirror);
-		if (poly == NULL || (poly->specialdata != NULL && !overRide))
-		{ // mirroring poly does not exist or is already in motion
+		if (poly->specialdata != NULL && !overRide)
+		{ // poly is already in motion
 			break;
 		}
-		pe = new DMovePoly (mirror);
+		pe = new DMovePoly(poly->tag);
 		poly->specialdata = pe;
 		pe->m_Dist = dist; // Distance
 		pe->m_Speed = speed;
-		an = an+ANGLE_180; // reverse the angle
-		pe->m_Angle = an>>ANGLETOFINESHIFT;
+		pe->m_Angle = an >> ANGLETOFINESHIFT;
 		pe->m_xSpeed = FixedMul (pe->m_Speed, finecosine[pe->m_Angle]);
 		pe->m_ySpeed = FixedMul (pe->m_Speed, finesine[pe->m_Angle]);
-		polyNum = mirror;
 		SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
+
+		// [BC] If we're the server, tell clients to create the move poly.
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+			SERVERCOMMANDS_DoMovePoly( pe->m_xSpeed, pe->m_ySpeed, pe->m_PolyObj );
+
+		// Do not interpolate very fast moving polyobjects. The minimum tic count is
+		// 3 instead of 2, because the moving crate effect in Massmouth 2, Hostitality
+		// that this fixes isn't quite fast enough to move the crate back to its start
+		// in just 1 tic.
 		if (dist/speed <= 2)
 		{
 			pe->StopInterpolation ();
 		}
 
-		// [BC] If we're the server, tell clients to create the move poly.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_DoMovePoly( pe->m_xSpeed, pe->m_ySpeed, pe->m_PolyObj );
+		an = an + ANGLE_180;	// Reverse the angle.
 	}
-	return true;
+	return pe != NULL;	// Return true if something started moving.
 }
 
 //==========================================================================
@@ -822,53 +777,28 @@ void DMovePolyTo::Tick ()
 
 bool EV_MovePolyTo(line_t *line, int polyNum, int speed, fixed_t targx, fixed_t targy, bool overRide)
 {
-	int mirror;
-	DMovePolyTo *pe;
+	DMovePolyTo *pe = NULL;
 	FPolyObj *poly;
 	TVector2<double> dist;
 	double distlen;
-	bool nointerp;
 
-	if ( (poly = PO_GetPolyobj(polyNum)) )
-	{
-		if (poly->specialdata && !overRide)
-		{ // poly is already moving
-			return false;
-		}
-	}
-	else
+	if ((poly = PO_GetPolyobj(polyNum)) == NULL)
 	{
 		Printf("EV_MovePolyTo: Invalid polyobj num: %d\n", polyNum);
 		return false;
 	}
+	FPolyMirrorIterator it(poly);
+
 	dist.X = targx - poly->StartSpot.x;
 	dist.Y = targy - poly->StartSpot.y;
-	pe = new DMovePolyTo(polyNum);
-	poly->specialdata = pe;
-	pe->m_Dist = xs_RoundToInt(distlen = dist.MakeUnit());
-	pe->m_Speed = speed;
-	pe->m_xSpeed = xs_RoundToInt(speed * dist.X);
-	pe->m_ySpeed = xs_RoundToInt(speed * dist.Y);
-	pe->m_xTarget = targx;
-	pe->m_yTarget = targy;
-
-	nointerp = (pe->m_Dist / pe->m_Speed) <= 2;
-	if (nointerp)
+	distlen = dist.MakeUnit();
+	while ((poly = it.NextMirror()) != NULL)
 	{
-		pe->StopInterpolation();
-	}
-
-	while ( (mirror = poly->GetMirror()) )
-	{
-		poly = PO_GetPolyobj(mirror);
-		if (poly == NULL || (poly->specialdata != NULL && !overRide))
-		{ // mirroring poly does not exist or is already in motion
+		if (poly->specialdata != NULL && !overRide)
+		{ // poly is already in motion
 			break;
 		}
-		// reverse the direction
-		dist.X = -dist.X;
-		dist.Y = -dist.Y;
-		pe = new DMovePolyTo(mirror);
+		pe = new DMovePolyTo(poly->tag);
 		poly->specialdata = pe;
 		pe->m_Dist = xs_RoundToInt(distlen);
 		pe->m_Speed = speed;
@@ -876,14 +806,13 @@ bool EV_MovePolyTo(line_t *line, int polyNum, int speed, fixed_t targx, fixed_t 
 		pe->m_ySpeed = xs_RoundToInt(speed * dist.Y);
 		pe->m_xTarget = xs_RoundToInt(poly->StartSpot.x + distlen * dist.X);
 		pe->m_yTarget = xs_RoundToInt(poly->StartSpot.y + distlen * dist.Y);
-		polyNum = mirror;
-		SN_StartSequence(poly, poly->seqType, SEQ_DOOR, 0);
-		if (nointerp)
+		if ((pe->m_Dist / pe->m_Speed) <= 2)
 		{
 			pe->StopInterpolation();
 		}
+		dist = -dist;	// reverse the direction
 	}
-	return true;
+	return pe != NULL; // Return true if something started moving.
 }
 
 //==========================================================================
@@ -900,7 +829,7 @@ void DPolyDoor::Tick ()
 	if (poly == NULL) return;
 
 	// [BC] For clients, just tick them and get out.
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 	{
 		switch ( m_Type )
 		{
@@ -1114,89 +1043,55 @@ void DPolyDoor::Tick ()
 bool EV_OpenPolyDoor (line_t *line, int polyNum, int speed, angle_t angle,
 					  int delay, int distance, podoortype_t type)
 {
-	int mirror;
-	DPolyDoor *pd;
+	DPolyDoor *pd = NULL;
 	FPolyObj *poly;
+	int swingdir = 1;	// ADD:  PODOOR_SWINGL, PODOOR_SWINGR
 
-	if( (poly = PO_GetPolyobj(polyNum)) )
-	{
-		if (poly->specialdata)
-		{ // poly is already moving
-			return false;
-		}
-	}
-	else
+	if ((poly = PO_GetPolyobj(polyNum)) == NULL)
 	{
 		Printf("EV_OpenPolyDoor: Invalid polyobj num: %d\n", polyNum);
 		return false;
 	}
-	pd = new DPolyDoor (polyNum, type);
-	if (type == PODOOR_SLIDE)
-	{
-		pd->m_WaitTics = delay;
-		pd->m_Speed = speed;
-		pd->m_Dist = pd->m_TotalDist = distance; // Distance
-		pd->m_Direction = angle >> ANGLETOFINESHIFT;
-		pd->m_xSpeed = FixedMul (pd->m_Speed, finecosine[pd->m_Direction]);
-		pd->m_ySpeed = FixedMul (pd->m_Speed, finesine[pd->m_Direction]);
-		SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
-	}
-	else if (type == PODOOR_SWING)
-	{
-		pd->m_WaitTics = delay;
-		pd->m_Direction = 1; // ADD:  PODOOR_SWINGL, PODOOR_SWINGR
-		pd->m_Speed = (speed*pd->m_Direction*(ANGLE_90/64))>>3;
-		pd->m_Dist = pd->m_TotalDist = angle;
-		SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
-	}
+	FPolyMirrorIterator it(poly);
 
-	poly->specialdata = pd;
-
-	// [BC] Tell clients to create the poly door, and play a sound.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+	while ((poly = it.NextMirror()) != NULL)
 	{
-		SERVERCOMMANDS_DoPolyDoor( pd->m_Type, pd->m_xSpeed, pd->m_ySpeed, pd->m_Speed, pd->m_PolyObj );
-		SERVERCOMMANDS_PlayPolyobjSound( polyNum, 0 );
-	}
-
-	while ( (mirror = poly->GetMirror()) )
-	{
-		poly = PO_GetPolyobj (mirror);
-		if (poly == NULL || poly->specialdata != NULL)
-		{ // mirroring poly does not exist or is already in motion
+		if (poly->specialdata != NULL)
+		{ // poly is already moving
 			break;
 		}
-		pd = new DPolyDoor (mirror, type);
+		pd = new DPolyDoor(poly->tag, type);
 		poly->specialdata = pd;
 		if (type == PODOOR_SLIDE)
 		{
 			pd->m_WaitTics = delay;
 			pd->m_Speed = speed;
 			pd->m_Dist = pd->m_TotalDist = distance; // Distance
-			pd->m_Direction = (angle + ANGLE_180) >> ANGLETOFINESHIFT; // reverse the angle
+			pd->m_Direction = angle >> ANGLETOFINESHIFT;
 			pd->m_xSpeed = FixedMul (pd->m_Speed, finecosine[pd->m_Direction]);
 			pd->m_ySpeed = FixedMul (pd->m_Speed, finesine[pd->m_Direction]);
 			SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
+			angle += ANGLE_180;	// reverse the angle
 		}
 		else if (type == PODOOR_SWING)
 		{
 			pd->m_WaitTics = delay;
-			pd->m_Direction = -1; // ADD:  same as above
+			pd->m_Direction = swingdir; 
 			pd->m_Speed = (speed*pd->m_Direction*(ANGLE_90/64))>>3;
 			pd->m_Dist = pd->m_TotalDist = angle;
 			SN_StartSequence (poly, poly->seqType, SEQ_DOOR, 0);
+			swingdir = -swingdir;	// reverse the direction
 		}
 
 		// [BC] Tell clients to create the poly door, and play a sound.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		{
 			SERVERCOMMANDS_DoPolyDoor( pd->m_Type, pd->m_xSpeed, pd->m_ySpeed, pd->m_Speed, pd->m_PolyObj );
-			SERVERCOMMANDS_PlayPolyobjSound( mirror, 0 );
+			SERVERCOMMANDS_PlayPolyobjSound( poly->tag, 0 );
 		}
 
-		polyNum = mirror;
 	}
-	return true;
+	return pd != NULL;	// Return true if something started moving.
 }
 
 //==========================================================================
@@ -1287,7 +1182,7 @@ FPolyObj::FPolyObj()
 
 int FPolyObj::GetMirror()
 {
-	return Linedefs[0]->args[1];
+	return MirrorNum;
 }
 
 //==========================================================================
@@ -1342,12 +1237,12 @@ void FPolyObj::ThrustMobj (AActor *actor, side_t *side)
 	thrustY = FixedMul (force, finesine[thrustAngle]);
 	actor->velx += thrustX;
 	actor->vely += thrustY;
-	if (crush && !NETWORK_InClientMode( ))
+	if (crush && ( NETWORK_InClientMode() == false ))
 	{
 		if (bHurtOnTouch || !P_CheckMove (actor, actor->x + thrustX, actor->y + thrustY))
 		{
-			P_DamageMobj (actor, NULL, NULL, crush, NAME_Crush);
-			P_TraceBleed (crush, actor);
+			int newdam = P_DamageMobj (actor, NULL, NULL, crush, NAME_Crush);
+			P_TraceBleed (newdam > 0 ? newdam : crush, actor);
 		}
 	}
 	if (level.flags2 & LEVEL2_POLYGRIND) actor->Grind(false); // crush corpses that get caught in a polyobject's way
@@ -1425,6 +1320,7 @@ void FPolyObj::CalcCenter()
 
 bool FPolyObj::MovePolyobj (int x, int y, bool force)
 {
+	FBoundingBox oldbounds = Bounds;
 	UnLinkPolyobj ();
 	DoMovePolyobj (x, y);
 
@@ -1452,6 +1348,7 @@ bool FPolyObj::MovePolyobj (int x, int y, bool force)
 	CenterSpot.y += y;
 	LinkPolyobj ();
 	ClearSubsectorLinks();
+	RecalcActorFloorCeil(Bounds | oldbounds);
 
 	// [BC/BB] Polyobject has moved.
 	bMoved = true;
@@ -1508,6 +1405,7 @@ bool FPolyObj::RotatePolyobj (angle_t angle)
 {
 	int an;
 	bool blocked;
+	FBoundingBox oldbounds = Bounds;
 
 	an = (this->angle+angle)>>ANGLETOFINESHIFT;
 
@@ -1546,6 +1444,7 @@ bool FPolyObj::RotatePolyobj (angle_t angle)
 	this->angle += angle;
 	LinkPolyobj();
 	ClearSubsectorLinks();
+	RecalcActorFloorCeil(Bounds | oldbounds);
 
 	// [BC] Polyobject has rotated.
 	bRotated = true;
@@ -1603,9 +1502,10 @@ bool FPolyObj::CheckMobjBlocking (side_t *sd)
 	int left, right, top, bottom;
 	line_t *ld;
 	bool blocked;
+	bool performBlockingThrust;
 
 	// [WS] The client doesn't check if anything is blocking
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 		return false;
 
 	ld = sd->linedef;
@@ -1646,6 +1546,31 @@ bool FPolyObj::CheckMobjBlocking (side_t *sd)
 					checker.Push (mobj);
 					if ((mobj->flags&MF_SOLID) && !(mobj->flags&MF_NOCLIP))
 					{
+						FLineOpening open;
+						open.top = INT_MAX;
+						open.bottom = -INT_MAX;
+						// [TN] Check wether this actor gets blocked by the line.
+						if (ld->backsector != NULL &&
+							!(ld->flags & (ML_BLOCKING|ML_BLOCKEVERYTHING))
+							&& !(ld->flags & ML_BLOCK_PLAYERS && mobj->player) 
+							&& !(ld->flags & ML_BLOCKMONSTERS && mobj->flags3 & MF3_ISMONSTER)
+							&& !((mobj->flags & MF_FLOAT) && (ld->flags & ML_BLOCK_FLOATERS))
+							&& (!(ld->flags & ML_3DMIDTEX) ||
+								(!P_LineOpening_3dMidtex(mobj, ld, open) &&
+									(mobj->z + mobj->height < open.top)
+								) || (open.abovemidtex && mobj->z > mobj->floorz))
+							)
+						{
+							// [BL] We can't just continue here since we must
+							// determine if the line's backsector is going to
+							// be blocked.
+							performBlockingThrust = false;
+						}
+						else
+						{
+							performBlockingThrust = true;
+						}
+
 						FBoundingBox box(mobj->x, mobj->y, mobj->radius);
 
 						if (box.Right() <= ld->bbox[BOXLEFT]
@@ -1669,9 +1594,23 @@ bool FPolyObj::CheckMobjBlocking (side_t *sd)
 							{
 								continue;
 							}
+							// [BL] See if we hit below the floor/ceiling of the poly.
+							else if(!performBlockingThrust && (
+									mobj->z < ld->sidedef[!side]->sector->GetSecPlane(sector_t::floor).ZatPoint(mobj->x, mobj->y) ||
+									mobj->z + mobj->height > ld->sidedef[!side]->sector->GetSecPlane(sector_t::ceiling).ZatPoint(mobj->x, mobj->y)
+								))
+							{
+								performBlockingThrust = true;
+							}
 						}
-						ThrustMobj (mobj, sd);
-						blocked = true;
+
+						if(performBlockingThrust)
+						{
+							ThrustMobj (mobj, sd);
+							blocked = true;
+						}
+						else
+							continue;
 					}
 				}
 			}
@@ -1746,6 +1685,26 @@ void FPolyObj::LinkPolyobj ()
 			}
 			// else, don't link the polyobj, since it's off the map
 		}
+	}
+}
+
+//===========================================================================
+//
+// FPolyObj :: RecalcActorFloorCeil
+//
+// For each actor within the bounding box, recalculate its floorz, ceilingz,
+// and related values.
+//
+//===========================================================================
+
+void FPolyObj::RecalcActorFloorCeil(FBoundingBox bounds) const
+{
+	FBlockThingsIterator it(bounds);
+	AActor *actor;
+
+	while ((actor = it.Next()) != NULL)
+	{
+		P_FindFloorCeiling(actor);
 	}
 }
 
@@ -1959,6 +1918,7 @@ static void SpawnPolyobj (int index, int tag, int type)
 			sd->linedef->special = 0;
 			sd->linedef->args[0] = 0;
 			IterFindPolySides(&polyobjs[index], sd);
+			po->MirrorNum = sd->linedef->args[1];
 			po->crush = (type != PO_SPAWN_TYPE) ? 3 : 0;
 			po->bHurtOnTouch = (type == PO_SPAWNHURT_TYPE);
 			po->tag = tag;
@@ -2038,14 +1998,12 @@ static void SpawnPolyobj (int index, int tag, int type)
 			po->bHurtOnTouch = (type == PO_SPAWNHURT_TYPE);
 			po->tag = tag;
 			po->seqType = po->Sidedefs[0]->linedef->args[3];
+			po->MirrorNum = po->Sidedefs[0]->linedef->args[2];
+
 			// [BB] Init Zandronum stuff
 			po->bMoved = false;
 			po->bRotated = false;
 			po->bBlocked = false;
-			// Next, change the polyobj's first line to point to a mirror
-			//		if it exists
-			po->Sidedefs[0]->linedef->args[1] =
-				po->Sidedefs[0]->linedef->args[2];
 		}
 		else
 			I_Error ("SpawnPolyobj: Poly %d does not exist\n", tag);
@@ -2214,12 +2172,6 @@ void PO_Init (void)
 	// [RH] Don't need the seg lists anymore
 	KillSideLists ();
 
-	// We still need to flag the segs of the polyobj's sidedefs so that they are excluded from rendering.
-	for(int i=0;i<numsegs;i++)
-	{
-		segs[i].bPolySeg = (segs[i].sidedef != NULL && segs[i].sidedef->Flags & WALLF_POLYOBJ);
-	}
-
 	for(int i=0;i<numnodes;i++)
 	{
 		node_t *no = &nodes[i];
@@ -2227,6 +2179,23 @@ void PO_Init (void)
 		double fdy = (double)no->dy;
 		no->len = (float)sqrt(fdx * fdx + fdy * fdy);
 	}
+
+	// mark all subsectors which have a seg belonging to a polyobj
+	// These ones should not be rendered on the textured automap.
+	for (int i = 0; i < numsubsectors; i++)
+	{
+		subsector_t *ss = &subsectors[i];
+		for(DWORD j=0;j<ss->numlines; j++)
+		{
+			if (ss->firstline[j].sidedef != NULL &&
+				ss->firstline[j].sidedef->Flags & WALLF_POLYOBJ)
+			{
+				ss->flags |= SSECF_POLYORG;
+				break;
+			}
+		}
+	}
+
 }
 
 //==========================================================================
@@ -2678,4 +2647,76 @@ void ReleaseAllPolyNodes()
 		next = node->pnext;
 		delete node;
 	}
+}
+
+//==========================================================================
+//
+// FPolyMirrorIterator Constructor
+//
+// This class is used to avoid infinitely looping on cyclical chains of
+// mirrored polyobjects.
+//
+//==========================================================================
+
+FPolyMirrorIterator::FPolyMirrorIterator(FPolyObj *poly)
+{
+	CurPoly = poly;
+	if (poly != NULL)
+	{
+		UsedPolys[0] = poly->tag;
+		NumUsedPolys = 1;
+	}
+	else
+	{
+		NumUsedPolys = 0;
+	}
+}
+
+//==========================================================================
+//
+// FPolyMirrorIterator :: NextMirror
+//
+// Returns the polyobject that mirrors the current one, or NULL if there
+// is no mirroring polyobject, or there is a mirroring polyobject but it was
+// already returned.
+//
+//==========================================================================
+
+FPolyObj *FPolyMirrorIterator::NextMirror()
+{
+	FPolyObj *poly = CurPoly, *nextpoly;
+
+	if (poly == NULL)
+	{
+		return NULL;
+	}
+
+	// Do the work to decide which polyobject to return the next time this
+	// function is called.
+	int mirror = poly->GetMirror(), i;
+	nextpoly = NULL;
+
+	// Is there a mirror and we have room to remember it?
+	if (mirror != 0 && NumUsedPolys != countof(UsedPolys))
+	{
+		// Has this polyobject been returned already?
+		for (i = 0; i < NumUsedPolys; ++i)
+		{
+			if (UsedPolys[i] == mirror)
+			{
+				break;	// Yes, it has been returned.
+			}
+		}
+		if (i == NumUsedPolys)
+		{ // No, it has not been returned.
+			UsedPolys[NumUsedPolys++] = mirror;
+			nextpoly = PO_GetPolyobj(mirror);
+			if (nextpoly == NULL)
+			{
+				Printf("Invalid mirror polyobj num %d for polyobj num %d\n", mirror, UsedPolys[i - 1]);
+			}
+		}
+	}
+	CurPoly = nextpoly;
+	return poly;
 }

@@ -105,8 +105,7 @@ void LASTMANSTANDING_Tick( void )
 	{
 	case LMSS_WAITINGFORPLAYERS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -142,8 +141,7 @@ void LASTMANSTANDING_Tick( void )
 
 			// FIGHT!
 			if (( g_ulLMSCountdownTicks == 0 ) &&
-				( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+				( NETWORK_InClientMode() == false ))
 			{
 				LASTMANSTANDING_DoFight( );
 			}
@@ -158,8 +156,7 @@ void LASTMANSTANDING_Tick( void )
 		break;
 	case LMSS_INPROGRESS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -175,15 +172,10 @@ void LASTMANSTANDING_Tick( void )
 				lWinner = LASTMANSTANDING_GetLastManStanding( );
 				if ( lWinner != -1 )
 				{
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVER_Printf( PRINT_HIGH, "%s \\c-wins!\n", players[lWinner].userinfo.netname );
-					else
-					{
-						Printf( "%s \\c-wins!\n", players[lWinner].userinfo.netname );
+					NETWORK_Printf( "%s \\c-wins!\n", players[lWinner].userinfo.GetName() );
 
-						if ( lWinner == consoleplayer )
-							ANNOUNCER_PlayEntry( cl_announcer, "YouWin" );
-					}
+					if (( NETWORK_GetState() != NETSTATE_SERVER ) && ( lWinner == consoleplayer ))
+						ANNOUNCER_PlayEntry( cl_announcer, "YouWin" );
 
 					// Give the winner a win.
 					PLAYER_SetWins( &players[lWinner], players[lWinner].ulWins + 1 );
@@ -206,10 +198,7 @@ void LASTMANSTANDING_Tick( void )
 
 				if ( ulIdx != MAXPLAYERS )
 				{
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVER_Printf( PRINT_HIGH, "DRAW GAME!\n" );
-					else
-						Printf( "DRAW GAME!\n" );
+					NETWORK_Printf( "DRAW GAME!\n" );
 
 					// Pause for five seconds for the win sequence.
 					LASTMANSTANDING_DoWinSequence( MAXPLAYERS );
@@ -228,14 +217,13 @@ void LASTMANSTANDING_Tick( void )
 				lWinner = LASTMANSTANDING_TeamGetLastManStanding( );
 				if ( lWinner != -1 )
 				{
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVER_Printf( PRINT_HIGH, "%s \\c-wins!\n", TEAM_GetName( lWinner ));
-					else
-					{
-						Printf( "%s \\c-wins!\n", TEAM_GetName( lWinner ));
+					NETWORK_Printf( "%s \\c-wins!\n", TEAM_GetName( lWinner ));
 
-						if ( players[consoleplayer].bOnTeam && ( lWinner == (LONG)players[consoleplayer].ulTeam ))
-							ANNOUNCER_PlayEntry( cl_announcer, "YouWin" );
+					if ( NETWORK_GetState() != NETSTATE_SERVER
+						&& players[consoleplayer].bOnTeam
+						&& lWinner == (LONG)players[consoleplayer].ulTeam )
+					{
+						ANNOUNCER_PlayEntry( cl_announcer, "YouWin" );
 					}
 
 					// Give the team a win.
@@ -265,10 +253,7 @@ void LASTMANSTANDING_Tick( void )
 
 					if ( ulIdx != MAXPLAYERS )
 					{
-						if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-							SERVER_Printf( PRINT_HIGH, "DRAW GAME!\n" );
-						else
-							Printf( "DRAW GAME!\n" );
+						NETWORK_Printf( "DRAW GAME!\n" );
 
 						// Pause for five seconds for the win sequence.
 						LASTMANSTANDING_DoWinSequence( teams.Size( ) );
@@ -281,31 +266,6 @@ void LASTMANSTANDING_Tick( void )
 	default:
 		break;
 	}
-}
-
-//*****************************************************************************
-//
-LONG LASTMANSTANDING_TeamCountMenStanding( ULONG ulTeam )
-{
-	ULONG	ulNumMenStanding = 0;
-
-	// Not in team LMS mode.
-	if ( !teamlms )
-		return ( -1 );
-
-	for ( ULONG ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
-		if ( playeringame[ulIdx] && ( players[ulIdx].bSpectating == false ) && ( PLAYER_IsAliveOrCanRespawn ( &players[ulIdx] ) == true ) && ( players[ulIdx].bOnTeam ) && ( players[ulIdx].ulTeam == ulTeam ))
-			ulNumMenStanding++;
-
-	return ( ulNumMenStanding );
-}
-
-//*****************************************************************************
-// Counts the number of enemies alive in team LMS.
-LONG LASTMANSTANDING_TeamCountEnemiesStanding( ULONG ulTeam )
-{
-	// Total living players - team living players
-	return ( GAME_CountLivingAndRespawnablePlayers( ) - LASTMANSTANDING_TeamCountMenStanding( ulTeam ));
 }
 
 //*****************************************************************************
@@ -387,8 +347,7 @@ void LASTMANSTANDING_StartCountdown( ULONG ulTicks )
 		TEAM_SetFragCount( i, 0, false );
 */
 	// Put the game in a countdown state.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		LASTMANSTANDING_SetState( LMSS_COUNTDOWN );
 	}
@@ -411,8 +370,7 @@ void LASTMANSTANDING_DoFight( void )
 	DHUDMessageFadeOut	*pMsg;
 
 	// The match is now in progress.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		LASTMANSTANDING_SetState( LMSS_INPROGRESS );
 	}
@@ -432,6 +390,9 @@ void LASTMANSTANDING_DoFight( void )
 	{
 		// Play fight sound.
 		ANNOUNCER_PlayEntry( cl_announcer, "Fight" );
+
+		// [EP] Clear all the HUD messages.
+		StatusBar->DetachAllMessages();
 
 		// Display "FIGHT!" HUD message.
 		pMsg = new DHUDMessageFadeOut( BigFont, "FIGHT!",
@@ -463,8 +424,7 @@ void LASTMANSTANDING_DoWinSequence( ULONG ulWinner )
 	ULONG	ulIdx;
 
 	// Put the game state in the win sequence state.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		LASTMANSTANDING_SetState( LMSS_WINSEQUENCE );
 	}
@@ -488,7 +448,7 @@ void LASTMANSTANDING_DoWinSequence( ULONG ulWinner )
 		else if ( ulWinner == MAXPLAYERS )
 			sprintf( szString, "\\cdDRAW GAME!" );
 		else
-			sprintf( szString, "%s \\c-WINS!", players[ulWinner].userinfo.netname );
+			sprintf( szString, "%s \\c-WINS!", players[ulWinner].userinfo.GetName() );
 		V_ColorizeString( szString );
 
 		// Display "%s WINS!" HUD message.
@@ -529,8 +489,7 @@ void LASTMANSTANDING_DoWinSequence( ULONG ulWinner )
 
 	// Award a victory or perfect medal to the winner.
 	if (( lastmanstanding ) &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
 		LONG	lMedal;
 
@@ -610,11 +569,7 @@ void LASTMANSTANDING_TimeExpired( void )
 	// If for some reason we don't have any players, just end the map like normal.
 	if ( lWinner == -1 )
 	{
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-		else
-			Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+		NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 		GAME_SetEndLevelDelay( 5 * TICRATE );
 		return;
 	}
@@ -661,11 +616,7 @@ void LASTMANSTANDING_TimeExpired( void )
 	if ( teamlms )
 		TEAM_SetWinCount( lWinner, TEAM_GetWinCount( lWinner ) + 1, false );
 
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-	else
-		Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+	NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 	GAME_SetEndLevelDelay( 5 * TICRATE );
 }
 
@@ -822,7 +773,7 @@ CUSTOM_CVAR( Int, winlimit, 0, CVAR_SERVERINFO | CVAR_CAMPAIGNLOCK )
 
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 
 		// Update the scoreboard.
@@ -834,7 +785,7 @@ CUSTOM_CVAR( Int, lmsallowedweapons, LMS_AWF_ALLALLOWED, CVAR_SERVERINFO )
 {
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		if ( lastmanstanding || teamlms )
 			SERVERCOMMANDS_SetLMSAllowedWeapons( );
 	}
@@ -854,7 +805,7 @@ CUSTOM_CVAR( Int, lmsspectatorsettings, LMS_SPF_VIEW, CVAR_SERVERINFO )
 {
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		// [BB] Due to ZADF_ALWAYS_APPLY_LMS_SPECTATORSETTINGS, this is necessary in all game modes.
 		SERVERCOMMANDS_SetLMSSpectatorSettings( );
 	}

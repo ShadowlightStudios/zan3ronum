@@ -38,7 +38,6 @@ public:
 	bool SetBrightness(float bright);
 	bool SetContrast(float contrast);
 	void DoSetGamma();
-	bool UsesColormap() const;
 
 	void UpdatePalette();
 	void GetFlashedPalette (PalEntry pal[256]);
@@ -48,6 +47,7 @@ public:
 	int GetPageCount();
 	bool Begin2D(bool copy3d);
 	void GetHitlist(BYTE *hitlist);
+	void GameRestart();
 
 	// Retrieves a buffer containing image data for a screenshot.
 	// Hint: Pitch can be negative for upside-down images, in which case buffer
@@ -65,29 +65,19 @@ public:
 	void Dim(PalEntry color=0);
 	void Dim (PalEntry color, float damount, int x1, int y1, int w, int h);
 	void FlatFill (int left, int top, int right, int bottom, FTexture *src, bool local_origin=false);
-	void DrawRemainingPlayerSprites();
 
-	void PrecacheTexture(FTexture *tex, int cache);
-
-	void StateChanged(AActor *actor);
-
-	// notify the renderer that serialization of the curent level is about to start/end
-	virtual void StartSerialize(FArchive &arc);
-	virtual void EndSerialize(FArchive &arc);
-
-	virtual int GetMaxViewPitch(bool down);
-
+	void FillSimplePoly(FTexture *tex, FVector2 *points, int npoints,
+		double originx, double originy, double scalex, double scaley,
+		angle_t rotation, FDynamicColormap *colormap, int lightlevel);
 
 	FNativePalette *CreatePalette(FRemapTable *remap);
-
-	void RenderView (player_t* player);
-	void WriteSavePic (player_t *player, FILE *file, int width, int height);
 
 	bool WipeStartScreen(int type);
 	void WipeEndScreen();
 	bool WipeDo(int ticks);
 	void WipeCleanup();
 	void Swap();
+	bool Is8BitMode() { return false; }
 
 
 private:

@@ -255,7 +255,7 @@ void MEDAL_Render( void )
 	ulTick	= g_MedalQueue[ulPlayer][0].ulTick;
 
 	if ( ulTick > ( 1 * TICRATE ))
-		lAlpha = OPAQUE * ((float) ulTick / TICRATE );
+		lAlpha = static_cast<long> ( OPAQUE * ((float) ulTick / TICRATE ) );
 
 	// Get the graphic from the global array.
 	patchName = g_Medals[ulMedal].szLumpName;
@@ -278,7 +278,7 @@ void MEDAL_Render( void )
 		// If that length is greater then the screen width, display the medals as "<icon> <name> X <num>"
 		if ( ulLength >= 320 )
 		{
-			ulCurXPos = 160;
+			ulCurXPos = SCREENWIDTH / 2;
 
 			const char* szColor1 = TEXTCOLOR_WHITE,
 				*szColor2 = TEXTCOLOR_RED;
@@ -293,15 +293,15 @@ void MEDAL_Render( void )
 
 			string.Format( "%s%s%s X %lu", szColor1, g_Medals[ulMedal].szStr, szColor2, ulNumMedals );
 
-			screen->DrawTexture( TexMan[patchName], ulCurXPos, (LONG)( ulCurYPos / CleanYfac ),
-				DTA_Clean, true,
+			screen->DrawTexture( TexMan[patchName], ulCurXPos, ulCurYPos,
+				DTA_CleanNoMove, true,
 				DTA_Alpha, lAlpha,
 				TAG_DONE );
 
-			ulCurXPos = 160 - ( SmallFont->StringWidth( string ) / 2 );
+			ulCurXPos = SCREENWIDTH / 2 - CleanXfac * ( SmallFont->StringWidth( string ) / 2 );
 
-			screen->DrawText( SmallFont, g_Medals[ulMedal].ulTextColor, ulCurXPos, (LONG)( ulCurYPos / CleanYfac ), string,
-				DTA_Clean, true,
+			screen->DrawText( SmallFont, g_Medals[ulMedal].ulTextColor, ulCurXPos, ulCurYPos, string,
+				DTA_CleanNoMove, true,
 				DTA_Alpha, lAlpha,
 				TAG_DONE );
 		}
@@ -310,25 +310,25 @@ void MEDAL_Render( void )
 		{
 			ULONG	ulIdx;
 
-			ulCurXPos = 160 - ( ulLength / 2 );
+			ulCurXPos = SCREENWIDTH / 2 - ( CleanXfac * ulLength ) / 2;
 			string = g_Medals[ulMedal].szStr;
 
 			for ( ulIdx = 0; ulIdx < ulNumMedals; ulIdx++ )
 			{
 				screen->DrawTexture( TexMan[patchName],
-					ulCurXPos + ( TexMan[patchName]->GetWidth( ) / 2 ),
-					(long)( ulCurYPos / CleanYfac ),
-					DTA_Clean, true,
+					ulCurXPos + CleanXfac * ( TexMan[patchName]->GetWidth( ) / 2 ),
+					ulCurYPos,
+					DTA_CleanNoMove, true,
 					DTA_Alpha, lAlpha,
 					TAG_DONE );
 
-				ulCurXPos += TexMan[patchName]->GetWidth( );
+				ulCurXPos += CleanXfac * TexMan[patchName]->GetWidth( );
 			}
 
-			ulCurXPos = 160 - ( SmallFont->StringWidth( string ) / 2 );
+			ulCurXPos = SCREENWIDTH / 2 - CleanXfac * ( SmallFont->StringWidth( string ) / 2 );
 
-			screen->DrawText( SmallFont, g_Medals[ulMedal].ulTextColor, ulCurXPos, (LONG)( ulCurYPos / CleanYfac ), string,
-				DTA_Clean, true,
+			screen->DrawText( SmallFont, g_Medals[ulMedal].ulTextColor, ulCurXPos, ulCurYPos, string,
+				DTA_CleanNoMove, true,
 				DTA_Alpha, lAlpha,
 				TAG_DONE );
 		}
@@ -694,7 +694,7 @@ void MEDAL_RenderAllMedalsFullscreen( player_t *pPlayer )
 			medalStatusString += "YOU HAVE NOT YET EARNED ANY MEDALS.";
 		else
 		{
-			medalStatusString += pPlayer->userinfo.netname;
+			medalStatusString += pPlayer->userinfo.GetName();
 			medalStatusString += " HAS NOT YET EARNED ANY MEDALS.";
 		}
 
@@ -723,7 +723,7 @@ void MEDAL_RenderAllMedalsFullscreen( player_t *pPlayer )
 			medalStatusString += "YOU HAVE EARNED THE FOLLOWING MEDALS:";
 		else
 		{
-			medalStatusString += pPlayer->userinfo.netname;
+			medalStatusString += pPlayer->userinfo.GetName();
 			medalStatusString += " HAS EARNED THE FOLLOWING MEDALS:";
 		}
 
@@ -946,7 +946,7 @@ bool medal_PlayerHasCarrierIcon ( ULONG ulPlayer )
 
 	if ( pPlayer->pIcon && pPlayer->pIcon->bTeamItemFloatyIcon )
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USETEAMITEM )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USETEAMITEM )
 			bInvalid = ( TEAM_FindOpposingTeamsItemInPlayersInventory ( pPlayer ) == NULL );
 	}
 
@@ -1034,7 +1034,7 @@ ULONG medal_GetDesiredIcon( player_t *pPlayer, AInventory *&pTeamItem )
 
 	// Draw an ally icon if this person is on our team. Would this be useful for co-op, too?
 	// [BB] In free spectate mode, we don't have allies (and SCOREBOARD_GetViewPlayer doesn't return a useful value).
-	if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) && ( CLIENTDEMO_IsInFreeSpectateMode() == false ) )
+	if ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( CLIENTDEMO_IsInFreeSpectateMode() == false ) )
 	{
 		// [BB] Dead spectators shall see the icon for their teammates.
 		if ( pPlayer->mo->IsTeammate( players[SCOREBOARD_GetViewPlayer()].mo ) && !PLAYER_IsTrueSpectator ( &players[SCOREBOARD_GetViewPlayer()] ) )
@@ -1054,7 +1054,7 @@ ULONG medal_GetDesiredIcon( player_t *pPlayer, AInventory *&pTeamItem )
 		ulDesiredSprite = SPRITE_LAG;
 
 	// Draw a flag/skull above this player if he's carrying one.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USETEAMITEM )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_USETEAMITEM )
 	{
 		if ( pPlayer->bOnTeam )
 		{
@@ -1211,8 +1211,7 @@ void medal_SelectIcon( ULONG ulPlayer )
 		// Lag icon. Delete it if the player is no longer lagging.
 		case S_LAG:
 
-			if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false )) ||
+			if (( NETWORK_InClientMode() == false ) ||
 				( pPlayer->bLagging == false ))
 			{
 				pPlayer->pIcon->Destroy( );
@@ -1242,7 +1241,7 @@ void medal_SelectIcon( ULONG ulPlayer )
 	{
 		if ( pPlayer->pIcon && pPlayer->pIcon->bTeamItemFloatyIcon )
 		{
-			if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USETEAMITEM ) || ( pPlayer->bOnTeam == false )
+			if ( !( GAMEMODE_GetCurrentFlags() & GMF_USETEAMITEM ) || ( pPlayer->bOnTeam == false )
 			     || ( TEAM_FindOpposingTeamsItemInPlayersInventory ( pPlayer ) == NULL ) )
 			{
 				pPlayer->pIcon->Destroy( );

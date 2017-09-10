@@ -18,7 +18,8 @@ class ADynamicLight;
 class FMaterial;
 struct GLDrawList;
 struct GLSkyInfo;
-struct GLSectorStackInfo;
+struct FTexCoordInfo;
+struct FPortal;
 
 
 enum WallTypes
@@ -117,7 +118,7 @@ public:
 	
 	fixed_t viewdistance;
 
-	BYTE lightlevel;
+	int lightlevel;
 	BYTE type;
 	BYTE flags;
 	short rellight;
@@ -126,7 +127,6 @@ public:
 	float bottomglowcolor[4];
 
 	int firstdynlight, lastdynlight;
-	int firstwall, numwalls;	// splitting info.
 
 	union
 	{
@@ -134,7 +134,7 @@ public:
 		AActor * skybox;			// for skyboxes
 		GLSkyInfo * sky;			// for normal sky
 		GLHorizonInfo * horizon;	// for horizon information
-		GLSectorStackInfo * stack;	// for sector stacks
+		FPortal * portal;			// stacked sector portals
 		secplane_t * planemirror;	// for plane mirrors
 	};
 
@@ -162,19 +162,18 @@ private:
 
 	void FloodPlane(int pass);
 
-	void MirrorPlane(secplane_t * plane, bool ceiling);
-	void SkyTexture(int sky1,ASkyViewpoint * skyboxx, bool ceiling);
-
+	void SkyPlane(sector_t *sector, int plane, bool allowmirror);
 	void SkyNormal(sector_t * fs,vertex_t * v1,vertex_t * v2);
 	void SkyTop(seg_t * seg,sector_t * fs,sector_t * bs,vertex_t * v1,vertex_t * v2);
 	void SkyBottom(seg_t * seg,sector_t * fs,sector_t * bs,vertex_t * v1,vertex_t * v2);
+
 	void Put3DWall(lightlist_t * lightlist, bool translucent);
 	void SplitWall(sector_t * frontsector, bool translucent);
 	void LightPass();
 	void SetHorizon(vertex_t * ul, vertex_t * ur, vertex_t * ll, vertex_t * lr);
 	bool DoHorizon(seg_t * seg,sector_t * fs, vertex_t * v1,vertex_t * v2);
 
-	bool SetWallCoordinates(seg_t * seg, float ceilingrefheight,
+	bool SetWallCoordinates(seg_t * seg, FTexCoordInfo *tci, float ceilingrefheight,
 							int topleft,int topright, int bottomleft,int bottomright, int texoffset);
 
 	void DoTexture(int type,seg_t * seg,int peg,
@@ -184,6 +183,7 @@ private:
 						   int v_offset);
 
 	void DoMidTexture(seg_t * seg, bool drawfogboundary,
+					  sector_t * front, sector_t * back,
 					  sector_t * realfront, sector_t * realback,
 					  fixed_t fch1, fixed_t fch2, fixed_t ffh1, fixed_t ffh2,
 					  fixed_t bch1, fixed_t bch2, fixed_t bfh1, fixed_t bfh2);
@@ -203,10 +203,8 @@ private:
 					  fixed_t fch1, fixed_t fch2, fixed_t ffh1, fixed_t ffh2,
 					  fixed_t bch1, fixed_t bch2, fixed_t bfh1, fixed_t bfh2);
 
-	void DrawDecal(DBaseDecal *actor, seg_t *seg, sector_t *frontSector, sector_t *backSector);
-	void DoDrawDecals(DBaseDecal * decal, seg_t * seg);
-	void ProcessOneDecal(seg_t *seg, DBaseDecal * decal, float leftxfrac,float rightxfrac);
-	void ProcessDecals(seg_t *seg, float leftxfrac,float rightxfrac);
+	void DrawDecal(DBaseDecal *actor);
+	void DoDrawDecals();
 
 	void RenderFogBoundary();
 	void RenderMirrorSurface();
@@ -280,7 +278,7 @@ public:
 	void PutFlat(bool fog = false);
 	void Process(sector_t * model, int whichplane, bool notexture);
 	void SetFrom3DFloor(F3DFloor *rover, bool top, bool underside);
-	void ProcessSector(sector_t * frontsector, subsector_t * sub);
+	void ProcessSector(sector_t * frontsector);
 	void Draw(int pass);
 };
 
@@ -306,6 +304,7 @@ public:
 	FColormap Colormap;
 	FSpriteModelFrame * modelframe;
 	FRenderStyle RenderStyle;
+	int OverrideShader;
 
 	int translation;
 	int index;
@@ -346,7 +345,7 @@ inline float Dist2(float x1,float y1,float x2,float y2)
 
 // Light + color
 
-bool gl_GetSpriteLight(AActor *Self, fixed_t x, fixed_t y, fixed_t z, subsector_t * subsec, int desaturation, float * out);
+bool gl_GetSpriteLight(AActor *Self, fixed_t x, fixed_t y, fixed_t z, subsector_t * subsec, int desaturation, float * out, line_t *line = NULL, int side = 0);
 int gl_SetSpriteLight(AActor * thing, int lightlevel, int rellight, FColormap * cm, float alpha, PalEntry ThingColor = 0xffffff, bool weapon=false);
 
 void gl_GetSpriteLight(AActor * thing, int lightlevel, int rellight, FColormap * cm,

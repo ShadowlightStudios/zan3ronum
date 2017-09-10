@@ -54,6 +54,7 @@
 #include "cl_main.h"
 #include "cmdlib.h"
 #include "d_event.h"
+#include "d_net.h"
 #include "d_netinf.h"
 #include "d_protocol.h"
 #include "doomstat.h"
@@ -70,8 +71,28 @@
 #include "sbar.h"
 #include "version.h"
 #include "templates.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "m_cheat.h"
+#include "network_enums.h"
+
+//*****************************************************************************
+enum 
+{
+	// [BC] Message headers with bytes starting with 0 and going sequentially
+	// isn't very distinguishing from other formats (such as normal ZDoom demos),
+	// but does that matter?
+	CLD_DEMOLENGTH = NUM_SERVER_COMMANDS,
+	CLD_DEMOVERSION,
+	CLD_CVARS,
+	CLD_USERINFO,
+	CLD_BODYSTART,
+	CLD_TICCMD,
+	CLD_LOCALCOMMAND, // [Dusk]
+	CLD_DEMOEND,
+	CLD_DEMOWADS, // [Dusk]
+
+	NUM_DEMO_COMMANDS
+};
 
 //*****************************************************************************
 //	PROTOTYPES
@@ -87,6 +108,9 @@ static	bool				g_bDemoRecording;
 // Are we playing a demo?
 static	bool				g_bDemoPlaying;
 static	bool				g_bDemoPlayingHonest;
+
+// [BB] Is the demo we are playing paused?
+static	bool				g_bDemoPaused = false;
 
 // [BB] Do we want to skip to the next map in the demo we are playing at the moment?
 static	bool				g_bSkipToNextMap = false;
@@ -303,24 +327,24 @@ void CLIENTDEMO_WriteUserInfo( void )
 	// First, make sure we have enough space to write this command. If not, add
 	// more space.
 	clientdemo_CheckDemoBuffer( 18 +
-		(ULONG)strlen( players[consoleplayer].userinfo.netname ) +
-		(ULONG)strlen( skins[players[consoleplayer].userinfo.skin].name ) +
+		(ULONG)strlen( players[consoleplayer].userinfo.GetName() ) +
+		(ULONG)strlen( skins[players[consoleplayer].userinfo.GetSkin()].name ) +
 		(ULONG)strlen( PlayerClasses[players[consoleplayer].CurrentPlayerClass].Type->Meta.GetMetaString( APMETA_DisplayName )));
 
 	// Write the header.
 	NETWORK_WriteByte( &g_ByteStream, CLD_USERINFO );
 
 	// Write the player's userinfo.
-	NETWORK_WriteString( &g_ByteStream, players[consoleplayer].userinfo.netname );
-	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.gender );
-	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.color );
-	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.aimdist );
-	NETWORK_WriteString( &g_ByteStream, skins[players[consoleplayer].userinfo.skin].name );
-	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.lRailgunTrailColor );
-	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.lHandicap );
-	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.ulTicsPerUpdate );
-	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.ulConnectionType );
-	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.clientFlags ); // [CK] List of booleans
+	NETWORK_WriteString( &g_ByteStream, players[consoleplayer].userinfo.GetName() );
+	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.GetGender() );
+	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.GetColor() );
+	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.GetAimDist() );
+	NETWORK_WriteString( &g_ByteStream, skins[players[consoleplayer].userinfo.GetSkin()].name );
+	NETWORK_WriteLong( &g_ByteStream, players[consoleplayer].userinfo.GetRailColor() );
+	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.GetHandicap() );
+	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.GetTicsPerUpdate() );
+	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.GetConnectionType() );
+	NETWORK_WriteByte( &g_ByteStream, players[consoleplayer].userinfo.GetClientFlags() ); // [CK] List of booleans
 	NETWORK_WriteString( &g_ByteStream, PlayerClasses[players[consoleplayer].CurrentPlayerClass].Type->Meta.GetMetaString( APMETA_DisplayName ));
 }
 
@@ -328,18 +352,19 @@ void CLIENTDEMO_WriteUserInfo( void )
 //
 void CLIENTDEMO_ReadUserInfo( void )
 {
-	sprintf( players[consoleplayer].userinfo.netname, "%s", NETWORK_ReadString( &g_ByteStream ));
+	userinfo_t &info = players[consoleplayer].userinfo;
+	*static_cast<FStringCVar *>(info[NAME_Name]) =  NETWORK_ReadString( &g_ByteStream );
 	// [BB] Make sure that the gender is valid.
-	players[consoleplayer].userinfo.gender = clamp ( NETWORK_ReadByte( &g_ByteStream ), 0, 2 );
-	players[consoleplayer].userinfo.color = NETWORK_ReadLong( &g_ByteStream );
-	players[consoleplayer].userinfo.aimdist = NETWORK_ReadLong( &g_ByteStream );
-	players[consoleplayer].userinfo.skin = R_FindSkin( NETWORK_ReadString( &g_ByteStream ), players[consoleplayer].CurrentPlayerClass );
-	players[consoleplayer].userinfo.lRailgunTrailColor = NETWORK_ReadLong( &g_ByteStream );
-	players[consoleplayer].userinfo.lHandicap = NETWORK_ReadByte( &g_ByteStream );
-	players[consoleplayer].userinfo.ulTicsPerUpdate = NETWORK_ReadByte( &g_ByteStream );
-	players[consoleplayer].userinfo.ulConnectionType = NETWORK_ReadByte( &g_ByteStream );
-	players[consoleplayer].userinfo.clientFlags = NETWORK_ReadByte( &g_ByteStream ); // [CK] Client booleans
-	players[consoleplayer].userinfo.PlayerClass = D_PlayerClassToInt( NETWORK_ReadString( &g_ByteStream ));
+	*static_cast<FIntCVar *>(info[NAME_Gender]) = clamp ( NETWORK_ReadByte( &g_ByteStream ), 0, 2 );
+	info.ColorChanged( NETWORK_ReadLong( &g_ByteStream ) );
+	*static_cast<FFloatCVar *>(info[NAME_Autoaim]) = static_cast<float> ( NETWORK_ReadLong( &g_ByteStream ) ) / ANGLE_1 ;
+	*static_cast<FIntCVar *>(info[NAME_Skin]) = R_FindSkin( NETWORK_ReadString( &g_ByteStream ), players[consoleplayer].CurrentPlayerClass );
+	*static_cast<FIntCVar *>(info[NAME_RailColor]) = NETWORK_ReadLong( &g_ByteStream );
+	*static_cast<FIntCVar *>(info[NAME_Handicap]) = NETWORK_ReadByte( &g_ByteStream );
+	info.TicsPerUpdateChanged ( NETWORK_ReadByte( &g_ByteStream ) );
+	info.ConnectionTypeChanged ( NETWORK_ReadByte( &g_ByteStream ) );
+	info.ClientFlagsChanged ( NETWORK_ReadByte( &g_ByteStream ) ); // [CK] Client booleans
+	info.PlayerClassChanged ( NETWORK_ReadString( &g_ByteStream ));
 
 	R_BuildPlayerTranslation( consoleplayer );
 	if ( StatusBar )
@@ -352,9 +377,9 @@ void CLIENTDEMO_ReadUserInfo( void )
 			players[consoleplayer].mo->state->sprite ==
 			GetDefaultByType (players[consoleplayer].cls)->SpawnState->sprite)
 		{ // Only change the sprite if the player is using a standard one
-			players[consoleplayer].mo->sprite = skins[players[consoleplayer].userinfo.skin].sprite;
-			players[consoleplayer].mo->scaleX = skins[players[consoleplayer].userinfo.skin].ScaleX;
-			players[consoleplayer].mo->scaleY = skins[players[consoleplayer].userinfo.skin].ScaleY;
+			players[consoleplayer].mo->sprite = skins[players[consoleplayer].userinfo.GetSkin()].sprite;
+			players[consoleplayer].mo->scaleX = skins[players[consoleplayer].userinfo.GetSkin()].ScaleX;
+			players[consoleplayer].mo->scaleY = skins[players[consoleplayer].userinfo.GetSkin()].ScaleY;
 		}
 	}
 }
@@ -458,6 +483,10 @@ void CLIENTDEMO_ReadPacket( void )
 	{  
 		lCommand = NETWORK_ReadByte( &g_ByteStream );
 
+		// [TP/BB] Reset the bit reading buffer.
+		g_ByteStream.bitBuffer = NULL;
+		g_ByteStream.bitShift = -1;
+
 		// End of message.
 		if ( lCommand == -1 )
 		{
@@ -513,16 +542,24 @@ void CLIENTDEMO_ReadPacket( void )
 				break;
 			case CLD_LCMD_CENTERVIEW:
 
-				if ( players[consoleplayer].mo )
-					players[consoleplayer].mo->pitch = 0;
+				Net_DoCommand( DEM_CENTERVIEW, NULL, consoleplayer );
 				break;
 			case CLD_LCMD_TAUNT:
 
 				PLAYER_Taunt( &players[consoleplayer] );
 				break;
-			case CLD_LCMD_NOCLIP:
+			case CLD_LCMD_CHEAT:
 
-				cht_DoCheat( &players[consoleplayer], CHT_NOCLIP );
+				cht_DoCheat( &players[consoleplayer], NETWORK_ReadByte( &g_ByteStream ));
+				break;
+			case CLD_LCMD_WARPCHEAT:
+
+				{
+					fixed_t x = NETWORK_ReadLong( &g_ByteStream );
+					fixed_t y = NETWORK_ReadLong( &g_ByteStream );
+					Printf( "warp %g %g\n", FIXED2FLOAT( x ), FIXED2FLOAT( y ));
+					P_TeleportMove( players[consoleplayer].mo, x, y, ONFLOORZ, true );
+				}
 				break;
 			}
 			break;
@@ -532,11 +569,9 @@ void CLIENTDEMO_ReadPacket( void )
 			return;
 		default:
 
-#ifdef _DEBUG
 			// Option to print commands for debugging purposes.
 			if ( cl_showcommands )
 				CLIENT_PrintCommand( lCommand );
-#endif
 
 			CLIENT_ProcessCommand( lCommand, &g_ByteStream );
 			break;
@@ -671,6 +706,13 @@ LONG CLIENTDEMO_GetGameticOffset( void )
 
 //*****************************************************************************
 //
+void CLIENTDEMO_SetGameticOffset( LONG lOffset )
+{
+	g_lGameticOffset = lOffset;
+}
+
+//*****************************************************************************
+//
 void CLIENTDEMO_WriteLocalCommand( ClientDemoLocalCommand command, const char* pszArg )
 {
 	if ( pszArg != NULL )
@@ -686,6 +728,28 @@ void CLIENTDEMO_WriteLocalCommand( ClientDemoLocalCommand command, const char* p
 }
 
 //*****************************************************************************
+//
+// [TP] Writes a cheat into the demo
+//
+void CLIENTDEMO_WriteCheat ( ECheatCommand cheat )
+{
+	clientdemo_CheckDemoBuffer( 3 );
+	NETWORK_WriteByte( &g_ByteStream, CLD_LOCALCOMMAND );
+	NETWORK_WriteByte( &g_ByteStream, CLD_LCMD_CHEAT );
+	NETWORK_WriteByte( &g_ByteStream, cheat );
+}
+
+//*****************************************************************************
+//
+void CLIENTDEMO_WriteWarpCheat ( fixed_t x, fixed_t y )
+{
+	clientdemo_CheckDemoBuffer( 10 );
+	NETWORK_WriteByte( &g_ByteStream, CLD_LOCALCOMMAND );
+	NETWORK_WriteByte( &g_ByteStream, CLD_LCMD_WARPCHEAT );
+	NETWORK_WriteLong( &g_ByteStream, x );
+	NETWORK_WriteLong( &g_ByteStream, y );
+}
+
 //*****************************************************************************
 //
 bool CLIENTDEMO_IsRecording( void )
@@ -712,6 +776,21 @@ bool CLIENTDEMO_IsPlaying( void )
 void CLIENTDEMO_SetPlaying( bool bPlaying )
 {
 	g_bDemoPlaying = bPlaying;
+}
+
+//*****************************************************************************
+//
+bool CLIENTDEMO_IsPaused( void )
+{
+	if ( CLIENTDEMO_IsPlaying() == false )
+		return false;
+
+	// [BB] Allow to skip while the playback is paused. This allows to go
+	// through a demo tic by tic.
+	if ( CLIENTDEMO_IsSkipping() == true )
+		return false;
+
+	return g_bDemoPaused;
 }
 
 //*****************************************************************************
@@ -751,9 +830,11 @@ void CLIENTDEMO_SetFreeSpectatorTiccmd( ticcmd_t *pCmd )
 
 //*****************************************************************************
 //
-void CLIENTDEMO_FreeSpectatorPlayerThink( void )
+void CLIENTDEMO_FreeSpectatorPlayerThink( bool bTickBody )
 {
 	P_PlayerThink ( &g_demoCameraPlayer );
+	if ( bTickBody )
+		g_demoCameraPlayer.mo->Tick();
 }
 
 //*****************************************************************************
@@ -873,6 +954,24 @@ static void clientdemo_CheckDemoBuffer( ULONG ulSize )
 
 //*****************************************************************************
 //	CONSOLE COMMANDS
+
+CCMD( demo_pause )
+{
+	// [BB] This command shouldn't do anything if a demo isn't playing.
+	if ( CLIENTDEMO_IsPlaying( ) == false )
+		return;
+
+	if (g_bDemoPaused)
+	{
+		g_bDemoPaused = false;
+		S_ResumeSound (false);
+	}
+	else
+	{
+		g_bDemoPaused = true;
+		S_PauseSound (false, false);
+	}
+}
 
 CCMD( demo_skiptonextmap )
 {

@@ -40,9 +40,9 @@
 #include "s_sound.h"
 #include "d_event.h"
 #include "m_random.h"
+#include "doomerrors.h"
 #include "doomstat.h"
 #include "wi_stuff.h"
-#include "r_data.h"
 #include "w_wad.h"
 #include "am_map.h"
 #include "c_dispatch.h"
@@ -51,7 +51,7 @@
 #include "p_local.h"
 #include "r_sky.h"
 #include "c_console.h"
-#include "f_finale.h"
+#include "intermission/intermission.h"
 #include "gstrings.h"
 #include "v_video.h"
 #include "st_stuff.h"
@@ -67,16 +67,21 @@
 #include "m_png.h"
 #include "m_random.h"
 #include "version.h"
-#include "m_menu.h"
 #include "statnums.h"
 #include "sbarinfo.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "p_lnspec.h"
-#include "r_interpolate.h"
+#include "r_data/r_interpolate.h"
 #include "cmdlib.h"
 #include "d_net.h"
 #include "d_netinf.h"
 #include "v_palette.h"
+#include "menu/menu.h"
+#include "a_sharedglobal.h"
+#include "a_strifeglobal.h"
+#include "r_data/colormaps.h"
+#include "farchive.h"
+#include "r_renderer.h"
 // [BB] New #includes.
 #include "cl_main.h"
 #include "deathmatch.h"
@@ -105,22 +110,14 @@
 
 #include "g_hub.h"
 
+void STAT_StartNewGame(const char *lev);
+void STAT_ChangeLevel(const char *newl);
 
-#ifndef STAT
-#define STAT_NEW(map)
-#define STAT_END(newl)
-#define STAT_READ(png)
-#define STAT_WRITE(f)
-#else
-void STAT_NEW(const char *lev);
-void STAT_END(const char *newl);
-void STAT_READ(PNGHandle *png);
-void STAT_WRITE(FILE *f);
-#endif
 
 EXTERN_CVAR (Float, sv_gravity)
 EXTERN_CVAR (Float, sv_aircontrol)
 EXTERN_CVAR (Int, disableautosave)
+EXTERN_CVAR (String, playerclass)
 
 #define SNAP_ID			MAKE_ID('s','n','A','p')
 #define DSNP_ID			MAKE_ID('d','s','N','p')
@@ -129,22 +126,11 @@ EXTERN_CVAR (Int, disableautosave)
 #define RCLS_ID			MAKE_ID('r','c','L','s')
 #define PCLS_ID			MAKE_ID('p','c','L','s')
 
-static void SetEndSequence (char *nextmap, int type);
 void G_VerifySkill();
 
 
 static FRandom pr_classchoice ("RandomPlayerClassChoice");
 static	FRandom		g_RandomMapSeed( "MapSeed" );
-
-TArray<EndSequence> EndSequences;
-
-EndSequence::EndSequence()
-{
-	EndType = END_Pic;
-	Advanced = false;
-	MusicLooping = false;
-	PlayTheEnd = false;
-}
 
 extern level_info_t TheDefaultLevelInfo;
 extern bool timingdemo;
@@ -153,90 +139,17 @@ extern bool timingdemo;
 int starttime;
 
 
-extern bool netdemo;
 extern FString BackupSaveName;
 
 bool savegamerestore;
 
 extern int mousex, mousey;
 extern bool sendpause, sendsave, sendturn180, SendLand;
-extern const AInventory *SendItemUse, *SendItemDrop;
 
 void *statcopy;					// for statistics driver
 
 FLevelLocals level;			// info about current level
 
-//==========================================================================
-//
-//
-//==========================================================================
-
-int FindEndSequence (int type, const char *picname)
-{
-	unsigned int i, num;
-
-	num = EndSequences.Size ();
-	for (i = 0; i < num; i++)
-	{
-		if (EndSequences[i].EndType == type && !EndSequences[i].Advanced &&
-			(type != END_Pic || stricmp (EndSequences[i].PicName, picname) == 0))
-		{
-			return (int)i;
-		}
-	}
-	return -1;
-}
-
-//==========================================================================
-//
-//
-//==========================================================================
-
-static void SetEndSequence (char *nextmap, int type)
-{
-	int seqnum;
-
-	seqnum = FindEndSequence (type, NULL);
-	if (seqnum == -1)
-	{
-		EndSequence newseq;
-		newseq.EndType = type;
-		seqnum = (int)EndSequences.Push (newseq);
-	}
-	mysnprintf(nextmap, 11, "enDSeQ%04x", (WORD)seqnum);
-}
-
-//==========================================================================
-//
-//
-//==========================================================================
-
-void G_SetForEndGame (char *nextmap)
-{
-	if (!strncmp(nextmap, "enDSeQ",6)) return;	// If there is already an end sequence please leave it alone!!!
-
-	// [BB] In multiplayer games end sequences are not supported. So just ignore them.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		return;
-
-	if (gameinfo.gametype == GAME_Strife)
-	{
-		SetEndSequence (nextmap, gameinfo.flags & GI_SHAREWARE ? END_BuyStrife : END_Strife);
-	}
-	else if (gameinfo.gametype == GAME_Hexen)
-	{
-		SetEndSequence (nextmap, END_Chess);
-	}
-	else if (gameinfo.gametype == GAME_Doom && (gameinfo.flags & GI_MAPxx))
-	{
-		SetEndSequence (nextmap, END_Cast);
-	}
-	else
-	{ // The ExMx games actually have different ends based on the episode,
-	  // but I want to keep this simple.
-		SetEndSequence (nextmap, END_Pic1);
-	}
-}
 
 //==========================================================================
 //
@@ -257,6 +170,15 @@ void G_DeferedInitNew (const char *mapname, int newskill)
 	gameaction = ga_newgame2;
 }
 
+void G_DeferedInitNew (FGameStartup *gs)
+{
+	if (gs->PlayerClass != NULL) playerclass = gs->PlayerClass;
+	d_mapname = AllEpisodes[gs->Episode].mEpisodeMap;
+	d_skill = gs->Skill;
+	CheckWarpTransMap (d_mapname, true);
+	gameaction = ga_newgame2;
+}
+
 //==========================================================================
 //
 //
@@ -266,37 +188,45 @@ CCMD (map)
 {
 	if (argv.argc() > 1)
 	{
-		if (!P_CheckMapData(argv[1]))
+		try
 		{
-			Printf ("No map %s\n", argv[1]);
+			if (!P_CheckMapData(argv[1]))
+			{
+				Printf ("No map %s\n", argv[1]);
+			}
+			else
+			{
+				if ( sv_maprotation )
+					MAPROTATION_SetPositionToMap( argv[1] );
+
+				// Tell the clients about the mapchange.
+				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+					SERVER_ReconnectNewLevel( argv[1] );
+
+				// Tell the server we're leaving the game.
+				if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
+					CLIENT_QuitNetworkGame( NULL );
+
+				// Turn campaign mode back on.
+				CAMPAIGN_EnableCampaign( );
+
+				// Reset the duel and LMS modules.
+				if ( duel )
+					DUEL_SetState( DS_WAITINGFORPLAYERS );
+				if ( lastmanstanding || teamlms )
+					LASTMANSTANDING_SetState( LMSS_WAITINGFORPLAYERS );
+				if ( possession || teampossession )
+					POSSESSION_SetState( PSNS_WAITINGFORPLAYERS );
+				if ( invasion )
+					INVASION_SetState( IS_WAITINGFORPLAYERS );
+
+				G_DeferedInitNew (argv[1]);
+			}
 		}
-		else
+		catch(CRecoverableError &error)
 		{
-			if ( sv_maprotation )
-				MAPROTATION_SetPositionToMap( argv[1] );
-
-			// Tell the clients about the mapchange.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVER_ReconnectNewLevel( argv[1] );
-
-			// Tell the server we're leaving the game.
-			if ( NETWORK_GetState( ) == NETSTATE_CLIENT )
-				CLIENT_QuitNetworkGame( NULL );
-
-			// Turn campaign mode back on.
-			CAMPAIGN_EnableCampaign( );
-
-			// Reset the duel and LMS modules.
-			if ( duel )
-				DUEL_SetState( DS_WAITINGFORPLAYERS );
-			if ( lastmanstanding || teamlms )
-				LASTMANSTANDING_SetState( LMSS_WAITINGFORPLAYERS );
-			if ( possession || teampossession )
-				POSSESSION_SetState( PSNS_WAITINGFORPLAYERS );
-			if ( invasion )
-				INVASION_SetState( IS_WAITINGFORPLAYERS );
-
-			G_DeferedInitNew (argv[1]);
+			if (error.GetMessage())
+				Printf("%s", error.GetMessage());
 		}
 	}
 	else
@@ -349,10 +279,7 @@ void G_NewInit ()
 	int i;
 
 	G_ClearSnapshots ();
-	// [BC] Server doesn't have a screen.
-	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-		SB_state = screen->GetPageCount ();
-	netdemo = false;
+	ST_SetNeedRefresh();
 	if (demoplayback)
 	{
 		C_RestoreCVars ();
@@ -368,14 +295,15 @@ void G_NewInit ()
 	for (i = 0; i < MAXPLAYERS; ++i)
 	{
 		player_t *p = &players[i];
-		userinfo_t saved_ui = players[i].userinfo;
+		userinfo_t saved_ui;
+		saved_ui.TransferFrom(players[i].userinfo);
 		int chasecam = p->cheats & CF_CHASECAM;
 		p->~player_t();
 		::new(p) player_t;
 		players[i].cheats |= chasecam;
 		players[i].playerstate = PST_DEAD;
 		playeringame[i] = 0;
-		players[i].userinfo = saved_ui;
+		players[i].userinfo.TransferFrom(saved_ui);
 	}
 	BackupSaveName = "";
 	consoleplayer = 0;
@@ -431,7 +359,7 @@ static void InitPlayerClasses ()
 	{
 		for (int i = 0; i < MAXPLAYERS; ++i)
 		{
-			SinglePlayerClass[i] = players[i].userinfo.PlayerClass;
+			SinglePlayerClass[i] = players[i].userinfo.GetPlayerClassNum();
 			if (SinglePlayerClass[i] < 0 || !playeringame[i])
 			{
 				SinglePlayerClass[i] = (pr_classchoice()) % PlayerClasses.Size ();
@@ -453,6 +381,8 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	bool wantFast;
 	int i;
 
+	G_ClearHubInfo();
+
 	// [BB] If there is a free spectator player from the last map, be sure to get rid of it.
 	if ( CLIENTDEMO_IsPlaying() )
 		CLIENTDEMO_ClearFreeSpectatorPlayer();
@@ -460,8 +390,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	// [BC] Clients need to keep their snapshots around for hub purposes, and since
 	// they always use G_InitNew (which they probably shouldn't).
 	if ((!savegamerestore) &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
 		G_ClearSnapshots ();
 		P_RemoveDefereds ();
@@ -471,15 +400,13 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 			wadlevelinfos[i].flags = wadlevelinfos[i].flags & ~LEVEL_VISITED;
 	}
 
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		UnlatchCVars ();
 	}
 	
 	G_VerifySkill();
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		UnlatchCVars ();
 	}
@@ -554,7 +481,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	}
 	setsizeneeded = true;
 
-	if (gameinfo.gametype == GAME_Strife || (SBarInfoScript != NULL && SBarInfoScript[SCRIPT_CUSTOM]->GetGameType() == GAME_Strife))
+	if (gameinfo.gametype == GAME_Strife || (SBarInfoScript[SCRIPT_CUSTOM] != NULL && SBarInfoScript[SCRIPT_CUSTOM]->GetGameType() == GAME_Strife))
 	{
 		// Set the initial quest log text for Strife.
 		for (i = 0; i < MAXPLAYERS; ++i)
@@ -576,12 +503,14 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	if (!savegamerestore)
 	{
 		// [BC] Support for client-side demos.
-		if (!demoplayback && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( ( CLIENTDEMO_IsPlaying( ) == false ) && !demorecording && !demoplayback)
 		{
 			// [BB] Change the random seed also for multiplayer 'map' changes
 			if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
-			{ // [RH] Change the random seed for each new single player game
-				rngseed = rngseed + 1;
+			{
+				// [RH] Change the random seed for each new single player game
+				// [ED850] The demo already sets the RNG.
+				rngseed = use_staticrng ? staticrngseed : (rngseed + 1);
 			}
 			FRandom::StaticClearRandom ();
 		}
@@ -603,7 +532,7 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 		for (i = 0; i < MAXPLAYERS; i++)
 			players[i].playerstate = PST_ENTER;	// [BC]
 
-		STAT_NEW(mapname);
+		STAT_StartNewGame(mapname);
 	}
 
 	usergame = !bTitleLevel;				// will be set false if a demo
@@ -622,8 +551,15 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 	else
 		viewactive = false;
 
-	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-		BorderNeedRefresh = screen->GetPageCount ();
+	V_SetBorderNeedRefresh();
+
+	/* [BB] Zandronum treats bots differently.
+	//Added by MC: Initialize bots.
+	if (!deathmatch)
+	{
+		bglobal.Init ();
+	}
+	*/
 
 	if (mapname != level.mapname)
 	{
@@ -661,7 +597,6 @@ static bool		unloading;
 //
 //==========================================================================
 
-
 void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill)
 {
 	level_info_t *nextinfo = NULL;
@@ -671,10 +606,31 @@ void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill
 		Printf (TEXTCOLOR_RED "Unloading scripts cannot exit the level again.\n");
 		return;
 	}
-
-	if (strncmp(levelname, "enDSeQ", 6) != 0)
+	if (gameaction == ga_completed)	// do not exit multiple times.
 	{
-		nextinfo = FindLevelInfo (levelname);
+		return;
+	}
+
+	if (levelname == NULL || *levelname == 0)
+	{
+		// end the game
+		levelname = NULL;
+		if (!strncmp(level.nextmap, "enDSeQ",6))
+		{
+			levelname = level.nextmap;	// If there is already an end sequence please leave it alone!
+		}
+		else 
+		{
+			// [BB] The server doesn't support end sequences, so just return to the current map.
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+				nextlevel = level.mapname;
+			else
+				nextlevel.Format("enDSeQ%04x", int(gameinfo.DefaultEndSequence));
+		}
+	}
+	else if (strncmp(levelname, "enDSeQ", 6) != 0)
+	{
+		nextinfo = FindLevelInfo (levelname, false);
 		if (nextinfo != NULL)
 		{
 			level_info_t *nextredir = nextinfo->CheckLevelRedirect();
@@ -686,7 +642,7 @@ void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill
 		}
 	}
 
-	nextlevel = levelname;
+	if (levelname != NULL) nextlevel = levelname;
 
 	if (nextSkill != -1)
 		NextSkill = nextSkill;
@@ -736,7 +692,7 @@ void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill
 			MAPROTATION_AdvanceMap();
 	}
 
-	STAT_END(nextlevel);
+	STAT_ChangeLevel(nextlevel);
 
 	if (thiscluster && (thiscluster->flags & CLUSTER_HUB))
 	{
@@ -756,7 +712,7 @@ void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill
 
 			// [BB] sv_maxlives is meant to specify the number of lives per map.
 			// So restore ulLivesLeft after a map change.
-			if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEMAXLIVES )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_USEMAXLIVES )
 			{
 				PLAYER_SetLivesLeft ( player, GAMEMODE_GetMaxLives() - 1 );
 			}
@@ -860,10 +816,7 @@ void G_ExitLevel (int position, bool keepFacing)
 		return;
 	}
 
-	// [BB] We need to pass ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) as last
-	// argument, otherwise this flag will be cleared by G_ChangeLevel, no matter if
-	// it is set or not.
-	G_ChangeLevel(G_GetExitMap(), position, ( keepFacing ? CHANGELEVEL_KEEPFACING : 0 ) | ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) ? CHANGELEVEL_NOMONSTERS : 0 ); 
+	G_ChangeLevel(G_GetExitMap(), position, keepFacing ? CHANGELEVEL_KEEPFACING : 0); 
 }
 
 void G_SecretExitLevel (int position) 
@@ -874,9 +827,8 @@ void G_SecretExitLevel (int position)
 	{
 		return;
 	}
-	
-	// [TL] Pass additional parameters to make "nextsecret" CCMD work online.
-	G_ChangeLevel(G_GetSecretExitMap(), position, ( (dmflags & DF_NO_MONSTERS) == DF_NO_MONSTERS ) ? CHANGELEVEL_NOMONSTERS : 0 );
+
+	G_ChangeLevel(G_GetSecretExitMap(), position, 0);
 }
 
 //==========================================================================
@@ -890,6 +842,13 @@ void G_DoCompleted (void)
 	int i; 
 
 	gameaction = ga_nothing;
+
+	if (   gamestate == GS_DEMOSCREEN
+		|| gamestate == GS_FULLCONSOLE
+		|| gamestate == GS_STARTUP)
+	{
+		return;
+	}
 
 	if (gamestate == GS_TITLELEVEL)
 	{
@@ -920,14 +879,14 @@ void G_DoCompleted (void)
 	}
 	else
 	{
-		if (strncmp (nextlevel, "enDSeQ", 6) == 0)
+		level_info_t *nextinfo = FindLevelInfo (nextlevel, false);
+		if (nextinfo == NULL || strncmp (nextlevel, "enDSeQ", 6) == 0)
 		{
 			wminfo.next = nextlevel;
 			wminfo.LName1 = NULL;
 		}
 		else
 		{
-			level_info_t *nextinfo = FindLevelInfo (nextlevel);
 			wminfo.next = nextinfo->mapname;
 			wminfo.LName1 = TexMan[TexMan.CheckForTexture(nextinfo->pname, FTexture::TEX_MiscPatch)];
 		}
@@ -995,10 +954,17 @@ void G_DoCompleted (void)
 
 	if (mode == FINISH_SameHub)
 	{ // Remember the level's state for re-entry.
-		G_SnapshotLevel ();
+		if (!(level.flags2 & LEVEL2_FORGETSTATE))
+		{
+			G_SnapshotLevel ();
 			// Do not free any global strings this level might reference
 			// while it's not loaded.
 			FBehavior::StaticLockLevelVarStrings();
+		}
+		else
+		{ // Make sure we don't have a snapshot lying around from before.
+			level.info->ClearSnapshot();
+		}
 	}
 	else
 	{ // Forget the states of all existing levels.
@@ -1008,12 +974,7 @@ void G_DoCompleted (void)
 		{ // Reset world variables for the new hub.
 			P_ClearACSVars(false);
 		}
-		// With hub statistics the time should be per hub.
-		// Additionally there is a global time counter now so nothing is missed by changing it
-		//else if (mode == FINISH_NoHub)
-		{ // Reset time to zero if not entering/staying in a hub.
-			level.time = 0;
-		}
+		level.time = 0;
 		level.maptime = 0;
 	}
 
@@ -1078,13 +1039,11 @@ void G_DoLoadLevel (int position, bool autosave)
 	static int lastposition = 0;
 	gamestate_t oldgs = gamestate;
 	unsigned int i;
-	// [BC]
-	char				szString[256];
 	CAMPAIGNINFO_s		*pInfo;
 	UCVarValue			Val;
 
 	// [BB] Make sure that dead spectators are respawned before moving to the next map.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS )
 		GAMEMODE_RespawnDeadSpectatorsAndPopQueue( );
 	// [BB] If we don't have dead spectators, still pop the queue. Possibly somone tried to join during intermission or the server admin increased sv_maxplayers during intermission.
 	else if ( NETWORK_InClientMode() == false )
@@ -1119,7 +1078,7 @@ void G_DoLoadLevel (int position, bool autosave)
 		players[i].bUnarmed = false;
 
 	// [BB] Clients shouldn't mess with the team settings on their own.
-	if ( NETWORK_InClientMode ( ) == false )
+	if ( NETWORK_InClientMode() == false )
 	{
 		// [BB] We clear the teams if either ZADF_YES_KEEP_TEAMS is not on or if the new level is a lobby.
 		const bool bClearTeams = ( !(zadmflags & ZADF_YES_KEEP_TEAMS) || GAMEMODE_IsLobbyMap( level.mapname ) );
@@ -1135,7 +1094,7 @@ void G_DoLoadLevel (int position, bool autosave)
 		}
 
 		// [BB] Only assign players to a team on a game mode that has teams.
-		if ( ( dmflags2 & DF2_NO_TEAM_SELECT ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) )
+		if ( ( dmflags2 & DF2_NO_TEAM_SELECT ) && ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) )
 		{
 			LONG	lNumNeedingTeam;
 			LONG	lRand;
@@ -1301,7 +1260,7 @@ void G_DoLoadLevel (int position, bool autosave)
 			for ( i = 0; i < MAXPLAYERS; i++ )
 			{
 				// [BB] If this is not a team game, there is no need to check or pass BotTeamName.
-				if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) )
+				if ( !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) )
 					BOTSPAWN_AddToTable( pInfo->BotSpawn[i].szBotName, NULL );
 				else if ( pInfo->BotSpawn[i].BotTeamName.IsNotEmpty() && TEAM_ShouldUseTeam ( TEAM_GetTeamNumberByName (  pInfo->BotSpawn[i].BotTeamName.GetChars() ) ) )
 					BOTSPAWN_AddToTable( pInfo->BotSpawn[i].szBotName, pInfo->BotSpawn[i].BotTeamName.GetChars() );
@@ -1318,7 +1277,7 @@ void G_DoLoadLevel (int position, bool autosave)
 			if ( NETWORK_GetState( ) == NETSTATE_SINGLE )
 				NETWORK_SetState( NETSTATE_SINGLE_MULTIPLAYER );
 
-			if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) && ( pInfo->PlayerTeamName.IsNotEmpty() ))
+			if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( pInfo->PlayerTeamName.IsNotEmpty() ))
 			{
 				ULONG ulTeam = TEAM_GetTeamNumberByName ( pInfo->PlayerTeamName.GetChars() );
 
@@ -1463,6 +1422,12 @@ void G_DoLoadLevel (int position, bool autosave)
 	{
 		level.flags2 &= ~LEVEL2_NOMONSTERS;
 	}
+	if (changeflags & CHANGELEVEL_PRERAISEWEAPON)
+	{
+		level.flags2 |= LEVEL2_PRERAISEWEAPON;
+	}
+
+	level.maptime = 0;
 
 	// Refresh the HUD.
 	SCOREBOARD_RefreshHUD( );
@@ -1491,7 +1456,7 @@ void G_DoLoadLevel (int position, bool autosave)
 				bSnapshotFound = true;
 		}
 		if ( bSnapshotFound == false )
-			ACTOR_ClearNetIDList( );
+			g_NetIDList.clear( );
 	}
 
 	P_SetupLevel (level.mapname, position);
@@ -1529,7 +1494,6 @@ void G_DoLoadLevel (int position, bool autosave)
 	}
 
 	level.starttime = gametic;
-	level.maptime = 0;
 	G_UnSnapshotLevel (!savegamerestore);	// [RH] Restore the state of the level.
 
 	// [BB] If the snapshot was taken with less players than we have now (possible due to ingame joining),
@@ -1567,10 +1531,14 @@ void G_DoLoadLevel (int position, bool autosave)
 		}
 	}
 
-	if (players[consoleplayer].camera == NULL ||
-		players[consoleplayer].camera->player != NULL)
-	{ // If we are viewing through a player, make sure it is us.
-        players[consoleplayer].camera = players[consoleplayer].mo;
+	// For each player, if they are viewing through a player, make sure it is themselves.
+	for (int ii = 0; ii < MAXPLAYERS; ++ii)
+	{
+		if (playeringame[ii] && (players[ii].camera == NULL || players[ii].camera->player != NULL))
+		{
+			players[ii].camera = players[ii].mo;
+		}
+
 	}
 	if ( StatusBar )
 		StatusBar->AttachToPlayer (&players[consoleplayer]);
@@ -1623,8 +1591,9 @@ void G_DoLoadLevel (int position, bool autosave)
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
 		// Now that we're in a new level, update the mapname/scoreboard.
-		sprintf( szString, "%s: %s", level.mapname, level.LevelName.GetChars() );
-		SERVERCONSOLE_SetCurrentMapname( szString );
+		FString string;
+		string.Format( "%s: %s", level.mapname, level.LevelName.GetChars() );
+		SERVERCONSOLE_SetCurrentMapname( string );
 		SERVERCONSOLE_UpdateScoreboard( );
 
 		// Reset the columns.
@@ -1649,8 +1618,7 @@ void G_WorldDone (void)
 	cluster_info_t *thiscluster;
 
 	// [BC] Clients don't need to do this, otherwise they'll try to load the map on their end.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		gameaction = ga_worlddone; 
 	}
@@ -1662,13 +1630,28 @@ void G_WorldDone (void)
 
 	if (strncmp (nextlevel, "enDSeQ", 6) == 0)
 	{
+		FName endsequence = ENamedName(strtol(nextlevel.GetChars()+6, NULL, 16));
+		// Strife needs a special case here to choose between good and sad ending. Bad is handled elsewherw.
+		if (endsequence == NAME_Inter_Strife)
+		{
+			if (players[0].mo->FindInventory (QuestItemClasses[24]) ||
+				players[0].mo->FindInventory (QuestItemClasses[27]))
+			{
+				endsequence = NAME_Inter_Strife_Good;
+			}
+			else
+			{
+				endsequence = NAME_Inter_Strife_Sad;
+			}
+		}
+
 		F_StartFinale (thiscluster->MessageMusic, thiscluster->musicorder,
 			thiscluster->cdtrack, thiscluster->cdid,
 			thiscluster->FinaleFlat, thiscluster->ExitText,
 			thiscluster->flags & CLUSTER_EXITTEXTINLUMP,
 			thiscluster->flags & CLUSTER_FINALEPIC,
 			thiscluster->flags & CLUSTER_LOOKUPEXITTEXT,
-			true, strtol(nextlevel.GetChars()+6, NULL, 16));
+			true, endsequence);
 	}
 	else
 	{
@@ -1721,6 +1704,10 @@ void G_DoWorldDone (void)
 	{
 		strncpy (level.mapname, nextlevel, 255);
 	}
+
+	// [Zandronum] Respawn dead spectators now so their inventory can travel.
+	GAMEMODE_RespawnDeadSpectators( zadmflags & ZADF_DEAD_PLAYERS_CAN_KEEP_INVENTORY ? PST_REBORN : PST_REBORNNOINVENTORY );
+
 	G_StartTravel ();
 	G_DoLoadLevel (startpos, true);
 	startpos = 0;
@@ -1769,6 +1756,7 @@ void G_StartTravel ()
 		{
 			AActor *pawn = players[i].mo;
 			AInventory *inv;
+			players[i].camera = NULL;
 
 			// Only living players travel. Dead ones get a new body on the new level.
 			// [BC] Same goes for spectators.
@@ -1846,7 +1834,7 @@ void G_FinishTravel ()
 
 			// The player being spawned here is a short lived dummy and
 			// must not start any ENTER script or big problems will happen.
-			//pawndup = P_SpawnPlayer (&playerstarts[pawn->player - players], true);
+			//pawndup = P_SpawnPlayer (&playerstarts[pawn->player - players], int(pawn->player - players), SPF_TEMPPLAYER);
 			G_CooperativeSpawnPlayer( pawn->player - players, false, true );
 
 			// [BC]
@@ -1876,17 +1864,20 @@ void G_FinishTravel ()
 			pawn->target = NULL;
 			pawn->lastenemy = NULL;
 			pawn->player->mo = pawn;
+			pawn->player->camera = pawn;
+			pawn->player->viewheight = pawn->ViewHeight;
+			pawn->flags2 &= ~MF2_BLASTED;
 			DObject::StaticPointerSubstitution (oldpawn, pawn);
 			oldpawn->Destroy();
 			pawndup->Destroy ();
 			pawn->LinkToWorld ();
 			pawn->AddToHash ();
 			pawn->SetState(pawn->SpawnState);
+			pawn->player->SendPitchLimits();
 
 			// [BC]
 			pawn->lNetID = lSavedNetID;
-			g_NetIDList[pawn->lNetID].bFree = false;
-			g_NetIDList[pawn->lNetID].pActor = pawn;
+			g_NetIDList.useID ( pawn->lNetID, pawn );
 
 			for (inv = pawn->Inventory; inv != NULL; inv = inv->Inventory)
 			{
@@ -1920,7 +1911,7 @@ void G_FinishTravel ()
 
 bool G_AllowTravel( void )
 {
-	if ( deathmatch || teamgame || invasion || ( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( deathmatch || teamgame || invasion || NETWORK_InClientMode() )
 		return ( false );
 
 	return ( true );
@@ -1946,6 +1937,8 @@ void G_InitLevelLocals ()
 	level.teamdamage = teamdamage;
 	level.flags = 0;
 	level.flags2 = 0;
+	// [BB]
+	level.flagsZA = 0;
 
 	info = FindLevelInfo (level.mapname);
 
@@ -1998,6 +1991,8 @@ void G_InitLevelLocals ()
 	level.clusterflags = clus ? clus->flags : 0;
 	level.flags |= info->flags;
 	level.flags2 |= info->flags2;
+	// [BB]
+	level.flagsZA |= info->flagsZA;
 	level.levelnum = info->levelnum;
 	level.Music = info->Music;
 	level.musicorder = info->musicorder;
@@ -2014,12 +2009,17 @@ void G_InitLevelLocals ()
 	level.skypic2[8] = 0;
 
 	// [BC] Why do we need to do this? For now, just don't do it in server mode.
+	// [EP] Same for compatflags2. Don't make the server print twice.
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+	{
 		compatflags.Callback();
+		compatflags2.Callback();
+	}
 
 	NormalLight.ChangeFade (level.fadeto);
 
 	level.DefaultEnvironment = info->DefaultEnvironment;
+	level.DefaultSkybox = NULL;
 }
 
 //==========================================================================
@@ -2114,16 +2114,15 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 	int i = level.totaltime;
 	
 	// [BC] In client mode, we just want to save the lines we've seen.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		P_SerializeWorld( arc );
 		return;
 	}
 
-	// [BB] The server doesn't have a screen.
+	// [BB] The server doesn't have a Renderer.
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-		screen->StartSerialize(arc);
+		Renderer->StartSerialize(arc);
 
 	arc << level.flags
 		<< level.flags2
@@ -2190,10 +2189,15 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 	P_SerializeThinkers (arc, hubLoad);
 	P_SerializeWorld (arc);
 	P_SerializePolyobjs (arc);
+	P_SerializeSubsectors(arc);
 	// [BB]: Server has no status bar.
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 		StatusBar->Serialize (arc);
-	//SerializeInterpolations (arc);
+
+	if (SaveVersion >= 4222)
+	{ // This must be done *after* thinkers are serialized.
+		arc << level.DefaultSkybox;
+	}
 
 	arc << level.total_monsters << level.total_items << level.total_secrets;
 
@@ -2249,9 +2253,9 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 			}
 		}
 	}
-	// [BB] The server doesn't have a screen.
+	// [BB] The server doesn't have a Renderer.
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
-		screen->EndSerialize(arc);
+		Renderer->EndSerialize(arc);
 }
 
 //==========================================================================
@@ -2292,6 +2296,9 @@ void G_UnSnapshotLevel (bool hubLoad)
 
 	if (level.info->isValid())
 	{
+		// [BB] Make sure that the NetID list is valid. Loading a snapshot generates new NetIDs for the loaded actors.
+		g_NetIDList.rebuild();
+
 		SaveVersion = level.info->snapshotVer;
 		level.info->snapshot->Reopen ();
 		FArchive arc (*level.info->snapshot);
@@ -2377,7 +2384,6 @@ void G_WriteSnapshots (FILE *file)
 {
 	unsigned int i;
 
-	STAT_WRITE(file);
 	for (i = 0; i < wadlevelinfos.Size(); i++)
 	{
 		if (wadlevelinfos[i].snapshot)
@@ -2528,10 +2534,24 @@ void G_ReadSnapshots (PNGHandle *png)
 			arc << pnum;
 		}
 	}
-	STAT_READ(png);
 	png->File->ResetFilePtr();
 }
 
+//==========================================================================
+
+CCMD(listsnapshots)
+{
+	for (unsigned i = 0; i < wadlevelinfos.Size(); ++i)
+	{
+		FCompressedMemFile *snapshot = wadlevelinfos[i].snapshot;
+		if (snapshot != NULL)
+		{
+			unsigned int comp, uncomp;
+			snapshot->GetSizes(comp, uncomp);
+			Printf("%s (%u -> %u bytes)\n", wadlevelinfos[i].mapname, comp, uncomp);
+		}
+	}
+}
 
 //==========================================================================
 //
@@ -2652,10 +2672,13 @@ CCMD(listmaps)
 	for(unsigned i = 0; i < wadlevelinfos.Size(); i++)
 	{
 		level_info_t *info = &wadlevelinfos[i];
+		MapData *map = P_OpenMapData(info->mapname, true);
 
-		if (P_CheckMapData(info->mapname))
+		if (map != NULL)
 		{
-			Printf("%s: '%s'\n", info->mapname, info->LookupLevelName().GetChars());
+			Printf("%s: '%s' (%s)\n", info->mapname, info->LookupLevelName().GetChars(),
+				Wads.GetWadName(Wads.GetLumpFile(map->lumpnum)));
+			delete map;
 		}
 	}
 }

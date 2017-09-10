@@ -2,6 +2,9 @@
 #define __A_MOVINGCAMERA__
 
 #include "actor.h"
+// [BB] New #includes.
+#include "network.h"
+#include "farchive.h"
 
 class AInterpolationPoint : public AActor
 {
@@ -45,7 +48,7 @@ protected:
 	bool bPostBeginPlayCalled;
 	bool bActivateCalledBeforePostBeginPlay;
 
-	// [EP] TODO: remove the 'l' mark from the name of the variables which aren't LONG anymore
+	// [EP] TODO: remove the 'l' mark from the name of the variables which aren't LONG anymore.
 	int lServerPrevNodeId, lServerCurrNodeId;
 	float fServerTime;
 public:

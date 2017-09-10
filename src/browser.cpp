@@ -101,12 +101,12 @@ void BROWSER_Construct( void )
 	g_bWaitingForMasterResponse = false;
 
 	// Setup our master server message buffer.
-	NETWORK_InitBuffer( &g_MasterServerBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	g_MasterServerBuffer.Clear();
 
 	// Setup our server message buffer.
-	NETWORK_InitBuffer( &g_ServerBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_ServerBuffer );
+	g_ServerBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	g_ServerBuffer.Clear();
 
 	// Allow the user to specify which port the master server is on.
 	pszPort = Args->CheckValue( "-masterport" );
@@ -130,8 +130,8 @@ void BROWSER_Construct( void )
 void BROWSER_Destruct( void )
 {
 	// Free our local buffers.
-	NETWORK_FreeBuffer( &g_MasterServerBuffer );
-	NETWORK_FreeBuffer( &g_ServerBuffer );
+	g_MasterServerBuffer.Free();
+	g_ServerBuffer.Free();
 }
 
 //*****************************************************************************
@@ -460,8 +460,6 @@ bool BROWSER_GetServerList( BYTESTREAM_s *pByteStream )
 
 //*****************************************************************************
 //
-
-// geh
 void M_BuildServerList( void );
 
 void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
@@ -517,13 +515,21 @@ void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
 	g_BrowserServerList[lServer].Version = NETWORK_ReadString( pByteStream );
 
 	// If the version doesn't match ours, remove it from the list.
-	if ( g_BrowserServerList[lServer].Version.CompareNoCase( GetVersionStringRev() ) != 0 )
 	{
-		g_BrowserServerList[lServer].ulActiveState = AS_INACTIVE;
-		while ( 1 )
+		// [BB] Get rid of a trailing 'M' that indicates local source changes.
+		FString ourVersion = GetVersionStringRev();
+		if ( ourVersion[ourVersion.Len()-1] == 'M' )
+			ourVersion = ourVersion.Left ( ourVersion.Len()-1 );
+
+		// [BB] Check whether the server version starts with our version.
+		if ( g_BrowserServerList[lServer].Version.IndexOf ( ourVersion ) != 0 )
 		{
-			if ( NETWORK_ReadByte( pByteStream ) == -1 )
-				return;
+			g_BrowserServerList[lServer].ulActiveState = AS_INACTIVE;
+			while ( 1 )
+			{
+				if ( NETWORK_ReadByte( pByteStream ) == -1 )
+					return;
+			}
 		}
 	}
 
@@ -754,11 +760,11 @@ void BROWSER_QueryMasterServer( void )
 	g_bWaitingForMasterResponse = true;
 
 	// Setup the master server IP.
-	NETWORK_StringToAddress( masterhostname.GetGenericRep( CVAR_String ).String, &g_AddressMasterServer );
-	NETWORK_SetAddressPort( g_AddressMasterServer, g_usMasterPort );
+	g_AddressMasterServer.LoadFromString( masterhostname );
+	g_AddressMasterServer.SetPort( g_usMasterPort );
 
 	// Clear out the buffer, and write out launcher challenge.
-	NETWORK_ClearBuffer( &g_MasterServerBuffer );
+	g_MasterServerBuffer.Clear();
 	NETWORK_WriteLong( &g_MasterServerBuffer.ByteStream, LAUNCHER_MASTER_CHALLENGE );
 	NETWORK_WriteShort( &g_MasterServerBuffer.ByteStream, MASTER_SERVER_VERSION );
 
@@ -828,7 +834,7 @@ static LONG browser_GetListIDByAddress( NETADDRESS_s Address )
 
 	for ( ulIdx = 0; ulIdx < MAX_BROWSER_SERVERS; ulIdx++ )
 	{
-		if ( NETWORK_CompareAddress( g_BrowserServerList[ulIdx].Address, Address, false ))
+		if ( g_BrowserServerList[ulIdx].Address.Compare( Address ))
 			return ( ulIdx );
 	}
 
@@ -841,13 +847,13 @@ static void browser_QueryServer( ULONG ulServer )
 {
 	// Don't query a server that we're already connected to.
 	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) &&
-		( NETWORK_CompareAddress( g_BrowserServerList[ulServer].Address, CLIENT_GetServerAddress( ), false )))
+		( g_BrowserServerList[ulServer].Address.Compare( CLIENT_GetServerAddress() )))
 	{
 		return;
 	}
 
 	// Clear out the buffer, and write out launcher challenge.
-	NETWORK_ClearBuffer( &g_ServerBuffer );
+	g_ServerBuffer.Clear();
 	NETWORK_WriteLong( &g_ServerBuffer.ByteStream, LAUNCHER_SERVER_CHALLENGE );
 	NETWORK_WriteLong( &g_ServerBuffer.ByteStream, SQF_NAME|SQF_URL|SQF_EMAIL|SQF_MAPNAME|SQF_MAXCLIENTS|SQF_PWADS|SQF_GAMETYPE|SQF_IWAD|SQF_NUMPLAYERS|SQF_PLAYERDATA );
 	NETWORK_WriteLong( &g_ServerBuffer.ByteStream, I_MSTime( ));
@@ -864,6 +870,7 @@ static void browser_QueryServer( ULONG ulServer )
 
 //*****************************************************************************
 //
+
 CCMD( dumpserverlist )
 {
 	ULONG	ulIdx;
@@ -875,7 +882,7 @@ CCMD( dumpserverlist )
 
 		Printf( "\nServer #%d\n----------------\n", static_cast<unsigned int> (ulIdx) );
 		Printf( "Name: %s\n", g_BrowserServerList[ulIdx].HostName.GetChars() );
-		Printf( "Address: %s\n", NETWORK_AddressToString( g_BrowserServerList[ulIdx].Address ));
+		Printf( "Address: %s\n", g_BrowserServerList[ulIdx].Address.ToString() );
 		Printf( "Gametype: %d\n", g_BrowserServerList[ulIdx].GameMode );
 		Printf( "Num PWADs: %d\n", static_cast<int> (g_BrowserServerList[ulIdx].lNumPWADs) );
 		Printf( "Players: %d/%d\n", static_cast<int> (g_BrowserServerList[ulIdx].lNumPlayers), static_cast<int> (g_BrowserServerList[ulIdx].lMaxClients) );

@@ -19,15 +19,19 @@ class FScanner;
 
 struct FFlagDef
 {
-	int flagbit;
+	unsigned int flagbit;
 	const char *name;
 	int structoffset;
+	int fieldsize;
 };
 
 FFlagDef *FindFlag (const PClass *type, const char *part1, const char *part2);
 void HandleDeprecatedFlags(AActor *defaults, FActorInfo *info, bool set, int index);
-bool CheckDeprecatedFlags(AActor *actor, FActorInfo *info, int index);
-const char *GetFlagName(int flagnum, int flagoffset);
+bool CheckDeprecatedFlags(const AActor *actor, FActorInfo *info, int index);
+const char *GetFlagName(unsigned int flagnum, int flagoffset);
+void ModActorFlag(AActor *actor, FFlagDef *fd, bool set);
+INTBOOL CheckActorFlag(const AActor *actor, FFlagDef *fd);
+INTBOOL CheckActorFlag(const AActor *owner, const char *flagname, bool printerror = true);
 
 #define FLAG_NAME(flagnum, flagvar) GetFlagName(flagnum, myoffsetof(AActor, flagvar))
 
@@ -65,6 +69,7 @@ class FStateDefinitions
 {
 	TArray<FStateDefine> StateLabels;
 	FState *laststate;
+	FState *laststatebeforelabel;
 	intptr_t lastlabel;
 	TArray<FState> StateArray;
 
@@ -84,11 +89,13 @@ public:
 	FStateDefinitions()
 	{
 		laststate = NULL;
+		laststatebeforelabel = NULL;
 		lastlabel = -1;
 	}
 
 	void SetStateLabel (const char * statename, FState * state, BYTE defflags = SDF_STATE);
 	void AddStateLabel (const char * statename);
+	int GetStateLabelIndex (FName statename);
 	void InstallStates(FActorInfo *info, AActor *defaults);
 	int FinishStates (FActorInfo *actor, AActor *defaults);
 
@@ -124,7 +131,8 @@ class FStateExpressions
 	TArray<FStateExpression> expressions;
 
 public:
-	~FStateExpressions();
+	~FStateExpressions() { Clear(); }
+	void Clear();
 	int Add(FxExpression *x, const PClass *o, bool c);
 	int Reserve(int num, const PClass *cls);
 	void Set(int num, FxExpression *x, bool cloned = false);
@@ -196,7 +204,7 @@ PSymbolActionFunction *FindGlobalActionFunction(const char *name);
 //==========================================================================
 
 FActorInfo *CreateNewActor(const FScriptPosition &sc, FName typeName, FName parentName, bool native);
-void SetReplacement(FActorInfo *info, FName replaceName);
+void SetReplacement(FScanner &sc, FActorInfo *info, FName replaceName);
 
 void HandleActorFlag(FScanner &sc, Baggage &bag, const char *part1, const char *part2, int mod);
 void FinishActor(const FScriptPosition &sc, FActorInfo *info, Baggage &bag);
@@ -347,11 +355,11 @@ int MatchString (const char *in, const char **strings);
 	MSVC_MSEG FVariableInfo *infoptr_GlobalDef__##name GCC_MSEG = &GlobalDef__##name;
 
 #define DEFINE_MEMBER_VARIABLE(name, cls) \
-	static FVariableInfo GlobalDef__##name = { #name, myoffsetof(cls, name), RUNTIME_CLASS(cls) }; \
+	static FVariableInfo GlobalDef__##name = { #name, static_cast<intptr_t>(myoffsetof(cls, name)), RUNTIME_CLASS(cls) }; \
 	MSVC_MSEG FVariableInfo *infoptr_GlobalDef__##name GCC_MSEG = &GlobalDef__##name;
 
 #define DEFINE_MEMBER_VARIABLE_ALIAS(name, alias, cls) \
-	static FVariableInfo GlobalDef__##name = { #name, myoffsetof(cls, alias), RUNTIME_CLASS(cls) }; \
+	static FVariableInfo GlobalDef__##name = { #name, static_cast<intptr_t>(myoffsetof(cls, alias)), RUNTIME_CLASS(cls) }; \
 	MSVC_MSEG FVariableInfo *infoptr_GlobalDef__##name GCC_MSEG = &GlobalDef__##name;
 
 	
@@ -360,13 +368,13 @@ int MatchString (const char *in, const char **strings);
 struct StateCallData
 {
 	FState *State;
-	AActor *Item;
 	bool Result;
 };
 
 // Macros to handle action functions. These are here so that I don't have to
 // change every single use in case the parameters change.
 #define DECLARE_ACTION(name) void AF_##name(AActor *self, AActor *stateowner, FState *, int, StateCallData *);
+#define DECLARE_ACTION_PARAMS(name) void AFP_##name(AActor *self, AActor *stateowner, FState *, int, StateCallData *);
 
 // This distinction is here so that CALL_ACTION produces errors when trying to
 // access a function that requires parameters.
@@ -407,6 +415,8 @@ FName EvalExpressionName (DWORD x, AActor *self);
 	fixed_t var = EvalExpressionFix(ParameterIndex+i, self);
 #define ACTION_PARAM_FLOAT(var,i) \
 	float var = float(EvalExpressionF(ParameterIndex+i, self));
+#define ACTION_PARAM_DOUBLE(var,i) \
+	double var = EvalExpressionF(ParameterIndex+i, self);
 #define ACTION_PARAM_CLASS(var,i) \
 	const PClass *var = EvalExpressionClass(ParameterIndex+i, self);
 #define ACTION_PARAM_STATE(var,i) \
@@ -420,7 +430,7 @@ FName EvalExpressionName (DWORD x, AActor *self);
 #define ACTION_PARAM_NAME(var,i) \
 	FName var = EvalExpressionName(ParameterIndex+i, self);
 #define ACTION_PARAM_ANGLE(var,i) \
-	angle_t var = angle_t(EvalExpressionF(ParameterIndex+i, self)*ANGLE_90/90.f);
+	angle_t var = FLOAT2ANGLE(EvalExpressionF(ParameterIndex+i, self));
 
 #define ACTION_SET_RESULT(v) if (statecall != NULL) statecall->Result = v;
 

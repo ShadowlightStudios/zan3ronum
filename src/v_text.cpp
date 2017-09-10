@@ -47,6 +47,7 @@
 #include "doomstat.h"
 #include "templates.h"
 
+// [BB] New #includes.
 #include "sv_main.h"
 
 //
@@ -80,11 +81,11 @@ void STACK_ARGS DCanvas::DrawChar (FFont *font, int normalcolor, int x, int y, B
 //
 // Write a string using the given font
 //
-void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, const char *string, ...)
+void DCanvas::DrawTextV(FFont *font, int normalcolor, int x, int y, const char *string, va_list taglist)
 {
-	va_list tags;
-	DWORD tag;
 	INTBOOL boolval;
+	va_list tags;
+	uint32 tag;
 
 	int			maxstrlen = INT_MAX;
 	int 		w, maxwidth;
@@ -96,8 +97,7 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 	const FRemapTable *range;
 	int			height;
 	int			forcedwidth = 0;
-	// [BB] Since CleanX/Yfac are floats in Skulltag, scalex/y also need to be floats.
-	float		scalex, scaley;
+	int			scalex, scaley;
 	int			kerning;
 	FTexture *pic;
 
@@ -120,8 +120,12 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
  	maxwidth = Width;
 	scalex = scaley = 1;
 
-	va_start (tags, string);
-	tag = va_arg (tags, DWORD);
+#ifndef NO_VA_COPY
+	va_copy(tags, taglist);
+#else
+	tags = taglist;
+#endif
+	tag = va_arg(tags, uint32);
 
 	while (tag != TAG_DONE)
 	{
@@ -158,7 +162,7 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 			{
 				scalex = CleanXfac_1;
 				scaley = CleanYfac_1;
-				maxwidth = Width - (Width % (int)scalex);
+				maxwidth = Width - (Width % scalex);
 			}
 			break;
 
@@ -168,7 +172,7 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 			{
 				scalex = CleanXfac;
 				scaley = CleanYfac;
-				maxwidth = Width - (Width % (int)scalex);
+				maxwidth = Width - (Width % scalex);
 			}
 			break;
 
@@ -198,15 +202,10 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 		case DTA_CellY:
 			height = va_arg (tags, int);
 			break;
-
-		// [BC] Is this text? If so, handle it slightly differently when we draw it.
-		case DTA_IsText:
-
-			va_arg( tags, int );
-			break;
 		}
-		tag = va_arg (tags, DWORD);
+		tag = va_arg (tags, uint32);
 	}
+	va_end(tags);
 
 	height *= scaley;
 		
@@ -235,12 +234,11 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 
 		if (NULL != (pic = font->GetChar (c, &w)))
 		{
-
-			va_list taglist;
-			va_start (taglist, string);
-			// [BC] Flag this as being text.
-			// [BB] Don't apply these text rules to the big font. This special handling of the big font formerly
-			// was done in DCanvas::ParseDrawTextureTags.
+#ifndef NO_VA_COPY
+			va_copy(tags, taglist);
+#else
+			tags = taglist;
+#endif
 			if (forcedwidth)
 			{
 				w = forcedwidth;
@@ -248,20 +246,34 @@ void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, c
 					DTA_Translation, range,
 					DTA_DestWidth, forcedwidth,
 					DTA_DestHeight, height,
-					DTA_IsText, (font == BigFont) ? false : true,
-					TAG_MORE, &taglist);
+					TAG_MORE, &tags);
 			}
 			else
 			{
 				DrawTexture (pic, cx, cy,
 					DTA_Translation, range,
-					DTA_IsText, (font == BigFont) ? false : true,
-					TAG_MORE, &taglist);
+					TAG_MORE, &tags);
 			}
-			va_end (taglist);
+			va_end (tags);
 		}
 		cx += (w + kerning) * scalex;
 	}
+	va_end(taglist);
+}
+
+void STACK_ARGS DCanvas::DrawText (FFont *font, int normalcolor, int x, int y, const char *string, ...)
+{
+	va_list tags;
+	va_start(tags, string);
+	DrawTextV(font, normalcolor, x, y, string, tags);
+}
+
+// A synonym so that this can still be used in files that #include Windows headers
+void STACK_ARGS DCanvas::DrawTextA (FFont *font, int normalcolor, int x, int y, const char *string, ...)
+{
+	va_list tags;
+	va_start(tags, string);
+	DrawTextV(font, normalcolor, x, y, string, tags);
 }
 
 //
@@ -359,18 +371,20 @@ void V_ColorizeString( char *pszString )
 				case 'x':
 				case 'X':
 					c = 0;
-					p++;
-					for (i = 0; i < 2; i++) {
-						c <<= 4;
-						if (*p >= '0' && *p <= '9')
-							c += *p-'0';
-						else if (*p >= 'a' && *p <= 'f')
-							c += 10 + *p-'a';
-						else if (*p >= 'A' && *p <= 'F')
-							c += 10 + *p-'A';
-						else
-							break;
+					for (i = 0; i < 2; i++)
+					{
 						p++;
+						if (*p >= '0' && *p <= '9')
+							c = (c << 4) + *p-'0';
+						else if (*p >= 'a' && *p <= 'f')
+							c = (c << 4) + 10 + *p-'a';
+						else if (*p >= 'A' && *p <= 'F')
+							c = (c << 4) + 10 + *p-'A';
+						else
+						{
+							p--;
+							break;
+						}
 					}
 					*pszString++ = c;
 					break;
@@ -417,55 +431,16 @@ void V_ColorizeString( FString &String )
 	delete[] tempCharArray;
 }
 
-// [BC] This essentially does the reverse of V_ColorizeString(). It takes a string with
-// color codes and puts it back in \c<color code> format.
-void V_UnColorizeString( char *pszString, ULONG ulMaxStringLength )
-{
-	char	*p;
-	char	c;
-	ULONG	ulCurStringLength;
-
-	ulCurStringLength = static_cast<ULONG>(strlen( pszString ));
-
-	p = pszString;
-	while ( (c = *p++) )
-	{
-		if ( c == TEXTCOLOR_ESCAPE )
-		{
-			ULONG	ulPos;
-
-			ulCurStringLength++;
-			if ( ulCurStringLength > ulMaxStringLength )
-			{
-				pszString++;
-				continue;
-			}
-
-			for ( ulPos = static_cast<ULONG>(strlen( pszString ) + 1); ulPos > 0; ulPos-- )
-				pszString[ulPos] = pszString[ulPos - 1];
-
-			pszString[0] = '\\';
-			pszString[1] = 'c';
-		}
-
-		pszString++;
-	}
-	*pszString = 0;
-}
-
-// [BB] Version of V_UnColorizeString that accepts a FString as argument and doesn't need ulMaxStringLength.
+//*****************************************************************************
+//
+// V_UnColorizeString
+//
+// This essentially does the reverse of V_ColorizeString(). It takes a string with
+// color codes and puts it back in \c<color code> format
+//
 void V_UnColorizeString( FString &String )
 {
-	const int length = static_cast<int> (String.Len());
-	// [BB] The temporary array is twice as big, because every converted color code
-	// increases the length of the string by one.
-	char *tempCharArray = new char[2*length+1];
-	// [BB] We only need to copy length chars, because that's length = String.Len().
-	strncpy( tempCharArray, String.GetChars(), length );
-	tempCharArray[length] = 0;
-	V_UnColorizeString( tempCharArray, 2*length );
-	String = tempCharArray;
-	delete[] tempCharArray;
+	String.Substitute( TEXTCOLOR_ESCAPE, "\\c" );
 }
 
 // [BC] This strips color codes from a string.
@@ -573,8 +548,8 @@ bool v_IsCharAcceptableInNames ( char c )
 	if ( c == '%' )
 		return false;
 
-	// Pound is hard to type on USA boards.
-	if ( c == 38 )
+	// Ampersands aren't very distinguishable in Heretic
+	if ( c == '&' )
 		return false;
 
 	// No escape codes (\c is handled differently).
@@ -725,7 +700,8 @@ void V_CleanPlayerName( FString &String )
 {
 	const int length = (int) String.Len();
 	// [BB] V_CleanPlayerName possibly appends "\\c-", hence we need to reserve more memory than just "length + terminating 0".
-	char *tempCharArray = new char[length+4];
+	// [EP] Don't forget it might return "Player" in case the name results being too short.
+	char *tempCharArray = new char[MAX<size_t>(7, length+4)];
 	strncpy( tempCharArray, String.GetChars(), length );
 	tempCharArray[length] = 0;
 	V_CleanPlayerName( tempCharArray );

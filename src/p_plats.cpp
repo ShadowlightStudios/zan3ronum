@@ -30,6 +30,8 @@
 #include "doomstat.h"
 #include "r_state.h"
 #include "gi.h"
+#include "farchive.h"
+// [BB] New #includes.
 #include "network.h"
 #include "sv_commands.h"
 #include "cl_demo.h"
@@ -37,6 +39,21 @@
 static FRandom pr_doplat ("DoPlat");
 
 IMPLEMENT_CLASS (DPlat)
+
+inline FArchive &operator<< (FArchive &arc, DPlat::EPlatType &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DPlat::EPlatType)val;
+	return arc;
+}
+inline FArchive &operator<< (FArchive &arc, DPlat::EPlatState &state)
+{
+	BYTE val = (BYTE)state;
+	arc << val;
+	state = (DPlat::EPlatState)val;
+	return arc;
+}
 
 DPlat::DPlat ()
 {
@@ -88,7 +105,7 @@ void DPlat::Tick ()
 		res = MoveFloor (m_Speed, m_High, m_Crush, 1, false);
 		
 		// [BC] That's all we need to do in client mode.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			break;
 
 		if (res == crushed && (m_Crush == -1))
@@ -167,7 +184,7 @@ void DPlat::Tick ()
 		res = MoveFloor (m_Speed, m_Low, -1, -1, false);
 
 		// [BC] That's all we need to do in client mode.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			break;
 
 		if (res == pastdest)
@@ -257,7 +274,7 @@ void DPlat::Tick ()
 	case waiting:
 
 		// [BC] That's all we need to do in client mode.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			break;
 
 		if (m_Count > 0 && !--m_Count)
@@ -452,7 +469,7 @@ manual_plat:
 		plat->m_Wait = delay;
 
 		// [BC] Potentially create the platform's network ID.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			plat->m_lPlatID = P_GetFirstFreePlatID( );
 
 		//jff 1/26/98 Avoid raise plat bouncing a head off a ceiling and then

@@ -39,30 +39,6 @@
 class FConfigFile;
 class APlayerPawn;
 
-extern bool CheckCheatmode (bool printmsg = true);
-
-void C_ExecCmdLineParams ();
-
-// Add commands to the console as if they were typed in. Can handle wait
-// and semicolon-separated commands. This function may modify the source
-// string, but the string will be restored to its original state before
-// returning. Therefore, commands passed must not be in read-only memory.
-void AddCommandString (char *text, int keynum=0);
-
-// Process a single console command. Does not handle wait.
-void C_DoCommand (const char *cmd, int keynum=0);
-
-int C_ExecFile (const char *cmd, bool usePullin);
-
-// Write out alias commands to a file for all current aliases.
-void C_ArchiveAliases (FConfigFile *f);
-
-void C_SetAlias (const char *name, const char *cmd);
-
-// build a single string out of multiple strings
-FString BuildString (int argc, char **argv);
-FString BuildString (int argc, FString *argv);
-
 // Class that can parse command lines
 class FCommandLine
 {
@@ -74,6 +50,9 @@ public:
 	const char *args () { return cmd; }
 	void Shift();
 
+	// [TP]
+	bool SafeGetNumber( int i, int &value, const char *errormessage = "That is not a valid player index" );
+
 private:
 	const char *cmd;
 	int _argc;
@@ -81,6 +60,44 @@ private:
 	long argsize;
 	bool noescapes;
 };
+
+// Contains the contents of an exec'ed file
+struct FExecList
+{
+	TArray<FString> Commands;
+	TArray<FString> Pullins;
+
+	void AddCommand(const char *cmd, const char *file = NULL);
+	void ExecCommands() const;
+	void AddPullins(TArray<FString> &wads) const;
+};
+
+
+extern bool CheckCheatmode (bool printmsg = true);
+
+FExecList *C_ParseCmdLineParams(FExecList *exec);
+
+// Add commands to the console as if they were typed in. Can handle wait
+// and semicolon-separated commands. This function may modify the source
+// string, but the string will be restored to its original state before
+// returning. Therefore, commands passed must not be in read-only memory.
+void AddCommandString (char *text, int keynum=0);
+
+// Process a single console command. Does not handle wait.
+void C_DoCommand (const char *cmd, int keynum=0);
+
+FExecList *C_ParseExecFile(const char *file, FExecList *source);
+void C_SearchForPullins(FExecList *exec, const char *file, class FCommandLine &args);
+bool C_ExecFile(const char *file);
+
+// Write out alias commands to a file for all current aliases.
+void C_ArchiveAliases (FConfigFile *f);
+
+void C_SetAlias (const char *name, const char *cmd);
+void C_ClearAliases ();
+
+// build a single string out of multiple strings
+FString BuildString (int argc, FString *argv);
 
 typedef void (*CCmdRun) (FCommandLine &argv, APlayerPawn *instigator, int key);
 
@@ -93,6 +110,7 @@ public:
 	void PrintCommand () { Printf ("%s\n", m_Name); }
 
 	virtual void Run (FCommandLine &args, APlayerPawn *instigator, int key);
+	static FConsoleCommand* FindByName (const char* name);
 
 	FConsoleCommand *m_Next, **m_Prev;
 	char *m_Name;
@@ -146,6 +164,7 @@ struct FButtonStatus
 	bool PressKey (int keynum);		// Returns true if this key caused the button to be pressed.
 	bool ReleaseKey (int keynum);	// Returns true if this key is no longer pressed.
 	void ResetTriggers () { bWentDown = bWentUp = false; }
+	void Reset () { bDown = bWentDown = bWentUp = false; }
 };
 
 extern FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
@@ -155,6 +174,8 @@ extern FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
 	Button_MoveUp, Button_Jump, Button_ShowScores, Button_Crouch,
 	Button_Zoom, Button_Reload,
 	Button_User1, Button_User2, Button_User3, Button_User4,
+	Button_AM_PanLeft, Button_AM_PanRight, Button_AM_PanDown, Button_AM_PanUp,
+	Button_AM_ZoomIn, Button_AM_ZoomOut,
 	Button_ShowMedals;	// [BC] New "show medals" button.
 extern bool ParsingKeyConf;
 
@@ -164,5 +185,7 @@ void ResetButtonStates ();		// Same as above, but also clear bDown
 extern unsigned int MakeKey (const char *s);
 extern unsigned int MakeKey (const char *s, size_t len);
 extern unsigned int SuperFastHash (const char *data, size_t len);
+
+void execLogfile(const char *fn);
 
 #endif //__C_DISPATCH_H__

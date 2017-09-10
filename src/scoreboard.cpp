@@ -224,7 +224,7 @@ static void SCOREBOARD_DrawBottomString( void )
 static void SCOREBOARD_DrawWaiting( void )
 {
 	// [RC] Formatting linebreak.
-	if ((( players[consoleplayer].camera ) && ( players[consoleplayer].camera != players[consoleplayer].mo ) && ( players[consoleplayer].camera->player )))
+	if ( static_cast<int>( SCOREBOARD_GetViewPlayer() ) != consoleplayer )
 		g_BottomString += "\n";
 	
 	g_BottomString += "\\cgWAITING FOR PLAYERS";
@@ -295,28 +295,29 @@ void SCOREBOARD_Render( ULONG ulDisplayPlayer )
 
 	g_BottomString = "";
 
+	int viewplayer = static_cast<int>( SCOREBOARD_GetViewPlayer() );
 	// [BB] Draw a message to show that the free spectate mode is active.
 	if ( CLIENTDEMO_IsInFreeSpectateMode() )
 		g_BottomString.AppendFormat( "FREE SPECTATE MODE" );
 	// If the console player is looking through someone else's eyes, draw the following message.
-	else if ( static_cast<signed> (SCOREBOARD_GetViewPlayer()) != consoleplayer )
+	else if ( viewplayer != consoleplayer )
 	{
 		char cColor = V_GetColorChar( CR_RED );
 
 		// [RC] Or draw this in their team's color.
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSONTEAMS )
-			 cColor = V_GetColorChar( TEAM_GetTextColor( players[ SCOREBOARD_GetViewPlayer() ].ulTeam ) );
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
+			 cColor = V_GetColorChar( TEAM_GetTextColor( players[viewplayer].ulTeam ) );
 
-		g_BottomString.AppendFormat( "\\c%cFOLLOWING - %s\\c%c", cColor, players[ SCOREBOARD_GetViewPlayer() ].userinfo.netname, cColor );
+		g_BottomString.AppendFormat( "\\c%cFOLLOWING - %s\\c%c", cColor, players[viewplayer].userinfo.GetName(), cColor );
 	}
 
 	// Print the totals for living and dead allies/enemies.
-	if ( !players[ulDisplayPlayer].bSpectating )
+	if (( players[ulDisplayPlayer].bSpectating == false ) && ( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) && ( GAMEMODE_GetState() == GAMESTATE_INPROGRESS ))
 	{
-		// Survival
-		if ( survival && ( SURVIVAL_GetState( ) == SURVS_INPROGRESS ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE ) )
+		// Survival, Survival Invasion, etc
+		if ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE )
 		{
-			if (( players[consoleplayer].camera ) && ( players[consoleplayer].camera != players[consoleplayer].mo ) && ( players[consoleplayer].camera->player ))
+			if ( viewplayer != consoleplayer )
 				g_BottomString.AppendFormat(" - ");
 
 			if(g_lNumAlliesLeft < 1)
@@ -327,13 +328,13 @@ void SCOREBOARD_Render( ULONG ulDisplayPlayer )
 			}
 		}
 
-		// Last Man Standing
-		if ( ( lastmanstanding || teamlms ) && ( LASTMANSTANDING_GetState( ) == LMSS_INPROGRESS ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEATHMATCH ) )
+		// Last Man Standing, TLMS, etc
+		if ( GAMEMODE_GetCurrentFlags() & GMF_DEATHMATCH )
 		{
-			if (( players[consoleplayer].camera ) && ( players[consoleplayer].camera != players[consoleplayer].mo ) && ( players[consoleplayer].camera->player ))
+			if ( viewplayer != consoleplayer )
 				g_BottomString.AppendFormat(" - ");
 
-			if( teamlms )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			{
 				g_BottomString += "\\cC";
 				g_BottomString.AppendFormat( "%d ", static_cast<int> (g_lNumOpponentsLeft) );
@@ -361,7 +362,7 @@ void SCOREBOARD_Render( ULONG ulDisplayPlayer )
 	if (( players[consoleplayer].bSpectating ) && r_drawspectatingstring && !CLIENTDEMO_IsInFreeSpectateMode())
 	{
 		g_BottomString += "\n";
-		lPosition = JOINQUEUE_GetPositionInLine( ulDisplayPlayer );
+		lPosition = JOINQUEUE_GetPositionInLine( consoleplayer );
 		if ( players[consoleplayer].bDeadSpectator )
 			g_BottomString += "\\cdSPECTATING - WAITING TO RESPAWN";
 		else if ( lPosition != -1 )
@@ -373,7 +374,21 @@ void SCOREBOARD_Render( ULONG ulDisplayPlayer )
 			g_BottomString += " IN LINE";
 		}
 		else
-			g_BottomString += "\\cdSPECTATING - SPACE TO JOIN";
+		{
+			int key1 = 0;
+			int key2 = 0;
+			Bindings.GetKeysForCommand( "menu_join", &key1, &key2 );
+			g_BottomString += "\\cdSPECTATING - PRESS \'";
+
+			if ( key2 )
+				g_BottomString = g_BottomString + KeyNames[key1] + "\' OR \'" + KeyNames[key2];
+			else if ( key1 )
+				g_BottomString += KeyNames[key1];
+			else
+				g_BottomString += G_DescribeJoinMenuKey();
+
+			g_BottomString += "\' TO JOIN";
+		}
 	}
 
 	if ( CALLVOTE_ShouldShowVoteScreen( ))
@@ -514,14 +529,14 @@ void SCOREBOARD_Render( ULONG ulDisplayPlayer )
 		if( ( SCOREBOARD_IsUsingNewHud() && SCOREBOARD_IsHudFullscreen() ) == false )
 		{
 			// Are we in a team game? Draw scores.
-			if( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS )
+			if( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 				SCOREBOARD_RenderStats_TeamScores( );
 
 			if ( !players[ulDisplayPlayer].bSpectating )
 			{
 				// Draw the player's rank and spread in FFA modes.
-				if( !(GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS ))
-					if( (GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS ))
+				if( !(GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ))
+					if( (GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ))
 						SCOREBOARD_RenderStats_RankSpread( );
 
 				// [BB] Draw number of lives left.
@@ -583,7 +598,7 @@ void SCOREBOARD_RenderBoard( ULONG ulDisplayPlayer )
 	}
 
 	// The 5 column display is only availible for modes that support it.
-	if (( ulNumIdealColumns == 5 ) && !( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & (GMF_PLAYERSEARNPOINTS|GMF_PLAYERSEARNWINS) ))
+	if (( ulNumIdealColumns == 5 ) && !( GAMEMODE_GetCurrentFlags() & (GMF_PLAYERSEARNPOINTS|GMF_PLAYERSEARNWINS) ))
 		ulNumIdealColumns = 4;
 
 	if ( ulNumIdealColumns == 5 )
@@ -641,7 +656,7 @@ void SCOREBOARD_RenderStats_Holders( void )
 			sprintf( szPatchName, "HELLSTON" );
 			if ( g_pPossessionArtifactCarrier )
 			{
-				sprintf( szName, "%s", g_pPossessionArtifactCarrier->userinfo.netname );
+				sprintf( szName, "%s", g_pPossessionArtifactCarrier->userinfo.GetName() );
 				if ( teampossession )
 				{
 					V_RemoveColorCodes( szName );
@@ -657,14 +672,14 @@ void SCOREBOARD_RenderStats_Holders( void )
 		else if ( terminator )
 		{
 			sprintf( szPatchName, "TERMINAT" );
-			sprintf( szString, "\\cC%s \\cG:", g_pTerminatorArtifactCarrier ? g_pTerminatorArtifactCarrier->userinfo.netname : "-" );
+			sprintf( szString, "\\cC%s \\cG:", g_pTerminatorArtifactCarrier ? g_pTerminatorArtifactCarrier->userinfo.GetName() : "-" );
 		}
 		else if ( oneflagctf )
 		{
 			sprintf( szPatchName, "STFLA3" );
 			if ( g_pWhiteCarrier )
 			{
-				sprintf( szName, "%s", g_pWhiteCarrier->userinfo.netname );
+				sprintf( szName, "%s", g_pWhiteCarrier->userinfo.GetName() );
 				V_RemoveColorCodes( szName );
 				if ( TEAM_CheckIfValid ( g_pWhiteCarrier->ulTeam ) )
 					sprintf( szString, "\\cC%s \\cC:", szName );
@@ -729,7 +744,7 @@ void SCOREBOARD_RenderStats_Holders( void )
 					DTA_VirtualHeight, g_ValHeight.Int,
 					TAG_DONE );
 
-				sprintf( szString, "\\cC%s \\c%c:", TEAM_GetCarrier( i ) ? TEAM_GetCarrier( i )->userinfo.netname : TEAM_GetReturnTicks( i ) ? "?" : "-", V_GetColorChar( TEAM_GetTextColor( i )));
+				sprintf( szString, "\\cC%s \\c%c:", TEAM_GetCarrier( i ) ? TEAM_GetCarrier( i )->userinfo.GetName() : TEAM_GetReturnTicks( i ) ? "?" : "-", V_GetColorChar( TEAM_GetTextColor( i )));
 				V_ColorizeString( szString );
 
 				screen->DrawText( SmallFont, CR_GRAY,
@@ -747,7 +762,7 @@ void SCOREBOARD_RenderStats_Holders( void )
 					ulYPos,
 					TAG_DONE );
 
-				sprintf( szString, "\\cC%s \\c%c:", TEAM_GetCarrier( i ) ? TEAM_GetCarrier( i )->userinfo.netname : TEAM_GetReturnTicks( i ) ? "?" : "-", V_GetColorChar( TEAM_GetTextColor( i )));
+				sprintf( szString, "\\cC%s \\c%c:", TEAM_GetCarrier( i ) ? TEAM_GetCarrier( i )->userinfo.GetName() : TEAM_GetReturnTicks( i ) ? "?" : "-", V_GetColorChar( TEAM_GetTextColor( i )));
 				V_ColorizeString( szString );
 
 				screen->DrawText( SmallFont, CR_GRAY,
@@ -784,18 +799,18 @@ void SCOREBOARD_RenderStats_TeamScores( void )
 
 	ulYPos = ST_Y - ( g_ulTextHeight * 2 ) + 1;
 
-	if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		for ( ULONG i = 0; i < teams.Size( ); i++ )
 		{
 			if ( TEAM_ShouldUseTeam( i ) == false )
 				continue;
 
-			if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 				lTeamScore[i] = TEAM_GetWinCount( i );
-			else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 				lTeamScore[i] = TEAM_GetScore( i );
-			else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+			else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 				lTeamScore[i] = TEAM_GetFragCount( i );
 			else
 				return;
@@ -869,9 +884,10 @@ void SCOREBOARD_RenderStats_RankSpread( void )
 
 	// 'Wins' isn't an entry on the statusbar, so we have to draw this here.
 	// [BB] Note: SCOREBOARD_RenderStats_RankSpread is not called in LMS, so the LMS check can be removed...
-	if (( duel || lastmanstanding ) && ( players[consoleplayer].camera->player->ulWins > 0 ))
+	unsigned int viewplayerwins = static_cast<unsigned int>( players[ SCOREBOARD_GetViewPlayer() ].ulWins );
+	if (( duel || lastmanstanding ) && ( viewplayerwins > 0 ))
 	{
-		sprintf( szString, "\\cGWINS: \\cC%d", static_cast<unsigned int> (players[consoleplayer].camera->player->ulWins) );
+		sprintf( szString, "\\cGWINS: \\cC%d", viewplayerwins );
 		V_ColorizeString( szString );
 
 		HUD_DrawText( SmallFont, CR_GRAY,
@@ -926,7 +942,7 @@ void SCOREBOARD_RenderInVoteClassic( void )
 
 	// Render who called the vote.
 	ulCurYPos += 24;
-	sprintf( szString, "Vote called by: %s", players[CALLVOTE_GetVoteCaller( )].userinfo.netname );
+	sprintf( szString, "Vote called by: %s", players[CALLVOTE_GetVoteCaller( )].userinfo.GetName() );
 	screen->DrawText( SmallFont, CR_UNTRANSLATED,
 		160 - ( SmallFont->StringWidth( szString ) / 2 ),
 		ulCurYPos,
@@ -971,10 +987,10 @@ void SCOREBOARD_RenderInVoteClassic( void )
 	// Count how many players voted for what.
 	for ( ulIdx = 0; ulIdx < ( MAXPLAYERS / 2 ) + 1; ulIdx++ )
 	{
-		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedYes[ulIdx] ))
 			ulNumYes++;
 
-		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedNo[ulIdx] ))
 			ulNumNo++;
 	}
 
@@ -999,9 +1015,9 @@ void SCOREBOARD_RenderInVoteClassic( void )
 	for ( ulIdx = 0; ulIdx < MAX( ulNumYes, ulNumNo ); ulIdx++ )
 	{
 		ulCurYPos += 8;
-		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedYes[ulIdx] ))
 		{
-			sprintf( szString, "%s", players[pulPlayersWhoVotedYes[ulIdx]].userinfo.netname );
+			sprintf( szString, "%s", players[pulPlayersWhoVotedYes[ulIdx]].userinfo.GetName() );
 			screen->DrawText( SmallFont, CR_UNTRANSLATED,
 				32,
 				ulCurYPos,
@@ -1009,9 +1025,9 @@ void SCOREBOARD_RenderInVoteClassic( void )
 				DTA_Clean, true, TAG_DONE );
 		}
 
-		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedNo[ulIdx] ))
 		{
-			sprintf( szString, "%s", players[pulPlayersWhoVotedNo[ulIdx]].userinfo.netname );
+			sprintf( szString, "%s", players[pulPlayersWhoVotedNo[ulIdx]].userinfo.GetName() );
 			screen->DrawText( SmallFont, CR_UNTRANSLATED,
 				320 - 32 - SmallFont->StringWidth( szString ),
 				ulCurYPos,
@@ -1044,14 +1060,14 @@ void SCOREBOARD_RenderInVote( void )
 	pulPlayersWhoVotedNo = CALLVOTE_GetPlayersWhoVotedNo( );
 	for ( ulIdx = 0; ulIdx < ( MAXPLAYERS / 2 ) + 1; ulIdx++ )
 	{
-		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedYes[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedYes[ulIdx] ))
 		{
 			ulNumYes++;
 			if( static_cast<signed> (pulPlayersWhoVotedYes[ulIdx]) == consoleplayer )
 				bWeVotedYes = true;
 		}
 
-		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS )
+		if ( pulPlayersWhoVotedNo[ulIdx] != MAXPLAYERS && SERVER_IsValidClient( pulPlayersWhoVotedNo[ulIdx] ))
 		{
 			ulNumNo++;
 			if( static_cast<signed> (pulPlayersWhoVotedNo[ulIdx]) == consoleplayer)
@@ -1211,7 +1227,7 @@ void SCOREBOARD_RenderDuelCountdown( ULONG ulTimeLeft )
 	ulCurYPos = 16;
 	if ( gamestate == GS_LEVEL )
 	{
-		sprintf( szString, "%s", players[lDueler1].userinfo.netname );
+		sprintf( szString, "%s", players[lDueler1].userinfo.GetName() );
 		screen->DrawText( BigFont, gameinfo.gametype == GAME_Doom ? CR_RED : CR_UNTRANSLATED,
 			160 - ( BigFont->StringWidth( szString ) / 2 ),
 			ulCurYPos,
@@ -1227,7 +1243,7 @@ void SCOREBOARD_RenderDuelCountdown( ULONG ulTimeLeft )
 			DTA_Clean, true, TAG_DONE );
 
 		ulCurYPos += 16;
-		sprintf( szString, "%s", players[lDueler2].userinfo.netname );
+		sprintf( szString, "%s", players[lDueler2].userinfo.GetName() );
 		screen->DrawText( BigFont, gameinfo.gametype == GAME_Doom ? CR_RED : CR_UNTRANSLATED,
 			160 - ( BigFont->StringWidth( szString ) / 2 ),
 			ulCurYPos,
@@ -1490,7 +1506,7 @@ LONG SCOREBOARD_CalcSpread( ULONG ulPlayerNum )
 	// First, find the highest fragcount that isn't ours.
 	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
 	{
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		{
 			if (( ulPlayerNum == ulIdx ) || ( playeringame[ulIdx] == false ) || ( PLAYER_IsTrueSpectator( &players[ulIdx] )))
 				continue;
@@ -1504,7 +1520,7 @@ LONG SCOREBOARD_CalcSpread( ULONG ulPlayerNum )
 			if ( players[ulIdx].ulWins > (ULONG)lHighestFrags )
 				lHighestFrags = players[ulIdx].ulWins;
 		}
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		{
 			if (( ulPlayerNum == ulIdx ) || ( playeringame[ulIdx] == false ) || ( players[ulIdx].bSpectating ))
 				continue;
@@ -1537,18 +1553,18 @@ LONG SCOREBOARD_CalcSpread( ULONG ulPlayerNum )
 	// If we're the only person in the game...
 	if ( bInit )
 	{
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			lHighestFrags = players[ulPlayerNum].ulWins;
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			lHighestFrags = players[ulPlayerNum].lPointCount;
 		else
 			lHighestFrags = players[ulPlayerNum].fragcount;
 	}
 
 	// Finally, simply return the difference.
-	if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		return ( players[ulPlayerNum].ulWins - lHighestFrags );
-	else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+	else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 		return ( players[ulPlayerNum].lPointCount - lHighestFrags );
 	else
 		return ( players[ulPlayerNum].fragcount - lHighestFrags );
@@ -1760,17 +1776,17 @@ FString SCOREBOARD_SpellOrdinalColored( int ranknum )
 //
 void SCOREBOARD_BuildPlaceString ( char* pszString )
 {
-	if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNFRAGS ) )
+	if ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ) )
 	{
 		// Build the score message.
 		SCOREBOARD_BuildPointString( pszString, "frag", &TEAM_CheckAllTeamsHaveEqualFrags, &TEAM_GetHighestFragCount, &TEAM_GetFragCount );
 	}
-	else if ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNPOINTS ) )
+	else if ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS ) )
 	{
 		// Build the score message.
 		SCOREBOARD_BuildPointString( pszString, "score", &TEAM_CheckAllTeamsHaveEqualScores, &TEAM_GetHighestScoreCount, &TEAM_GetScore );
 	}
-	else if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & (GMF_PLAYERSEARNFRAGS|GMF_PLAYERSEARNPOINTS) ) )
+	else if ( !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( GAMEMODE_GetCurrentFlags() & (GMF_PLAYERSEARNFRAGS|GMF_PLAYERSEARNPOINTS) ) )
 	{
 		// If the player is tied with someone else, add a "tied for" to their string.
 		if ( SCOREBOARD_IsTied( consoleplayer ) )
@@ -1781,7 +1797,7 @@ void SCOREBOARD_BuildPlaceString ( char* pszString )
 		strcpy( pszString + strlen ( pszString ), SCOREBOARD_SpellOrdinalColored( g_ulRank ));
 
 		// Tack on the rest of the string.
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			sprintf( pszString + strlen ( pszString ), "\\c- place with %d point%s", static_cast<int> (players[consoleplayer].lPointCount), players[consoleplayer].lPointCount == 1 ? "" : "s" );
 		else
 			sprintf( pszString + strlen ( pszString ), "\\c- place with %d frag%s", players[consoleplayer].fragcount, players[consoleplayer].fragcount == 1 ? "" : "s" );
@@ -1795,7 +1811,7 @@ void SCOREBOARD_DisplayFragMessage( player_t *pFraggedPlayer )
 	char	szString[128];
 	DHUDMessageFadeOut	*pMsg;
 
-	sprintf( szString, "You fragged %s\\c-!\n", pFraggedPlayer->userinfo.netname );
+	sprintf( szString, "You fragged %s\\c-!\n", pFraggedPlayer->userinfo.GetName() );
 
 	// Print the frag message out in the console.
 	Printf( "%s", szString );
@@ -1834,7 +1850,7 @@ void SCOREBOARD_DisplayFragMessage( player_t *pFraggedPlayer )
 			if ( i == players[consoleplayer].ulTeam )
 				continue;
 
-			lMenLeftStanding += LASTMANSTANDING_TeamCountMenStanding( i );
+			lMenLeftStanding += TEAM_CountLivingAndRespawnablePlayers( i );
 		}
 
 		sprintf( szString, "%d opponent%s left standing", static_cast<int> (lMenLeftStanding), ( lMenLeftStanding != 1 ) ? "s" : "" );
@@ -1865,7 +1881,7 @@ void SCOREBOARD_DisplayFraggedMessage( player_t *pFraggingPlayer )
 	char	szString[128];
 	DHUDMessageFadeOut	*pMsg;
 
-	sprintf( szString, "You were fragged by %s\\c-.\n", pFraggingPlayer->userinfo.netname );
+	sprintf( szString, "You were fragged by %s\\c-.\n", pFraggingPlayer->userinfo.GetName() );
 
 	// Print the frag message out in the console.
 	Printf( "%s", szString );
@@ -1955,33 +1971,33 @@ void SCOREBOARD_RefreshHUD( void )
 		}
 	}
 
-	if ( players[consoleplayer].camera && players[consoleplayer].camera->player )
+	player_t *player = &players[ SCOREBOARD_GetViewPlayer() ];
+
+	g_ulRank = SCOREBOARD_CalcRank( player - players );
+	g_lSpread = SCOREBOARD_CalcSpread( player - players );
+	g_bIsTied = SCOREBOARD_IsTied( player - players );
+
+	// "x opponents left", "x allies alive", etc
+	if ( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS )
 	{
-		g_ulRank = SCOREBOARD_CalcRank( ULONG( players[consoleplayer].camera->player - players ));
-		g_lSpread = SCOREBOARD_CalcSpread( ULONG( players[consoleplayer].camera->player - players ));
-		g_bIsTied = SCOREBOARD_IsTied( ULONG( players[consoleplayer].camera->player - players ));
+		// Survival, Survival Invasion, etc
+		if ( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE )
+			g_lNumAlliesLeft = GAME_CountLivingAndRespawnablePlayers() - PLAYER_IsAliveOrCanRespawn( player );
 
-		//  "x opponents left", "x allies alive", etc
-		if ( lastmanstanding )
-			g_lNumOpponentsLeft = GAME_CountLivingAndRespawnablePlayers( ) - 1;
-
-		if ( teamlms )
+		// Last Man Standing, TLMS, etc
+		if ( GAMEMODE_GetCurrentFlags() & GMF_DEATHMATCH )
 		{
-			// [RC] If we're spying someone, use their team for the counts.
-			if (( players[consoleplayer].camera ) && ( players[consoleplayer].camera != players[consoleplayer].mo ) && ( players[consoleplayer].camera->player ))
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			{
-				g_lNumOpponentsLeft = LASTMANSTANDING_TeamCountEnemiesStanding( players[consoleplayer].camera->player->ulTeam );
-				g_lNumAlliesLeft = LASTMANSTANDING_TeamCountMenStanding( players[consoleplayer].camera->player->ulTeam) - 1;
+				unsigned livingAndRespawnableTeammates = TEAM_CountLivingAndRespawnablePlayers( player->ulTeam );
+				g_lNumOpponentsLeft = GAME_CountLivingAndRespawnablePlayers() - livingAndRespawnableTeammates;
+				g_lNumAlliesLeft = livingAndRespawnableTeammates - PLAYER_IsAliveOrCanRespawn( player );
 			}
 			else
 			{
-				g_lNumOpponentsLeft = LASTMANSTANDING_TeamCountEnemiesStanding( players[consoleplayer].ulTeam );
-				g_lNumAlliesLeft = LASTMANSTANDING_TeamCountMenStanding( players[consoleplayer].ulTeam) - 1;
+				g_lNumOpponentsLeft = GAME_CountLivingAndRespawnablePlayers() - PLAYER_IsAliveOrCanRespawn( player );
 			}
 		}
-
-		if ( survival )
-			g_lNumAlliesLeft = GAME_CountLivingAndRespawnablePlayers( ) - 1;
 	}
 }
 
@@ -2017,7 +2033,7 @@ LONG SCOREBOARD_GetLeftToLimit( void )
 		return ( 0 );
 
 	// KILL-based mode. [BB] This works indepently of any players in game.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNKILLS )
 	{
 		if ( invasion )
 			return (LONG) INVASION_GetNumMonstersLeft( );
@@ -2033,26 +2049,26 @@ LONG SCOREBOARD_GetLeftToLimit( void )
 	}
 
 	// [BB] In a team game with only empty teams or if there are no players at all, just return the appropriate limit.
-	if ( ( ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( ( ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	     && ( TEAM_TeamsWithPlayersOn() == 0 ) )
 		 || ( SERVER_CalcNumNonSpectatingPlayers( MAXPLAYERS ) == 0 ) )
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			return winlimit;
-		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			return pointlimit;
-		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 			return fraglimit;
 		else
 			return 0;
 	}
 
 	// FRAG-based mode.
-	if ( fraglimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+	if ( fraglimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 	{
 		LONG	lHighestFragcount;
 				
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSONTEAMS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 			lHighestFragcount = TEAM_GetHighestFragCount( );		
 		else
 		{
@@ -2068,7 +2084,7 @@ LONG SCOREBOARD_GetLeftToLimit( void )
 	}
 
 	// POINT-based mode.
-	else if ( pointlimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+	else if ( pointlimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 	{
 		if ( teamgame || teampossession )
 			return ( pointlimit - TEAM_GetHighestScoreCount( ));		
@@ -2086,7 +2102,7 @@ LONG SCOREBOARD_GetLeftToLimit( void )
 	}
 
 	// WIN-based mode (LMS).
-	else if ( winlimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+	else if ( winlimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 	{
 		bool	bFoundPlayer = false;
 		LONG	lHighestWincount = 0;
@@ -2201,29 +2217,61 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 		{
 			case COLUMN_NAME:
 
-				sprintf( szString, "%s", players[ulPlayer].userinfo.netname );
+				sprintf( szString, "%s", players[ulPlayer].userinfo.GetName() );
 
 				// Track where we are to draw multiple icons.
 				lXPosOffset = -SmallFont->StringWidth( "  " );
 
+				// [TP] If this player is in the join queue, display the position.
+				{
+					int position = JOINQUEUE_GetPositionInLine( ulPlayer );
+					if ( position != -1 )
+					{
+						FString text;
+						text.Format( "%d.", position + 1 );
+						lXPosOffset -= SmallFont->StringWidth ( text );
+						if ( g_bScale )
+						{
+							screen->DrawText( SmallFont, ( position == 0 ) ? CR_RED : CR_GOLD,
+								(LONG)( g_aulColumnX[ulIdx] * g_fXScale ) + lXPosOffset,
+								g_ulCurYPos,
+								text.GetChars(),
+								DTA_VirtualWidth, g_ValWidth.Int,
+								DTA_VirtualHeight, g_ValHeight.Int,
+								TAG_DONE );
+						}
+						else
+						{
+							screen->DrawText( SmallFont, ( position == 0 ) ? CR_RED : CR_GOLD,
+								(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
+								g_ulCurYPos,
+								text.GetChars(),
+								DTA_Clean,
+								g_bScale,
+								TAG_DONE );
+						}
+						lXPosOffset -= 4;
+					}
+				}
+
 				// Draw the user's handicap, if any.
-				if ( players[ulPlayer].userinfo.lHandicap > 0 )
+				if ( players[ulPlayer].userinfo.GetHandicap() > 0 )
 				{
 					char	szHandicapString[8];
 
 					if ( lastmanstanding || teamlms )
 					{
-						if (( deh.MaxSoulsphere - (LONG)players[ulPlayer].userinfo.lHandicap ) < 1 )
+						if (( deh.MaxSoulsphere - (LONG)players[ulPlayer].userinfo.GetHandicap() ) < 1 )
 							sprintf( szHandicapString, "(1)" );
 						else
-							sprintf( szHandicapString, "(%d)", static_cast<int> (deh.MaxArmor - (LONG)players[ulPlayer].userinfo.lHandicap) );
+							sprintf( szHandicapString, "(%d)", static_cast<int> (deh.MaxArmor - (LONG)players[ulPlayer].userinfo.GetHandicap()) );
 					}
 					else
 					{
-						if (( deh.StartHealth - (LONG)players[ulPlayer].userinfo.lHandicap ) < 1 )
+						if (( deh.StartHealth - (LONG)players[ulPlayer].userinfo.GetHandicap() ) < 1 )
 							sprintf( szHandicapString, "(1)" );
 						else
-							sprintf( szHandicapString, "(%d)", static_cast<int> (deh.StartHealth - (LONG)players[ulPlayer].userinfo.lHandicap) );
+							sprintf( szHandicapString, "(%d)", static_cast<int> (deh.StartHealth - (LONG)players[ulPlayer].userinfo.GetHandicap()) );
 					}
 					
 					lXPosOffset -= SmallFont->StringWidth ( szHandicapString );
@@ -2240,7 +2288,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 					else
 					{
 						screen->DrawText( SmallFont, ulColor,
-							(LONG)( g_aulColumnX[ulIdx] * CleanXfac ) + lXPosOffset,
+							(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
 							g_ulCurYPos,
 							szHandicapString,
 							DTA_Clean,
@@ -2267,7 +2315,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 					else
 					{
 						screen->DrawTexture( TexMan[szPatchName],
-							(LONG)( g_aulColumnX[ulIdx] * CleanXfac ) + lXPosOffset,
+							(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
 							g_ulCurYPos - (( TexMan[szPatchName]->GetHeight( ) - SmallFont->GetHeight( )) / 2 ),
 							TAG_DONE );
 					}
@@ -2292,7 +2340,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 					else
 					{
 						screen->DrawTexture( TexMan[szPatchName],
-							(LONG)( g_aulColumnX[ulIdx] * CleanXfac ) + lXPosOffset,
+							(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
 							g_ulCurYPos,
 							DTA_Clean,
 							g_bScale,
@@ -2323,7 +2371,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 					else
 					{
 						screen->DrawTexture( TexMan[szPatchName],
-							(LONG)( g_aulColumnX[ulIdx] * CleanXfac ) + lXPosOffset,
+							(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
 							g_ulCurYPos - 1,
 							DTA_Clean,
 							g_bScale,
@@ -2384,7 +2432,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 						else
 						{
 							screen->DrawText( SmallFont, ( static_cast<signed> (CALLVOTE_GetVoteCaller()) == consoleplayer ) ? CR_RED : CR_GOLD,
-								(LONG)( g_aulColumnX[ulIdx] * CleanXfac ) + lXPosOffset,
+								(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ) + lXPosOffset,
 								g_ulCurYPos,
 								szVoteString,
 								DTA_Clean,
@@ -2409,7 +2457,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				sprintf( szString, "%d", players[ulPlayer].fragcount );
 
 				// If the player isn't really playing, change this.
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) &&
 					( players[ulPlayer].bOnTeam == false ))
 				{
 					sprintf( szString, "NO TEAM" );
@@ -2417,7 +2465,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				if(PLAYER_IsTrueSpectator( &players[ulPlayer] ))
 					sprintf(szString, "SPECT");
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2429,7 +2477,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				sprintf( szString, "%d", static_cast<int> (players[ulPlayer].lPointCount) );
 				
 				// If the player isn't really playing, change this.
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) &&
 					( players[ulPlayer].bOnTeam == false ))
 				{
 					sprintf( szString, "NO TEAM" );
@@ -2437,7 +2485,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				if(PLAYER_IsTrueSpectator( &players[ulPlayer] ))
 					sprintf(szString, "SPECT");
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2449,7 +2497,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				sprintf(szString, "%d / %d", static_cast<int> (players[ulPlayer].lPointCount), static_cast<unsigned int> (players[ulPlayer].ulMedalCount[14]));
 
 				// If the player isn't really playing, change this.
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) &&
 					( players[ulPlayer].bOnTeam == false ))
 				{
 					sprintf( szString, "NO TEAM" );
@@ -2457,7 +2505,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				if(PLAYER_IsTrueSpectator( &players[ulPlayer] ))
 					sprintf(szString, "SPECT");
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2473,7 +2521,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				sprintf(szString, "%d", static_cast<unsigned int> (players[ulPlayer].ulWins));
 
 				// If the player isn't really playing, change this.
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) &&
 					( players[ulPlayer].bOnTeam == false ))
 				{
 					sprintf( szString, "NO TEAM" );
@@ -2481,7 +2529,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				if(PLAYER_IsTrueSpectator( &players[ulPlayer] ))
 					sprintf(szString, "SPECT");
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2496,7 +2544,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 				if(PLAYER_IsTrueSpectator( &players[ulPlayer] ))
 					sprintf(szString, "SPECT");
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2514,7 +2562,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 					sprintf(szString, "DEAD");
 				}
 
-				if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_DEADSPECTATORS ) &&
+				if (( GAMEMODE_GetCurrentFlags() & GMF_DEADSPECTATORS ) &&
 					(( players[ulPlayer].health <= 0 ) || ( players[ulPlayer].bDeadSpectator )) &&
 					( gamestate != GS_INTERMISSION ))
 				{
@@ -2539,7 +2587,7 @@ static void scoreboard_RenderIndividualPlayer( ULONG ulDisplayPlayer, ULONG ulPl
 			else
 			{
 				screen->DrawText( SmallFont, ulColor,
-						(LONG)( g_aulColumnX[ulIdx] * CleanXfac ),
+						(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ),
 						g_ulCurYPos,
 						szString,
 						TAG_DONE );
@@ -2607,7 +2655,7 @@ void SCOREBOARD_BuildLimitStrings( std::list<FString> &lines, bool bAcceptColors
 	LONG remaining = SCOREBOARD_GetLeftToLimit( );
 
 	// Build the fraglimit and/or duellimit strings.
-	scoreboard_AddSingleLimit( lines, ( fraglimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS ), remaining, "frag" );
+	scoreboard_AddSingleLimit( lines, ( fraglimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ), remaining, "frag" );
 	// [TL] The number of duels left is the maximum number of duels less the number of duels fought.
 	scoreboard_AddSingleLimit( lines, ( duellimit && duel ), duellimit - DUEL_GetNumDuels( ), "duel" );
 
@@ -2633,7 +2681,7 @@ void SCOREBOARD_BuildLimitStrings( std::list<FString> &lines, bool bAcceptColors
 				bDraw = false;
 		}
 		else
-			sprintf( szString, "Champion is %s \\c-with %d win%s", players[lWinner].userinfo.netname, static_cast<unsigned int> (players[lWinner].ulWins), players[lWinner].ulWins == 1 ? "" : "s" );
+			sprintf( szString, "Champion is %s \\c-with %d win%s", players[lWinner].userinfo.GetName(), static_cast<unsigned int> (players[lWinner].ulWins), players[lWinner].ulWins == 1 ? "" : "s" );
 
 		if ( bDraw )
 		{
@@ -2645,8 +2693,8 @@ void SCOREBOARD_BuildLimitStrings( std::list<FString> &lines, bool bAcceptColors
 	}
 
 	// Build the pointlimit, winlimit, and/or wavelimit strings.
-	scoreboard_AddSingleLimit( lines, ( pointlimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS ), remaining, "point" );
-	scoreboard_AddSingleLimit( lines, ( winlimit && GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS ), remaining, "win" );
+	scoreboard_AddSingleLimit( lines, ( pointlimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS ), remaining, "point" );
+	scoreboard_AddSingleLimit( lines, ( winlimit && GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS ), remaining, "win" );
 	scoreboard_AddSingleLimit( lines, ( invasion && wavelimit ), wavelimit - INVASION_GetCurrentWave( ), "wave" );
 
 	// Render the timelimit string. - [BB] if the gamemode uses it.
@@ -2660,7 +2708,7 @@ void SCOREBOARD_BuildLimitStrings( std::list<FString> &lines, bool bAcceptColors
 	}
 
 	// Render the number of monsters left in coop.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNKILLS )
 	{
 		if ( dmflags2 & DF2_KILL_MONSTERS )
 			sprintf( szString, "%d%% remaining", static_cast<int> (remaining) );		
@@ -2706,14 +2754,14 @@ static void scoreboard_DrawTeamScores( ULONG ulPlayer )
 {
 	char	szString[128];
 
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		if ( gamestate != GS_LEVEL )
 			g_ulCurYPos += 10;
 
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 			SCOREBOARD_BuildPointString( szString, "frag", &TEAM_CheckAllTeamsHaveEqualFrags, &TEAM_GetHighestFragCount, &TEAM_GetFragCount );
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			SCOREBOARD_BuildPointString( szString, "win", &TEAM_CheckAllTeamsHaveEqualWins, &TEAM_GetHighestWinCount, &TEAM_GetWinCount );
 		else
 			SCOREBOARD_BuildPointString( szString, "score", &TEAM_CheckAllTeamsHaveEqualScores, &TEAM_GetHighestScoreCount, &TEAM_GetScore );
@@ -2762,7 +2810,7 @@ static void scoreboard_DrawMyRank( ULONG ulPlayer )
 	bool	bIsTied;
 
 	// Render the current ranking string.
-	if ( deathmatch && !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) && ( PLAYER_IsTrueSpectator( &players[ulPlayer] ) == false ))
+	if ( deathmatch && !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) && ( PLAYER_IsTrueSpectator( &players[ulPlayer] ) == false ))
 	{
 		bIsTied	= SCOREBOARD_IsTied( ulPlayer );
 
@@ -2776,9 +2824,9 @@ static void scoreboard_DrawMyRank( ULONG ulPlayer )
 		strcpy( szString + strlen ( szString ), SCOREBOARD_SpellOrdinalColored( g_ulRank ));
 
 		// Tack on the rest of the string.
-		if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			sprintf( szString + strlen ( szString ), "\\c- place with %d win%s",  static_cast<unsigned int> (players[ulPlayer].ulWins), players[ulPlayer].ulWins == 1 ? "" : "s" );
-		else if ( GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNPOINTS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			sprintf( szString + strlen ( szString ), "\\c- place with %d point%s", static_cast<int> (players[ulPlayer].lPointCount), players[ulPlayer].lPointCount == 1 ? "" : "s" );
 		else
 			sprintf( szString + strlen ( szString ), "\\c- place with %d frag%s", players[ulPlayer].fragcount, players[ulPlayer].fragcount == 1 ? "" : "s" );
@@ -2837,7 +2885,7 @@ static void scoreboard_Prepare5ColumnDisplay( void )
 	g_aulColumnX[4] = 286;
 
 	// Build columns for modes in which players try to earn points.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 	{
 		g_aulColumnType[0] = COLUMN_POINTS;
 		// [BC] Doesn't look like this is being used right now (at least not properly).
@@ -2849,7 +2897,7 @@ static void scoreboard_Prepare5ColumnDisplay( void )
 		g_aulColumnType[1] = COLUMN_FRAGS;
 		g_aulColumnType[2] = COLUMN_NAME;
 		g_aulColumnType[3] = COLUMN_DEATHS;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[3] = COLUMN_PING;
 		g_aulColumnType[4] = COLUMN_TIME;
 
@@ -2858,13 +2906,13 @@ static void scoreboard_Prepare5ColumnDisplay( void )
 	}
 
 	// Build columns for modes in which players try to earn wins.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 	{
 		g_aulColumnType[0] = COLUMN_WINS;
 		g_aulColumnType[1] = COLUMN_FRAGS;
 		g_aulColumnType[2] = COLUMN_NAME;
 		g_aulColumnType[3] = COLUMN_EMPTY;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[3] = COLUMN_PING;
 		g_aulColumnType[4] = COLUMN_TIME;
 
@@ -2909,23 +2957,23 @@ static void scoreboard_Prepare4ColumnDisplay( void )
 	g_aulColumnX[3] = 256;
 	
 	// Build columns for modes in which players try to earn kills.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNKILLS )
 	{
 		scoreboard_SetColumnZeroToKillsAndSortPlayers();
 		g_aulColumnType[1] = COLUMN_NAME;
 		g_aulColumnType[2] = COLUMN_DEATHS;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[2] = COLUMN_PING;
 		g_aulColumnType[3] = COLUMN_TIME;
 	}
 
 	// Build columns for modes in which players try to earn frags.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 	{
 		g_aulColumnType[0] = COLUMN_FRAGS;
 		g_aulColumnType[1] = COLUMN_NAME;
 		g_aulColumnType[2] = COLUMN_DEATHS;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[2] = COLUMN_PING;
 		g_aulColumnType[3] = COLUMN_TIME;
 
@@ -2934,7 +2982,7 @@ static void scoreboard_Prepare4ColumnDisplay( void )
 	}
 	
 	// Build columns for modes in which players try to earn points.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 	{
 //		if ( ctf || skulltag ) // Can have assists
 //			g_aulColumnType[0] = COL_POINTSASSISTS;
@@ -2942,7 +2990,7 @@ static void scoreboard_Prepare4ColumnDisplay( void )
 		g_aulColumnType[0] = COLUMN_POINTS;
 		g_aulColumnType[1] = COLUMN_NAME;
 		g_aulColumnType[2] = COLUMN_DEATHS;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[2] = COLUMN_PING;
 		g_aulColumnType[3] = COLUMN_TIME;
 
@@ -2951,12 +2999,12 @@ static void scoreboard_Prepare4ColumnDisplay( void )
 	}
 
 	// Build columns for modes in which players try to earn wins.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 	{
 		g_aulColumnType[0] = COLUMN_WINS;
 		g_aulColumnType[1] = COLUMN_NAME;
 		g_aulColumnType[2] = COLUMN_FRAGS;
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 			g_aulColumnType[2] = COLUMN_PING;
 		g_aulColumnType[3] = COLUMN_TIME;
 
@@ -2984,17 +3032,17 @@ static void scoreboard_Prepare3ColumnDisplay( void )
 	// All boards share these two columns. However, you can still deviant on these columns if you want.
 	g_aulColumnType[1] = COLUMN_NAME;
 	g_aulColumnType[2] = COLUMN_TIME;
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		g_aulColumnType[2] = COLUMN_PING;
 
 	// Build columns for modes in which players try to earn kills.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNKILLS )
 	{
 		scoreboard_SetColumnZeroToKillsAndSortPlayers();
 	}
 
 	// Build columns for modes in which players try to earn frags.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 	{
 		g_aulColumnType[0] = COLUMN_FRAGS;
 
@@ -3003,7 +3051,7 @@ static void scoreboard_Prepare3ColumnDisplay( void )
 	}
 	
 	// Build columns for modes in which players try to earn points.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 	{
 //		if ( ctf || skulltag ) // Can have assists
 //			g_aulColumnType[0] = COL_POINTSASSISTS;
@@ -3015,7 +3063,7 @@ static void scoreboard_Prepare3ColumnDisplay( void )
 	}
 
 	// Build columns for modes in which players try to earn wins.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 	{
 		g_aulColumnType[0] = COLUMN_WINS;
 
@@ -3122,7 +3170,7 @@ static void scoreboard_DrawRankings( ULONG ulPlayer )
 		else
 		{
 			screen->DrawText( g_pColumnHeaderFont, CR_RED,
-				(LONG)( g_aulColumnX[ulIdx] * CleanXfac ),
+				(LONG)( g_aulColumnX[ulIdx] / 320.0f * SCREENWIDTH ),
 				g_ulCurYPos,
 				szString,
 				TAG_DONE );
@@ -3133,7 +3181,7 @@ static void scoreboard_DrawRankings( ULONG ulPlayer )
 	g_ulCurYPos += 24;
 
 	// Team-based games: Divide up the teams.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		// Draw players on teams.
 		for ( ulTeamIdx = 0; ulTeamIdx < teams.Size( ); ulTeamIdx++ )
@@ -3174,5 +3222,5 @@ static void scoreboard_DrawRankings( ULONG ulPlayer )
 		scoreboard_DoRankingListPass( ulPlayer, 2, 0, 1, 0, 0, 0 );
 	}
 
-	BorderNeedRefresh = true;
+	V_SetBorderNeedRefresh();
 }

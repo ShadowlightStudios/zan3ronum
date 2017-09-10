@@ -16,7 +16,6 @@
 #include "doomdef.h"
 #include "doomstat.h"
 #include "win32iface.h"
-#include "m_menu.h"
 #include "templates.h"
 #include "gameconfigfile.h"
 #include "cmdlib.h"
@@ -388,8 +387,9 @@ FRawPS2Controller::~FRawPS2Controller()
 
 bool FRawPS2Controller::ProcessInput(RAWHID *raw, int code)
 {
-	// w32api has an incompatible definition of bRawData
-#if __GNUC__
+	// w32api has an incompatible definition of bRawData.
+	// (But the version that comes with MinGW64 is fine.)
+#if defined(__GNUC__) && !defined(_WIN64)
 	BYTE *rawdata = &raw->bRawData;
 #else
 	BYTE *rawdata = raw->bRawData;
@@ -1017,7 +1017,7 @@ FRawPS2Controller *FRawPS2Manager::EnumDevices()
 			UINT cbSize;
 
 			cbSize = rdi.cbSize = sizeof(rdi);
-			if (MyGetRawInputDeviceInfoA(devices[i].hDevice, RIDI_DEVICEINFO, &rdi, &cbSize) >= 0)
+			if ((INT)MyGetRawInputDeviceInfoA(devices[i].hDevice, RIDI_DEVICEINFO, &rdi, &cbSize) >= 0)
 			{
 				// All the PS2 adapters report themselves as joysticks.
 				// (By comparison, the 360 controller reports itself as a gamepad.)

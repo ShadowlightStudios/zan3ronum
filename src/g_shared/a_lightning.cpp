@@ -1,13 +1,15 @@
 #include "a_lightning.h"
+#include "doomstat.h"
 #include "p_lnspec.h"
 #include "statnums.h"
-#include "r_data.h"
 #include "m_random.h"
 #include "templates.h"
 #include "s_sound.h"
 #include "p_acs.h"
 #include "r_sky.h"
 #include "g_level.h"
+#include "r_state.h"
+#include "farchive.h"
 // [BC] New #includes.
 #include "network.h"
 #include "sv_commands.h"
@@ -24,8 +26,8 @@ DLightningThinker::DLightningThinker ()
 	LightningFlashCount = 0;
 	NextLightningFlash = ((pr_lightning()&15)+5)*35; // don't flash at level start
 
-	LightningLightLevels = new BYTE[numsectors + (numsectors+7)/8];
-	memset (LightningLightLevels, 0, numsectors + (numsectors+7)/8);
+	LightningLightLevels = new short[numsectors];
+	clearbufshort(LightningLightLevels, numsectors, SHRT_MAX);
 }
 
 DLightningThinker::~DLightningThinker ()
@@ -39,11 +41,31 @@ DLightningThinker::~DLightningThinker ()
 void DLightningThinker::Serialize (FArchive &arc)
 {
 	int i;
-	BYTE *lights;
+	short *lights;
 
 	Super::Serialize (arc);
 
 	arc << Stopped << NextLightningFlash << LightningFlashCount;
+
+	if (SaveVersion < 3243)
+	{ 
+		// Do nothing with old savegames and just keep whatever the constructor made
+		// but read the obsolete data from the savegame 
+		for (i = (numsectors + (numsectors+7)/8); i > 0; --i)
+		{
+			if (SaveVersion < 3223)
+			{
+				BYTE bytelight;
+				arc << bytelight;
+			}
+			else
+			{
+				short shortlight;
+				arc << shortlight;
+			}
+		}
+		return;
+	}
 
 	if (arc.IsLoading ())
 	{
@@ -51,10 +73,10 @@ void DLightningThinker::Serialize (FArchive &arc)
 		{
 			delete[] LightningLightLevels;
 		}
-		LightningLightLevels = new BYTE[numsectors + (numsectors+7)/8];
+		LightningLightLevels = new short[numsectors];
 	}
 	lights = LightningLightLevels;
-	for (i = (numsectors + (numsectors+7)/8); i > 0; ++lights, --i)
+	for (i = numsectors; i > 0; ++lights, --i)
 	{
 		arc << *lights;
 	}
@@ -71,7 +93,7 @@ void DLightningThinker::Tick ()
 		// [Dusk] The server manages lightning. However, the client forces lightning
 		// by setting NextLightningFlash to 0. To work around this, we simply don't
 		// count the lightning flash down when in client mode.
-		if ( NETWORK_InClientMode( ) == false )
+		if ( NETWORK_InClientMode() == false )
 			--NextLightningFlash;
 
 		if (Stopped) Destroy();
@@ -107,8 +129,7 @@ void DLightningThinker::LightningFlash ()
 				// because it might have changed since the lightning flashed.
 				// Instead, change the light if this sector was effected by
 				// the last flash.
-				if (LightningLightLevels[numsectors+(j>>3)] & (1<<(j&7)) &&
-					LightningLightLevels[j] < tempSec->lightlevel-4)
+				if (LightningLightLevels[j] < tempSec->lightlevel-4)
 				{
 					tempSec->ChangeLightLevel(-4);
 				}
@@ -119,12 +140,12 @@ void DLightningThinker::LightningFlash ()
 			tempSec = sectors;
 			for (i = numsectors, j = 0; i > 0; ++j, --i, ++tempSec)
 			{
-				if (LightningLightLevels[numsectors+(j>>3)] & (1<<(j&7)))
+				if (LightningLightLevels[j] != SHRT_MAX)
 				{
 					tempSec->SetLightLevel(LightningLightLevels[j]);
 				}
 			}
-			memset (&LightningLightLevels[numsectors], 0, (numsectors+7)/8);
+			clearbufshort(LightningLightLevels, numsectors, SHRT_MAX);
 			level.flags &= ~LEVEL_SWAPSKIES;
 		}
 		return;
@@ -136,14 +157,13 @@ void DLightningThinker::LightningFlash ()
 	for (i = numsectors, j = 0; i > 0; --i, ++j, ++tempSec)
 	{
 		// allow combination of the lightning sector specials with bit masks
-		int special = (tempSec->special&0xff);
+		int special = tempSec->special & 0xff;
 		if (tempSec->GetTexture(sector_t::ceiling) == skyflatnum
 			|| special == Light_IndoorLightning1
 			|| special == Light_IndoorLightning2
 			|| special == Light_OutdoorLightning)
 		{
 			LightningLightLevels[j] = tempSec->lightlevel;
-			LightningLightLevels[numsectors+(j>>3)] |= 1<<(j&7);
 			if (special == Light_IndoorLightning1)
 			{
 				tempSec->SetLightLevel(MIN<int> (tempSec->lightlevel+64, flashLight));
@@ -157,8 +177,9 @@ void DLightningThinker::LightningFlash ()
 				tempSec->SetLightLevel(flashLight);
 			}
 			if (tempSec->lightlevel < LightningLightLevels[j])
-			{
+			{ // The lightning is darker than this sector already is, so no lightning here.
 				tempSec->SetLightLevel(LightningLightLevels[j]);
+				LightningLightLevels[j] = SHRT_MAX;
 			}
 		}
 	}
@@ -167,7 +188,7 @@ void DLightningThinker::LightningFlash ()
 	S_Sound (CHAN_AUTO, "world/thunder", 1.0, ATTN_NONE);
 
 nextflash: // [Dusk] Server jumps back in here
-	bool bClientOnly = NETWORK_InClientMode( );
+	bool bClientOnly = NETWORK_InClientMode();
 	FBehavior::StaticStartTypedScripts (SCRIPT_Lightning, NULL, false, 0, false, bClientOnly);	// [RH] Run lightning scripts
 
 	// Calculate the next lighting flash

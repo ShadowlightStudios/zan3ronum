@@ -50,7 +50,7 @@
 
 #include "../src/networkheaders.h"
 #include "../src/networkshared.h"
-#include "svnrevision.h"
+#include "version.h"
 #include "network.h"
 #include "main.h"
 #include <sstream>
@@ -77,8 +77,8 @@ public:
 		// need to cache the string conversion of the first string when comparing to two.
 		// Note: Because we need a "<" comparison and not a "!=" comparison we can't use
 		// NETWORK_CompareAddress.
-		std::string address1 = NETWORK_AddressToString ( s1.Address );
-		return ( stricmp ( address1.c_str(), NETWORK_AddressToString ( s2.Address ) ) < 0 );
+		std::string address1 = s1.Address.ToString();
+		return ( stricmp ( address1.c_str(), s2.Address.ToString() ) < 0 );
 	}
 };
 
@@ -136,13 +136,13 @@ public:
 			_ulSizeOfPacket ( 0 ),
 			_destServer ( DestServer )
 	{
-		NETWORK_InitBuffer( &_netBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-		NETWORK_ClearBuffer( &_netBuffer );
+		_netBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+		_netBuffer.Clear();
 	}
 
 	~BanlistPacketSender ( )
 	{
-		NETWORK_FreeBuffer( &_netBuffer );
+		_netBuffer.Free();
 	}
 
 	void writeBanEntry ( const char *BanEntry, const int EntryType )
@@ -167,7 +167,7 @@ public:
 	}
 private:
 	void startPacket ( ) {
-		NETWORK_ClearBuffer( &_netBuffer );
+		_netBuffer.Clear();
 		NETWORK_WriteByte( &_netBuffer.ByteStream, MASTER_SERVER_BANLISTPART );
 		NETWORK_WriteString( &_netBuffer.ByteStream, _destServer.MasterBanlistVerificationString.c_str() );
 		NETWORK_WriteByte( &_netBuffer.ByteStream, _ulPacketNum );
@@ -240,7 +240,7 @@ void MASTERSERVER_SendBanlistToServer( const SERVER_s &Server )
 	}
 	else
 	{
-		NETWORK_ClearBuffer( &g_MessageBuffer );
+		g_MessageBuffer.Clear();
 		NETWORK_WriteByte( &g_MessageBuffer.ByteStream, MASTER_SERVER_BANLIST );
 		// [BB] If the server sent us a verification string, send it along with the ban list.
 		// This allows the server to verify that the list actually was sent from our master
@@ -262,14 +262,14 @@ void MASTERSERVER_SendBanlistToServer( const SERVER_s &Server )
 	}
 	Server.bHasLatestBanList = true;
 	Server.bVerifiedLatestBanList = false;
-	printf( "-> Banlist sent to %s.\n", NETWORK_AddressToString( Server.Address ));
+	printf( "-> Banlist sent to %s.\n", Server.Address.ToString() );
 }
 
 //*****************************************************************************
 //
 void MASTERSERVER_RequestServerVerification( const SERVER_s &Server )
 {
-	NETWORK_ClearBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Clear();
 	NETWORK_WriteByte( &g_MessageBuffer.ByteStream, MASTER_SERVER_VERIFICATION );
 	NETWORK_WriteString( &g_MessageBuffer.ByteStream, Server.MasterBanlistVerificationString.c_str() );
 	NETWORK_WriteLong( &g_MessageBuffer.ByteStream, Server.ServerVerificationInt );
@@ -395,11 +395,11 @@ void MASTERSERVER_AddServer( const SERVER_s &Server, std::set<SERVER_s, SERVERCo
 		addedServer->lLastReceived = g_lCurrentTime;						
 		if ( &ServerSet == &g_Servers )
 		{
-			printf( "+ Adding %s (revision %d) to the server list.\n", NETWORK_AddressToString( addedServer->Address ), addedServer->iServerRevision );
+			printf( "+ Adding %s (revision %d) to the server list.\n", addedServer->Address.ToString(), addedServer->iServerRevision );
 			MASTERSERVER_SendBanlistToServer( *addedServer );
 		}
 		else
-			printf( "+ Adding %s (revision %d) to the verification list.\n", NETWORK_AddressToString( addedServer->Address ), addedServer->iServerRevision );
+			printf( "+ Adding %s (revision %d) to the verification list.\n", addedServer->Address.ToString(), addedServer->iServerRevision );
 	}
 }
 
@@ -423,11 +423,11 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 	// Is this IP banned? Send the user an explanation, and ignore the IP for 30 seconds.
 	if ( !g_BannedIPExemptions.isIPInList( AddressFrom ) && g_BannedIPs.isIPInList( AddressFrom ))
 	{
-		NETWORK_ClearBuffer( &g_MessageBuffer );
+		g_MessageBuffer.Clear();
 		NETWORK_WriteLong( &g_MessageBuffer.ByteStream, MSC_IPISBANNED );
 		NETWORK_LaunchPacket( &g_MessageBuffer, AddressFrom );
 
-		printf( "* Received challenge from banned IP (%s). Ignoring for 10 seconds.\n", NETWORK_AddressToString( AddressFrom ));
+		printf( "* Received challenge from banned IP (%s). Ignoring for 10 seconds.\n", AddressFrom.ToString() );
 		g_queryIPQueue.addAddress( AddressFrom, g_lCurrentTime, &std::cerr );
 		return;
 	}
@@ -442,11 +442,11 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 			// Certain IPs can be blocked from just hosting.
 			if ( !g_BannedIPExemptions.isIPInList( AddressFrom ) && g_BlockedIPs.isIPInList( AddressFrom ))
 			{
-				NETWORK_ClearBuffer( &g_MessageBuffer );
+				g_MessageBuffer.Clear();
 				NETWORK_WriteLong( &g_MessageBuffer.ByteStream, MSC_IPISBANNED );
 				NETWORK_LaunchPacket( &g_MessageBuffer, AddressFrom );
 
-				printf( "* Received server challenge from blocked IP (%s). Ignoring for 10 seconds.\n", NETWORK_AddressToString( AddressFrom ));
+				printf( "* Received server challenge from blocked IP (%s). Ignoring for 10 seconds.\n", AddressFrom.ToString() );
 				g_queryIPQueue.addAddress( AddressFrom, g_lCurrentTime, &std::cerr );
 				return;
 			}
@@ -473,12 +473,12 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 				// First count the number of servers from this IP.
 				for( std::set<SERVER_s, SERVERCompFunc>::const_iterator it = g_Servers.begin(); it != g_Servers.end(); ++it )
 				{
-					if ( NETWORK_CompareAddress( it->Address, AddressFrom, true ))
+					if ( it->Address.CompareNoPort( AddressFrom ))
 						iNumOtherServers++;
 				}
 
 				if ( iNumOtherServers >= 10 && !g_MultiServerExceptions.isIPInList( AddressFrom ))
-					printf( "* More than 10 servers received from %s. Ignoring request...\n", NETWORK_AddressToString( AddressFrom ));
+					printf( "* More than 10 servers received from %s. Ignoring request...\n", AddressFrom.ToString() );
 				else
 				{
 					// [BB] 3021 is 98d, don't put those servers on the list.
@@ -499,7 +499,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 					}
 					else
 					{
-						printf( "* Received server challenge from old server (%s). Ignoring IP for 10 seconds.\n", NETWORK_AddressToString( newServer.Address ));
+						printf( "* Received server challenge from old server (%s). Ignoring IP for 10 seconds.\n", newServer.Address.ToString() );
 						g_queryIPQueue.addAddress( newServer.Address, g_lCurrentTime, &std::cerr );
 					}
 				}
@@ -558,7 +558,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 			if ( stricmp ( server.MasterBanlistVerificationString.c_str(), currentServer->MasterBanlistVerificationString.c_str() ) == 0 )
 			{
 				currentServer->bVerifiedLatestBanList = true;
-				std::cerr << NETWORK_AddressToString ( AddressFrom ) << " acknowledged receipt of the banlist.\n";
+				std::cerr << AddressFrom.ToString() << " acknowledged receipt of the banlist.\n";
 			}
 		}
 		return;
@@ -566,7 +566,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 	case LAUNCHER_SERVER_CHALLENGE:
 	case LAUNCHER_MASTER_CHALLENGE:
 		{
-			NETWORK_ClearBuffer( &g_MessageBuffer );
+			g_MessageBuffer.Clear();
 
 			// Did this IP query us recently? If so, send it an explanation, and ignore it completely for 3 seconds.
 			if ( g_queryIPQueue.addressInQueue( AddressFrom ))
@@ -574,7 +574,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 				NETWORK_WriteLong( &g_MessageBuffer.ByteStream, MSC_REQUESTIGNORED );
 				NETWORK_LaunchPacket( &g_MessageBuffer, AddressFrom );
 
-				printf( "* Extra launcher challenge from %s. Ignoring for 3 seconds.\n", NETWORK_AddressToString( AddressFrom ));
+				printf( "* Extra launcher challenge from %s. Ignoring for 3 seconds.\n", AddressFrom.ToString() );
 				g_ShortFloodQueue.addAddress( AddressFrom, g_lCurrentTime, &std::cerr );
 				return;
 			}
@@ -593,7 +593,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 				}
 			}
 
-			printf( "-> Sending server list to %s.\n", NETWORK_AddressToString( AddressFrom ));
+			printf( "-> Sending server list to %s.\n", AddressFrom.ToString() );
 
 			// Wait 10 seconds before sending this IP the server list again.
 			g_queryIPQueue.addAddress( AddressFrom, g_lCurrentTime, &std::cerr );
@@ -639,7 +639,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 						if ( ( it->bEnforcesBanList == true ) || ( g_bHideBanIgnoringServers == false ) )
 							serverPortList.push_back ( it->Address.usPort );
 						++it;
-					} while ( ( it != g_Servers.end() ) && NETWORK_CompareAddress( it->Address, serverAddress, true ) );
+					} while ( ( it != g_Servers.end() ) && it->Address.CompareNoPort( serverAddress ) );
 
 					// [BB] All servers on this IP ignore the list, nothing to send.
 					if ( serverPortList.size() == 0 )
@@ -655,7 +655,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 						NETWORK_WriteByte( &g_MessageBuffer.ByteStream, MSC_ENDSERVERLISTPART );
 						NETWORK_LaunchPacket( &g_MessageBuffer, AddressFrom );
 
-						NETWORK_ClearBuffer( &g_MessageBuffer );
+						g_MessageBuffer.Clear();
 						++ulPacketNum;
 						ulSizeOfPacket = 5;
 						NETWORK_WriteLong( &g_MessageBuffer.ByteStream, MSC_BEGINSERVERLISTPART );
@@ -673,7 +673,7 @@ void MASTERSERVER_ParseCommands( BYTESTREAM_s *pByteStream )
 		}
 	}
 
-	printf( "* Received unknown challenge (%ld) from %s. Ignoring for 10 seconds...\n", lCommand, NETWORK_AddressToString( AddressFrom ));
+	printf( "* Received unknown challenge (%ld) from %s. Ignoring for 10 seconds...\n", lCommand, AddressFrom.ToString() );
 	g_floodProtectionIPQueue.addAddress( AddressFrom, g_lCurrentTime, &std::cerr );
 }
 
@@ -688,7 +688,7 @@ void MASTERSERVER_CheckTimeouts( std::set<SERVER_s, SERVERCompFunc> &ServerSet )
 		// If the server has timed out, make it an open slot!
 		if (( g_lCurrentTime - it->lLastReceived ) >= 60 )
 		{
-			printf( "- %server at %s timed out.\n", ( &ServerSet == &g_UnverifiedServers ) ? "Unverified s" : "S", NETWORK_AddressToString( it->Address ));
+			printf( "- %server at %s timed out.\n", ( &ServerSet == &g_UnverifiedServers ) ? "Unverified s" : "S", it->Address.ToString() );
 			// [BB] The standard does not require set::erase to return the incremented operator,
 			// that's why we must use the post increment operator here.
 			ServerSet.erase ( it++ );
@@ -722,7 +722,7 @@ int main( int argc, char **argv )
 	BYTESTREAM_s	*pByteStream;
 
 	std::cerr << "=== Zandronum Master ===\n";
-	std::cerr << "Revision: "SVN_REVISION_STRING"\n";
+	std::cerr << "Revision: " << GetGitTime() << "\n";
 
 	std::cerr << "Port: " << DEFAULT_MASTER_PORT << std::endl << std::endl;
 
@@ -730,8 +730,8 @@ int main( int argc, char **argv )
 	NETWORK_Construct( DEFAULT_MASTER_PORT, ( ( argc >= 4 ) && ( stricmp ( argv[2], "-useip" ) == 0 ) ) ? argv[3] : NULL );
 
 	// Initialize the message buffer we send messages to the launcher in.
-	NETWORK_InitBuffer( &g_MessageBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Init ( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	g_MessageBuffer.Clear();
 
 	// Initialize the bans subsystem.
 	std::cerr << "Initializing ban list...\n";
@@ -785,7 +785,7 @@ int main( int argc, char **argv )
 				if ( ( it->bVerifiedLatestBanList == false ) && ( it->bNewFormatServer == true ) )
 				{
 					it->bHasLatestBanList = false;
-					std::cerr << "No receipt received from " << NETWORK_AddressToString ( it->Address ) << ". Resending banlist.\n";
+					std::cerr << "No receipt received from " << it->Address.ToString() << ". Resending banlist.\n";
 				}
 			}
 			lastBanlistVerificationTimeout = g_lCurrentTime;

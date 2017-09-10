@@ -67,7 +67,7 @@ CVAR( Int, sv_coopunassignedvoodoodollsfornplayers, MAXPLAYERS, CVAR_SERVERINFO 
 //*****************************************************************************
 //	PRIVATE DATA DEFINITIONS
 
-player_t DummyPlayer;
+int dummyplayer = MAXPLAYERS;
 TMap<FName, int> UVDpickupMap;
 
 //*****************************************************************************
@@ -80,7 +80,7 @@ void COOP_DestroyVoodooDollsOfPlayer ( const ULONG ulPlayer )
 		return;
 
 	// [BB] The map doesn't have any voodoo doll starts for this player.
-	if ( AllPlayerStarts[ulPlayer].Size() <= 1 )
+	if ( AllStartsOfPlayer[ulPlayer].Size() <= 1 )
 		return;
 
 	TThinkerIterator<AActor>	Iterator;
@@ -119,7 +119,7 @@ bool COOP_PlayersVoodooDollsNeedToBeSpawned ( const ULONG ulPlayer )
 		return false;
 
 	// [BB] The map doesn't have any voodoo doll starts for this player.
-	if ( AllPlayerStarts[ulPlayer].Size() <= 1 )
+	if ( AllStartsOfPlayer[ulPlayer].Size() <= 1 )
 		return false;
 
 	// [BB] When we are using unassigned voodoo dolls, all dolls for all players
@@ -171,7 +171,7 @@ void COOP_SpawnVoodooDollsForPlayerIfNecessary ( const ULONG ulPlayer, const boo
 		return;
 
 	// [BB] The map doesn't have any voodoo doll starts for this player.
-	if ( AllPlayerStarts[ulPlayer].Size() <= 1 )
+	if ( AllStartsOfPlayer[ulPlayer].Size() <= 1 )
 		return;
 
 	// [BB] In case of unassigned voodoo dolls, on some maps it may be better only
@@ -185,21 +185,26 @@ void COOP_SpawnVoodooDollsForPlayerIfNecessary ( const ULONG ulPlayer, const boo
 		playeringame[ulPlayer] = true;
 
 	// [BB] Every start except for the last, has to spawn a voodoo doll.
-	for ( ULONG ulIdx = 0; ulIdx < AllPlayerStarts[ulPlayer].Size() - 1; ulIdx++ )
+	for ( ULONG ulIdx = 0; ulIdx < AllStartsOfPlayer[ulPlayer].Size() - 1; ulIdx++ )
 	{
-		APlayerPawn *pDoll = P_SpawnPlayer ( &(AllPlayerStarts[ulPlayer][ulIdx]), false, NULL );
+		APlayerPawn *pDoll = P_SpawnPlayer ( &(AllStartsOfPlayer[ulPlayer][ulIdx]), ulPlayer );
 		// [BB] Mark the voodoo doll as spawned by the map.
 		// P_SpawnPlayer won't spawn anything for a player not in game, therefore we need to check if pDoll is NULL.
 		if ( pDoll )
 		{
 			pDoll->ulSTFlags |= STFL_LEVELSPAWNED;
 
+			// [BB] The clients will not spawn the doll, so mark it accordingly and free it's network ID.
+			pDoll->ulNetworkFlags |= NETFL_SERVERSIDEONLY;
+			g_NetIDList.freeID ( pDoll->lNetID );
+			pDoll->lNetID = -1;
+
 			// [BB] If we would just set the player pointer to NULL, a lot of things wouldn't work
 			// at all for the voodoo dolls (e.g. floor scrollers), so we set it do a pointer to a
 			// dummy player to get past all the ( player != NULL ) checks. This will require special
 			// handling wherever the code assumes that non-NULL player pointers have a valid mo.
 			if ( sv_coopunassignedvoodoodolls )
-				pDoll->player = &DummyPlayer;
+				pDoll->player = &players[dummyplayer];
 		}
 	}
 
@@ -220,7 +225,7 @@ void COOP_SpawnVoodooDollsForPlayerIfNecessary ( const ULONG ulPlayer, const boo
 bool COOP_VoodooDollsSelectedByGameMode ( void )
 {
 	// [BB] Voodoo dolls are only used in coop.
-	if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE ) )
+	if ( !( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) )
 		return false;
 
 	// [BB] Only use them if the compat flag tells us to.
@@ -232,9 +237,16 @@ bool COOP_VoodooDollsSelectedByGameMode ( void )
 
 //*****************************************************************************
 //
+void COOP_InitVoodooDollDummyPlayer ( void )
+{
+	players[dummyplayer].userinfo.Reset();
+}
+
+//*****************************************************************************
+//
 const player_t* COOP_GetVoodooDollDummyPlayer ( void )
 {
-	return &DummyPlayer;
+	return &players[dummyplayer];
 }
 
 //*****************************************************************************
@@ -246,7 +258,7 @@ void COOP_PotentiallyStoreUVDPickup ( const PClass *pType )
 		return;
 
 	// [BB] There is no ingame joining in such gamemodes, so no need to store any pickups.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS )
 		return;
 
 	// [BB] Nothing to store.
@@ -259,7 +271,7 @@ void COOP_PotentiallyStoreUVDPickup ( const PClass *pType )
 		return;
 
 	const FName pickupName = pType->TypeName.GetChars();
-	if ( UVDpickupMap.CheckKey( pickupName ) == false )
+	if ( UVDpickupMap.CheckKey( pickupName ) == NULL )
 		UVDpickupMap.Insert( pickupName, 1 );
 }
 
@@ -287,7 +299,9 @@ void COOP_GiveStoredUVDPickupsToPlayer ( const ULONG ulPlayer )
 //*****************************************************************************
 //	CONSOLE COMMANDS/VARIABLES
 
-CUSTOM_CVAR( Bool, cooperative, true, CVAR_SERVERINFO | CVAR_LATCH | CVAR_CAMPAIGNLOCK )
+// [BB] Since cooperative defaults to true and its default value sets deathmatch
+// and teamgame to false, we have to initialize it last.
+CUSTOM_CVAR( Bool, cooperative, true, CVAR_SERVERINFO | CVAR_LATCH | CVAR_CAMPAIGNLOCK | CVAR_NOINITCALL )
 {
 	UCVarValue	Val;
 

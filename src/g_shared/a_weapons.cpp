@@ -17,6 +17,7 @@
 #include "doomstat.h"
 #include "g_level.h"
 #include "d_net.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "deathmatch.h"
 #include "team.h"
@@ -68,9 +69,29 @@ void AWeapon::Serialize (FArchive &arc)
 		<< MoveCombatDist
 		<< Ammo1 << Ammo2 << SisterWeapon << GivenAsMorphWeapon
 		<< bAltFire
-		<< ReloadCounter
-		<< FOVScale
+		<< ReloadCounter;		
+		if (SaveVersion >= 3615) {
+			arc << BobStyle << BobSpeed << BobRangeX << BobRangeY;
+		}
+	arc << FOVScale
 		<< Crosshair;
+	if (SaveVersion >= 4203)
+	{
+		arc << MinSelAmmo1 << MinSelAmmo2;
+	}
+}
+
+//===========================================================================
+//
+// AWeapon :: MarkPrecacheSounds
+//
+//===========================================================================
+
+void AWeapon::MarkPrecacheSounds() const
+{
+	Super::MarkPrecacheSounds();
+	UpSound.MarkUsed();
+	ReadySound.MarkUsed();
 }
 
 //===========================================================================
@@ -78,6 +99,30 @@ void AWeapon::Serialize (FArchive &arc)
 // AWeapon :: TryPickup
 //
 // If you can't see the weapon when it's active, then you can't pick it up.
+//
+//===========================================================================
+
+bool AWeapon::TryPickupRestricted (AActor *&toucher)
+{
+	// Wrong class, but try to pick up for ammo
+	if (ShouldStay())
+	{ // Can't pick up weapons for other classes in coop netplay
+		return false;
+	}
+
+	bool gaveSome = (NULL != AddAmmo (toucher, AmmoType1, AmmoGive1));
+	gaveSome |= (NULL != AddAmmo (toucher, AmmoType2, AmmoGive2));
+	if (gaveSome)
+	{
+		GoAwayAndDie ();
+	}
+	return gaveSome;
+}
+
+
+//===========================================================================
+//
+// AWeapon :: TryPickup
 //
 //===========================================================================
 
@@ -111,7 +156,7 @@ bool AWeapon::Use (bool pickup)
 	// weapon, if one exists.
 	if (SisterWeapon != NULL &&
 		SisterWeapon->WeaponFlags & WIF_POWERED_UP &&
-		Owner->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2)))
+		Owner->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2), true))
 	{
 		useweap = SisterWeapon;
 	}
@@ -142,11 +187,16 @@ bool AWeapon::Use (bool pickup)
 
 void AWeapon::Destroy()
 {
-	if (SisterWeapon != NULL)
+	AWeapon *sister = SisterWeapon;
+
+	if (sister != NULL)
 	{
 		// avoid recursion
-		SisterWeapon->SisterWeapon = NULL;
-		SisterWeapon->Destroy();
+		sister->SisterWeapon = NULL;
+		if (sister != this)
+		{ // In case we are our own sister, don't crash.
+			sister->Destroy();
+		}
 	}
 	Super::Destroy();
 }
@@ -187,7 +237,7 @@ bool AWeapon::HandlePickup (AInventory *item)
 bool AWeapon::PickupForAmmo (AWeapon *ownedWeapon)
 {
 	// [BB] The server tells the client how much ammo he gets from the weapon,
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 		return false;
 
 	bool gotstuff = false;
@@ -304,7 +354,7 @@ void AWeapon::AttachToOwner (AActor *other)
 
 	// [BB] The server tells the client how much ammo he gets from the weapon,
 	// the client just initializes Ammo1 and Ammo2.
-	if ( !NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() == false )
 	{
 		Ammo1 = AddAmmo (Owner, AmmoType1, AmmoGive1);
 		Ammo2 = AddAmmo (Owner, AmmoType2, AmmoGive2);
@@ -330,25 +380,45 @@ void AWeapon::AttachToOwner (AActor *other)
 		// setting of the one who recorded the demo.
 		if ( !(WeaponFlags & WIF_NO_AUTO_SWITCH) && (CLIENTDEMO_IsPlaying( ) == false))
 		{
-			// [ZZ] Check if PWO is active
-			//		Also check if current player is console player
-			//		to prevent this client from trying to predict other players' switching
-			//		(not sure how Zandronum behaves here in network game)
-			// Added code from Torr to fix NETSTATE_SINGLE_MULTIPLAYER
-			const bool dofpwo = (NETWORK_GetState() != NETSTATE_SERVER) &&
-				(Owner->player->userinfo.switchonpickup == 3) &&
-				(Owner->player == &players[consoleplayer]);
-
 			// [BC] Decide which weapon to compare selection orders against.
 			if ( Owner->player->PendingWeapon != WP_NOCHANGE )
 				pCompareWeapon = Owner->player->PendingWeapon;
 			else
 				pCompareWeapon = Owner->player->ReadyWeapon;
 
+			bool shouldSwitch = false;
+
+			// [BB] Clients only handle their own weapon.
+			if ( NETWORK_InClientMode( ) && (( Owner->player - players ) != consoleplayer ))
+				shouldSwitch = false;
 			// [ZZ] Changed code so it only treats switchonpickup == 2 as "always switch"
 			// [BC] Handle the "switchonpickup" userinfo cvar. If it's == 2, then
 			// we always want to switch our weapon when we pickup a new one.
-			if ( (Owner->player->userinfo.switchonpickup == 2) || ( zacompatflags & ZACOMPATF_OLD_WEAPON_SWITCH ) )
+			else if ( (Owner->player->userinfo.GetSwitchOnPickup() == 2) || ( zacompatflags & ZACOMPATF_OLD_WEAPON_SWITCH ) )
+			{
+				shouldSwitch  = true;
+			}
+			// [BB] Because of ST's special switchonpickup == 1 handling, we have to make sure here
+			// that we don't pick a powered up version, if we don't have a PowerWeaponLevel2 active.
+			else if ( !( WeaponFlags & WIF_POWERED_UP ) || Owner->FindInventory( RUNTIME_CLASS( APowerWeaponLevel2 )))
+			{
+				if ( pCompareWeapon == NULL )
+				{
+					shouldSwitch = true;
+				}
+				// [TP] Check PWO
+				else if ( PWO_IsActive( Owner->player ))
+				{
+					shouldSwitch = PWO_ShouldSwitch( pCompareWeapon, this );
+				}
+				// If it's 1, then only switch if it ranks higher than our current weapon.
+				else if (( Owner->player->userinfo.GetSwitchOnPickup() == 1 ) && ( SelectionOrder < pCompareWeapon->SelectionOrder ))
+				{
+					shouldSwitch = true;
+				}
+			}
+
+			if ( shouldSwitch )
 			{
 				// [Spleen] Weapon switching is done client-side unless it's a bot.
 				if ( ( NETWORK_GetState( ) != NETSTATE_SERVER ) || ( Owner->player->bIsBot ) )
@@ -357,40 +427,13 @@ void AWeapon::AttachToOwner (AActor *other)
 				// [BC] If we're a client, tell the server we're switching weapons.
 				if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && (( Owner->player - players ) == consoleplayer ))
 				{
-					CLIENTCOMMANDS_WeaponSelect( this->GetClass( ));
+					CLIENTCOMMANDS_WeaponSelect( GetClass() );
 
-					if ( CLIENTDEMO_IsRecording( ))
-						CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, this->GetClass( )->TypeName.GetChars( ) );
+					if ( CLIENTDEMO_IsRecording() )
+						CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, GetClass()->TypeName );
 				}
 				else if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( Owner->player->bIsBot == true ) )
 					SERVERCOMMANDS_SetPlayerPendingWeapon( static_cast<ULONG> ( Owner->player - players ) );
-			}
-			// If it's 1, then only switch if it ranks higher than our current weapon.
-			else if (( pCompareWeapon == NULL ) ||
-				// [ZZ] Added weapon order overriding by PWO settings
-				((dofpwo && PWO_CheckWeapons(pCompareWeapon, this)) ||
-				(!dofpwo && ( Owner->player->userinfo.switchonpickup == 1 ) && ( SelectionOrder < pCompareWeapon->SelectionOrder ))))
-			{
-				// [BB] Because of ST's special switchonpickup == 1 handling, we have to make sure here
-				// that we don't pick a powered up version, if we don't have a PowerWeaponLevel2 active.
-				if( (WeaponFlags & WIF_POWERED_UP && Owner->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2)))
-					|| !(WeaponFlags & WIF_POWERED_UP) )
-				{
-					// [Spleen] Weapon switching is done client-side unless it's a bot.
-					if ( ( NETWORK_GetState( ) != NETSTATE_SERVER ) || ( Owner->player->bIsBot ) )
-						Owner->player->PendingWeapon = this;
-
-					// [BC] If we're a client, tell the server we're switching weapons.
-					if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && (( Owner->player - players ) == consoleplayer ))
-					{
-						CLIENTCOMMANDS_WeaponSelect( this->GetClass( ));
-
-						if ( CLIENTDEMO_IsRecording( ))
-							CLIENTDEMO_WriteLocalCommand( CLD_LCMD_INVUSE, this->GetClass( )->TypeName.GetChars( ) );
-					}
-					else if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( Owner->player->bIsBot == true ) )
-						SERVERCOMMANDS_SetPlayerPendingWeapon( static_cast<ULONG> ( Owner->player - players ) );
-				}
 			}
 		}
 		// [BC] The server doesn't have a status bar.
@@ -529,11 +572,12 @@ bool AWeapon::ShouldStay ()
 //
 //===========================================================================
 
-bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
+bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo, int ammocount)
 {
 	int altFire;
 	int count1, count2;
 	int enough, enoughmask;
+	int lAmmoUse1;
 
 	if ((dmflags & DF_INFINITE_AMMO) || (Owner->player->cheats & CF_INFINITEAMMO))
 	{
@@ -556,7 +600,20 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 	count1 = (Ammo1 != NULL) ? Ammo1->Amount : 0;
 	count2 = (Ammo2 != NULL) ? Ammo2->Amount : 0;
 
-	enough = (count1 >= AmmoUse1) | ((count2 >= AmmoUse2) << 1);
+	if ((WeaponFlags & WIF_DEHAMMO) && (Ammo1 == NULL))
+	{
+		lAmmoUse1 = 0;
+	}
+	else if (ammocount >= 0 && (WeaponFlags & WIF_DEHAMMO))
+	{
+		lAmmoUse1 = ammocount;
+	}
+	else
+	{
+		lAmmoUse1 = AmmoUse1;
+	}
+
+	enough = (count1 >= lAmmoUse1) | ((count2 >= AmmoUse2) << 1);
 	if (WeaponFlags & (WIF_PRIMARY_USES_BOTH << altFire))
 	{
 		enoughmask = 3;
@@ -577,7 +634,7 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 	// [BB] Clients should only handle out of ammo weapon switches for themself, since
 	// they sometimes don't know the exact ammount of ammo the other players have. They
 	// are informed by the server of the weapon change anyway.
-	if ( (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) && ( Owner->player - players != consoleplayer ))
+	if ( NETWORK_InClientMode() && ( Owner->player - players != consoleplayer ))
 		return false;
 
 	// out of ammo, pick a weapon to change to
@@ -598,11 +655,11 @@ bool AWeapon::CheckAmmo (int fireMode, bool autoSwitch, bool requireAmmo)
 //
 //===========================================================================
 
-bool AWeapon::DepleteAmmo (bool altFire, bool checkEnough)
+bool AWeapon::DepleteAmmo (bool altFire, bool checkEnough, int ammouse)
 {
 	if (!((dmflags & DF_INFINITE_AMMO) || (Owner->player->cheats & CF_INFINITEAMMO)))
 	{
-		if (checkEnough && !CheckAmmo (altFire ? AltFire : PrimaryFire, false))
+		if (checkEnough && !CheckAmmo (altFire ? AltFire : PrimaryFire, false, false, ammouse))
 		{
 			return false;
 		}
@@ -610,7 +667,14 @@ bool AWeapon::DepleteAmmo (bool altFire, bool checkEnough)
 		{
 			if (Ammo1 != NULL)
 			{
-				Ammo1->Amount -= AmmoUse1;
+				if (ammouse >= 0 && (WeaponFlags & WIF_DEHAMMO))
+				{
+					Ammo1->Amount -= ammouse;
+				}
+				else
+				{
+					Ammo1->Amount -= AmmoUse1;
+				}
 			}
 			if ((WeaponFlags & WIF_PRIMARY_USES_BOTH) && Ammo2 != NULL)
 			{
@@ -766,17 +830,40 @@ FState *AWeapon::GetAltAtkState (bool hold)
 	return state;
 }
 
+//===========================================================================
+//
+// AWeapon :: GetRelState
+//
+//===========================================================================
+
+FState *AWeapon::GetRelState ()
+{
+	return FindState(NAME_Reload);
+}
+
+//===========================================================================
+//
+// AWeapon :: GetZoomState
+//
+//===========================================================================
+
+FState *AWeapon::GetZoomState ()
+{
+	return FindState(NAME_Zoom);
+}
+
 /* Weapon giver ***********************************************************/
 
-class AWeaponGiver : public AWeapon
-{
-	DECLARE_CLASS(AWeaponGiver, AWeapon)
-
-public:
-	bool TryPickup(AActor *&toucher);
-};
-
 IMPLEMENT_CLASS(AWeaponGiver)
+
+void AWeaponGiver::Serialize(FArchive &arc)
+{
+	Super::Serialize(arc);
+	if (SaveVersion >= 4246)
+	{
+		arc << DropAmmoFactor;
+	}
+}
 
 bool AWeaponGiver::TryPickup(AActor *&toucher)
 {
@@ -794,8 +881,18 @@ bool AWeaponGiver::TryPickup(AActor *&toucher)
 				if (weap != NULL)
 				{
 					weap->ItemFlags &= ~IF_ALWAYSPICKUP;	// use the flag of this item only.
+					weap->flags = (weap->flags & ~MF_DROPPED) | (this->flags & MF_DROPPED);
+
+					// If our ammo gives are non-negative, transfer them to the real weapon.
 					if (AmmoGive1 >= 0) weap->AmmoGive1 = AmmoGive1;
 					if (AmmoGive2 >= 0) weap->AmmoGive2 = AmmoGive2;
+
+					// If DropAmmoFactor is non-negative, modify the given ammo amounts.
+					if (DropAmmoFactor > 0)
+					{
+						weap->AmmoGive1 = FixedMul(weap->AmmoGive1, DropAmmoFactor);
+						weap->AmmoGive2 = FixedMul(weap->AmmoGive2, DropAmmoFactor);
+					}
 					weap->BecomeItem();
 				}
 				else return false;
@@ -803,7 +900,11 @@ bool AWeaponGiver::TryPickup(AActor *&toucher)
 
 			weap = barrier_cast<AWeapon*>(master);
 			bool res = weap->CallTryPickup(toucher);
-			if (res) GoAwayAndDie();
+			if (res)
+			{
+				GoAwayAndDie();
+				master = NULL;
+			}
 			return res;
 		}
 	}
@@ -917,10 +1018,10 @@ AWeapon *FWeaponSlot::PickWeapon(player_t *player, bool checkammo)
 {
 	int i, j;
 
-	// [BB] Under some rare circumstances, it seems to be possible that this
-	// function is called for a player that doesn't have a body.
-	if ( player->mo == NULL )
+	if (player->mo == NULL)
+	{
 		return NULL;
+	}
 
 	// Does this slot even have any weapons?
 	if (Weapons.Size() == 0)
@@ -1292,6 +1393,7 @@ void FWeaponSlots::AddExtraWeapons()
 			(cls->ActorInfo->GameFilter == GAME_Any || (cls->ActorInfo->GameFilter & gameinfo.gametype)) &&
 			cls->ActorInfo->Replacement == NULL &&	// Replaced weapons don't get slotted.
 			cls->IsDescendantOf(RUNTIME_CLASS(AWeapon)) &&
+			!(static_cast<AWeapon*>(GetDefaultByType(cls))->WeaponFlags & WIF_POWERED_UP) &&
 			!LocateWeapon(cls, NULL, NULL)			// Don't duplicate it if it's already present.
 			)
 		{
@@ -1407,7 +1509,7 @@ void FWeaponSlots::LocalSetup(const PClass *type)
 //
 //===========================================================================
 
-void FWeaponSlots::SendDifferences(const FWeaponSlots &other)
+void FWeaponSlots::SendDifferences(int playernum, const FWeaponSlots &other)
 {
 	int i, j;
 
@@ -1428,7 +1530,15 @@ void FWeaponSlots::SendDifferences(const FWeaponSlots &other)
 			}
 		}
 		// The slots differ. Send mine.
-		Net_WriteByte(DEM_SETSLOT);
+		if (playernum == consoleplayer)
+		{
+			Net_WriteByte(DEM_SETSLOT);
+		}
+		else
+		{
+			Net_WriteByte(DEM_SETSLOTPNUM);
+			Net_WriteByte(playernum);
+		}
 		Net_WriteByte(i);
 		Net_WriteByte(Slots[i].Size());
 		for (j = 0; j < Slots[i].Size(); ++j)

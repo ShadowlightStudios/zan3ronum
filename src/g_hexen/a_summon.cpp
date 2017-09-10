@@ -32,8 +32,7 @@ IMPLEMENT_CLASS (AArtiDarkServant)
 bool AArtiDarkServant::Use (bool pickup)
 {
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( true );
 	}
@@ -47,7 +46,7 @@ bool AArtiDarkServant::Use (bool pickup)
 
 		// [BC] If we're the server, send clients this missile's updated properties.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_MoveThing( mo, CM_MOMZ );
+			SERVERCOMMANDS_MoveThing( mo, CM_VELZ );
 	}
 	return true;
 }
@@ -63,8 +62,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Summon)
 	AMinotaurFriend *mo;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -101,25 +99,21 @@ DEFINE_ACTION_FUNCTION(AActor, A_Summon)
 			mo->tracer = self->tracer;		// Pointer to master
 			AInventory *power = Spawn<APowerMinotaur> (0, 0, 0, NO_REPLACE);
 			power->CallTryPickup (self->tracer);
-			if (self->tracer->player != NULL)
-			{
-				mo->FriendPlayer = int(self->tracer->player - players + 1);
-			}
+			mo->SetFriendPlayer(self->tracer->player);
 		}
 
 		// Make smoke puff
 		// [BC]
 		AActor	*pSmoke;
 		pSmoke = Spawn ("MinotaurSmoke", self->x, self->y, self->z, ALLOW_REPLACE);
-		S_Sound (self, CHAN_VOICE, mo->ActiveSound, 1, ATTN_NORM);
 
-				
-		// [BC] If we're the server, spawn the smoke, and play the active sound.
+		// [BC] If we're the server, spawn the smoke.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		{
 			if ( pSmoke )
 				SERVERCOMMANDS_SpawnThing( pSmoke );
-			SERVERCOMMANDS_SoundActor( self, CHAN_VOICE, S_GetName( mo->ActiveSound ), 1, ATTN_NORM );
 		}
+
+		S_Sound (self, CHAN_VOICE, mo->ActiveSound, 1, ATTN_NORM, true);	// [BC] Inform the clients.
 	}
 }

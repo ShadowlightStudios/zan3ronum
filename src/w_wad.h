@@ -48,6 +48,7 @@ struct wadlump_t
 #define IWAD_ID		MAKE_ID('I','W','A','D')
 #define PWAD_ID		MAKE_ID('P','W','A','D')
 
+
 // [RH] Namespaces from BOOM.
 typedef enum {
 	ns_global = 0,
@@ -61,6 +62,7 @@ typedef enum {
 	ns_bloodmisc,
 	ns_strifevoices,
 	ns_hires,
+	ns_voxels,
 
 	// These namespaces are only used to mark lumps in special subdirectories
 	// so that their contents doesn't interfere with the global namespace.
@@ -240,7 +242,8 @@ protected:
 	void InitHashChains ();								// [RH] Set up the lumpinfo hashing
 
 private:
-	void RenameSprites ();
+	void RenameSprites();
+	void RenameNerve();
 	void DeleteAll();
 };
 

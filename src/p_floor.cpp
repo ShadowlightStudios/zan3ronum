@@ -29,12 +29,27 @@
 #include "doomstat.h"
 #include "r_state.h"
 #include "tables.h"
+#include "farchive.h"
 #include "p_3dmidtex.h"
-#include "r_interpolate.h"
+#include "r_data/r_interpolate.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "network.h"
 #include "sv_commands.h"
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+inline FArchive &operator<< (FArchive &arc, DFloor::EFloor &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DFloor::EFloor)val;
+	return arc;
+}
 
 //==========================================================================
 //
@@ -184,8 +199,7 @@ void DFloor::Tick ()
 
 	// [BC] If we're in client mode, just move the floor and get out. The server will
 	// tell us when it stops.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -498,17 +512,17 @@ void DFloor::SetPerStepTime( int PerStepTime )
 //
 // HANDLE FLOOR TYPES
 // [RH] Added tag, speed, height, crush, change params.
+// This functions starts too many different things.
 //
 //==========================================================================
 
 bool EV_DoFloor (DFloor::EFloor floortype, line_t *line, int tag,
-				 fixed_t speed, fixed_t height, int crush, int change, bool hexencrush)
+				 fixed_t speed, fixed_t height, int crush, int change, bool hexencrush, bool hereticlower)
 {
 	int 		secnum;
 	bool 		rtn;
 	sector_t*	sec;
 	DFloor*		floor;
-	bool		manual = false;
 	fixed_t		ceilingheight;
 	fixed_t		newheight;
 	vertex_t	*spot, *spot2;
@@ -521,12 +535,11 @@ bool EV_DoFloor (DFloor::EFloor floortype, line_t *line, int tag,
 		if (!line || !(sec = line->backsector))
 			return rtn;
 		secnum = (int)(sec-sectors);
-		manual = true;
 		goto manual_floor;
 	}
 
 	secnum = -1;
-	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+	while (tag && (secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
 	{
 		sec = &sectors[secnum];
 
@@ -534,11 +547,14 @@ manual_floor:
 		// ALREADY MOVING?	IF SO, KEEP GOING...
 		if (sec->PlaneMoving(sector_t::floor))
 		{
-			if (manual)
-				continue;
-			else
-				return false;
+			// There was a test for 0/non-0 here, supposed to prevent 0-tags from executing "continue" and searching for unrelated sectors
+			// Unfortunately, the condition had been reversed, so that searches for tag-0 would continue,
+			// while numbered tags would abort (return false, even if some floors have been successfully triggered)
+
+			// All occurences of the condition (faulty or not) have been replaced by a looping condition: Looping only occurs if we're looking for a non-0 tag.
+			continue;
 		}
+		
 		
 		// new floor thinker
 		rtn = true;
@@ -551,7 +567,7 @@ manual_floor:
 		floor->m_OrgDist = sec->floorplane.d;	// [RH]
 
 		// [BC] Assign the floor's network ID. However, don't do this on the client end.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			floor->m_lFloorID = P_GetFirstFreeFloorID( );
 
 		floor->StartFloorSound ();
@@ -564,7 +580,7 @@ manual_floor:
 			floor->m_FloorDestDist = sec->floorplane.PointToDist (spot, newheight);
 			// [RH] DOOM's turboLower type did this. I've just extended it
 			//		to be applicable to all LowerToHighest types.
-			if (floor->m_FloorDestDist != sec->floorplane.d)
+			if (hereticlower || floor->m_FloorDestDist != sec->floorplane.d)
 				floor->m_FloorDestDist = sec->floorplane.PointToDist (spot, newheight+height);
 			break;
 
@@ -603,18 +619,18 @@ manual_floor:
 			floor->m_Direction = (floor->m_FloorDestDist > sec->floorplane.d) ? -1 : 1;
 			break;
 
-		case DFloor::floorRaiseAndCrush:
+		case DFloor::floorRaiseAndCrushDoom:
 			floor->m_Crush = crush;
 		case DFloor::floorRaiseToLowestCeiling:
 			floor->m_Direction = 1;
 			newheight = sec->FindLowestCeilingSurrounding (&spot);
-			if (floortype == DFloor::floorRaiseAndCrush)
+			if (floortype == DFloor::floorRaiseAndCrushDoom)
 				newheight -= 8 * FRACUNIT;
 			ceilingheight = sec->FindLowestCeilingPoint (&spot2);
 			floor->m_FloorDestDist = sec->floorplane.PointToDist (spot, newheight);
 			if (sec->floorplane.ZatPointDist (spot2, floor->m_FloorDestDist) > ceilingheight)
 				floor->m_FloorDestDist = sec->floorplane.PointToDist (spot2,
-					floortype == DFloor::floorRaiseAndCrush ? ceilingheight - 8*FRACUNIT : ceilingheight);
+					floortype == DFloor::floorRaiseAndCrushDoom ? ceilingheight - 8*FRACUNIT : ceilingheight);
 			break;
 
 		case DFloor::floorRaiseToHighest:
@@ -632,6 +648,13 @@ manual_floor:
 		case DFloor::floorRaiseToLowest:
 			floor->m_Direction = 1;
 			newheight = sec->FindLowestFloorSurrounding (&spot);
+			floor->m_FloorDestDist = sec->floorplane.PointToDist (spot, newheight);
+			break;
+
+		case DFloor::floorRaiseAndCrush:
+			floor->m_Crush = crush;
+			floor->m_Direction = 1;
+			newheight = sec->FindLowestCeilingPoint (&spot) - 8*FRACUNIT;
 			floor->m_FloorDestDist = sec->floorplane.PointToDist (spot, newheight);
 			break;
 
@@ -786,8 +809,6 @@ manual_floor:
 					SERVERCOMMANDS_SetSectorFlat( ULONG( sec - sectors ));
 			}
 		}
-		if (manual)
-			return rtn;
 	}
 	return rtn;
 }
@@ -947,7 +968,7 @@ manual_stair:
 		osecnum = secnum;				//jff 3/4/98 preserve loop index
 
 		// [BC] Assign the floor's network ID. However, don't do this on the client end.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			floor->m_lFloorID = P_GetFirstFreeFloorID( );
 
 		// [BC] If we're the server, tell clients to create the floor.
@@ -1058,11 +1079,12 @@ manual_stair:
 				floor->m_Type = DFloor::buildStair;	//jff 3/31/98 do not leave uninited
 				//jff 2/27/98 fix uninitialized crush field
 				floor->m_Crush = (!usespecials && speed == 4*FRACUNIT) ? 10 : -1;
+				floor->m_Hexencrush = false;
 				floor->m_ResetCount = reset;	// [RH] Tics until reset (0 if never)
 				floor->m_OrgDist = sec->floorplane.d;	// [RH] Height to reset to
 
 				// [BC] Assign the floor's network ID. However, don't do this on the client end.
-				if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+				if ( NETWORK_InClientMode() == false )
 					floor->m_lFloorID = P_GetFirstFreeFloorID( );
 
 				// [BC] If we're the server, tell clients to create the floor.
@@ -1105,7 +1127,6 @@ bool EV_DoDonut (int tag, line_t *line, fixed_t pillarspeed, fixed_t slimespeed)
 	DFloor*				floor;
 	vertex_t*			spot;
 	fixed_t				height;
-	bool				manual = false;
 		
 	secnum = -1;
 	rtn = false;
@@ -1114,18 +1135,17 @@ bool EV_DoDonut (int tag, line_t *line, fixed_t pillarspeed, fixed_t slimespeed)
 	{
 		if (!line || !(s1 = line->backsector))
 			return rtn;
-		manual = true;
 		goto manual_donut;
 	}
 
-	while ((secnum = P_FindSectorFromTag(tag,secnum)) >= 0)
+	while (tag && (secnum = P_FindSectorFromTag(tag,secnum)) >= 0)
 	{
 		s1 = &sectors[secnum];					// s1 is pillar's sector
 
 manual_donut:
 		// ALREADY MOVING?	IF SO, KEEP GOING...
 		if (s1->PlaneMoving(sector_t::floor))
-			continue;
+			continue; // safe now, because we check that tag is non-0 in the looping condition [fdari]
 
 		rtn = true;
 		s2 = getNextSector (s1->lines[0], s1);	// s2 is pool's sector
@@ -1157,7 +1177,7 @@ manual_donut:
 			floor->StartFloorSound ();
 			
 			// [BC] Assign the floor's network ID. However, don't do this on the client end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 				floor->m_lFloorID = P_GetFirstFreeFloorID( );
 
 			// [BC] If we're the server, tell clients to create the floor.
@@ -1180,7 +1200,7 @@ manual_donut:
 			floor->StartFloorSound ();
 
 			// [BC] Assign the floor's network ID. However, don't do this on the client end.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+			if ( NETWORK_InClientMode() == false )
 				floor->m_lFloorID = P_GetFirstFreeFloorID( );
 
 			// [BC] If we're the server, tell clients to create the floor.
@@ -1192,7 +1212,6 @@ manual_donut:
 
 			break;
 		}
-		if (manual) break;
 	}
 	return rtn;
 }
@@ -1207,6 +1226,14 @@ IMPLEMENT_POINTY_CLASS (DElevator)
 	DECLARE_POINTER(m_Interp_Floor)
 	DECLARE_POINTER(m_Interp_Ceiling)
 END_POINTERS
+
+inline FArchive &operator<< (FArchive &arc, DElevator::EElevator &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DElevator::EElevator)val;
+	return arc;
+}
 
 DElevator::DElevator ()
 {
@@ -1308,8 +1335,7 @@ void DElevator::Tick ()
 	}
 
 	// [BC] This is all we need to do in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -1375,7 +1401,6 @@ bool EV_DoElevator (line_t *line, DElevator::EElevator elevtype,
 	fixed_t		floorheight, ceilingheight;
 	fixed_t		newheight;
 	vertex_t*	spot;
-	bool		manual = false;
 
 	if (!line && (elevtype == DElevator::elevateCurrent))
 		return false;
@@ -1387,19 +1412,18 @@ bool EV_DoElevator (line_t *line, DElevator::EElevator elevtype,
 	{
 		if (!line || !(sec = line->backsector))
 			return rtn;
-		manual = true;
 		goto manual_elevator;
 	}
 
 
 	// act on all sectors with the same tag as the triggering linedef
-	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+	while (tag && (secnum = P_FindSectorFromTag (tag, secnum)) >= 0) // never loop for a non-0 tag (condition moved to beginning of loop) [FDARI]
 	{
 		sec = &sectors[secnum];
 manual_elevator:
 		// If either floor or ceiling is already activated, skip it
 		if (sec->PlaneMoving(sector_t::floor) || sec->ceilingdata) //jff 2/22/98
-			continue;
+			continue; // the loop used to break at the end if tag were 0, but would miss that step if "continue" occured [FDARI]
 
 		// create and initialize new elevator thinker
 		rtn = true;
@@ -1409,7 +1433,7 @@ manual_elevator:
 		elevator->StartFloorSound ();
 
 		// [BC] Assign the floor's network ID. However, don't do this on the client end.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			elevator->m_lElevatorID = P_GetFirstFreeElevatorID( );
 
 		floorheight = sec->CenterFloor ();
@@ -1469,7 +1493,6 @@ manual_elevator:
 			SERVERCOMMANDS_StartElevatorSound( elevator->m_lElevatorID );
 		}
 
-		if (manual) break;
 	}
 	return rtn;
 }
@@ -1752,12 +1775,7 @@ void DWaggleBase::DoWaggle (bool ceiling)
 	m_Accumulator += m_AccDelta;
 
 
-#if 1
 	fixed_t mag = finesine[(m_Accumulator>>9)&8191]*8;
-#else
-	// Hexen used a 64 entry(!) sine table here which is not nearly precise enough for smooth movement
-	fixed_t mag = FloatBobOffsets[(m_Accumulator>>FRACBITS)&63];
-#endif
 
 	dist = plane->d;
 	plane->d = m_OriginalDist + plane->PointToDist (0, 0, FixedMul (mag, m_Scale));
@@ -1844,7 +1862,6 @@ bool EV_StartWaggle (int tag, line_t *line, int height, int speed, int offset,
 	sector_t *sector;
 	DWaggleBase *waggle;
 	bool retCode;
-	bool manual = false;
 
 	retCode = false;
 	sectorIndex = -1;
@@ -1853,12 +1870,11 @@ bool EV_StartWaggle (int tag, line_t *line, int height, int speed, int offset,
 	{
 		if (!line || !(sector = line->backsector))
 			return retCode;
-		manual = true;
 		goto manual_waggle;
 	}
 
 
-	while ((sectorIndex = P_FindSectorFromTag(tag, sectorIndex)) >= 0)
+	while (tag && (sectorIndex = P_FindSectorFromTag(tag, sectorIndex)) >= 0)
 	{
 		sector = &sectors[sectorIndex];
 manual_waggle:
@@ -1888,14 +1904,13 @@ manual_waggle:
 		waggle->m_State = WGLSTATE_EXPAND;
 
 		// [BC] Assign the waggle's network ID. However, don't do this on the client end.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			waggle->m_lWaggleID = P_GetFirstFreeWaggleID( );
 
 		// [BC] If we're the server, tell clients to do the waggle.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			SERVERCOMMANDS_DoWaggle( ceiling, sector, waggle->m_OriginalDist, waggle->m_Accumulator, waggle->m_AccDelta, waggle->m_TargetScale, waggle->m_Scale, waggle->m_ScaleDelta, waggle->m_Ticker, waggle->m_State, waggle->m_lWaggleID );
 
-		if (manual) break;
 	}
 	return retCode;
 }

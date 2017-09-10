@@ -280,7 +280,7 @@ void TEAM_ExecuteReturnRoutine( ULONG ulTeamIdx, AActor *pReturner )
 		return;
 
 	// Execute the return scripts.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		if ( ulTeamIdx == teams.Size( ) )
 			FBehavior::StaticStartTypedScripts( SCRIPT_WhiteReturn, NULL, true );
@@ -305,7 +305,7 @@ void TEAM_ExecuteReturnRoutine( ULONG ulTeamIdx, AActor *pReturner )
 	// In non-simple CTF mode, scripts take care of the returning and displaying messages.
 	if ( TEAM_GetSimpleCTFSTMode( ))
 	{
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 			static_cast<ATeamItem *>( pTeamItem )->ReturnFlag( pReturner );
 		static_cast<ATeamItem *>( pTeamItem )->DisplayFlagReturn( );
 	}
@@ -319,7 +319,7 @@ void TEAM_ExecuteReturnRoutine( ULONG ulTeamIdx, AActor *pReturner )
 
 	// Destroy any sitting flags that being returned from the return ticks running out,
 	// or whatever reason.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		while (( pTeamItem = Iterator.Next( )))
 		{
@@ -415,12 +415,12 @@ ULONG TEAM_ChooseBestTeamForPlayer( const bool bIgnoreTeamStartsAvailability )
 		if ( bPossibleTeams[i] == false )
 			continue;
 
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 		{
 			if ( lLowestScoreCount > TEAM_GetFragCount( i ))
 				lLowestScoreCount = TEAM_GetFragCount( i );
 		}
-		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		{
 			if ( lLowestScoreCount > TEAM_GetWinCount( i ))
 				lLowestScoreCount = TEAM_GetWinCount( i );
@@ -434,9 +434,9 @@ ULONG TEAM_ChooseBestTeamForPlayer( const bool bIgnoreTeamStartsAvailability )
 
 	for ( ULONG i = 0; i < teams.Size( ); i++ )
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 			lGotScore[i] = TEAM_GetFragCount( i );
-		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNWINS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			lGotScore[i] = TEAM_GetWinCount( i );
 		else
 			lGotScore[i] = TEAM_GetScore( i );
@@ -499,9 +499,9 @@ void TEAM_ScoreSkulltagPoint( player_t *pPlayer, ULONG ulNumPoints, AActor *pPil
 
 	// Create the console message.
 	if( ( bAssisted ) && ( ! bSelfAssisted ) )
-		sprintf(szString, "%s \\c-and %s\\c- scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.netname, players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
+		sprintf(szString, "%s \\c-and %s\\c- scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.GetName(), players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.GetName(), V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
 	else
-		sprintf(szString, "%s \\c-scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
+		sprintf(szString, "%s \\c-scored for the \\c%c%s \\c-team!\n", pPlayer->userinfo.GetName(), V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam )), TEAM_GetName( pPlayer->ulTeam ));
 
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_Print( szString, PRINT_HIGH );
@@ -563,14 +563,14 @@ void TEAM_ScoreSkulltagPoint( player_t *pPlayer, ULONG ulNumPoints, AActor *pPil
 	}
 
 	// Create the "scored by / assisted by" message.
-	sprintf( szString, "\\c%cScored by: %s", V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam ) ), pPlayer->userinfo.netname);
+	sprintf( szString, "\\c%cScored by: %s", V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam ) ), pPlayer->userinfo.GetName());
 
 	if ( bAssisted )
 	{
 		if ( bSelfAssisted )
 			sprintf( szString + strlen ( szString ), "\\n\\c%c( Self-Assisted )", V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam ) ) );
 		else
-			sprintf( szString + strlen ( szString ), "\\n\\c%cAssisted by: %s", V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam ) ), players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.netname);
+			sprintf( szString + strlen ( szString ), "\\n\\c%cAssisted by: %s", V_GetColorChar( TEAM_GetTextColor( pPlayer->ulTeam ) ), players[TEAM_GetAssistPlayer( pPlayer->ulTeam )].userinfo.GetName());
 	}
 	
 	V_ColorizeString( szString );
@@ -612,7 +612,7 @@ void TEAM_ScoreSkulltagPoint( player_t *pPlayer, ULONG ulNumPoints, AActor *pPil
 		pPlayer->mo->RemoveInventory( pInventory );
 
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_TakeInventory( ULONG( pPlayer - players ), TEAM_GetItem( ulTeamIdx )->TypeName.GetChars( ), 0 );
+		SERVERCOMMANDS_TakeInventory( ULONG( pPlayer - players ), TEAM_GetItem( ulTeamIdx ), 0 );
 	else
 		SCOREBOARD_RefreshHUD( );
 
@@ -721,7 +721,7 @@ void TEAM_FlagDropped( player_t *pPlayer, ULONG ulTeamIdx )
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
 		SERVERCOMMANDS_TeamFlagDropped( ULONG( pPlayer - players ), ulTeamIdx );
-		SERVER_Printf( PRINT_MEDIUM, "%s \\c-lost the \\c%c%s \\c-%s.\n", pPlayer->userinfo.netname, V_GetColorChar( TEAM_GetTextColor( ulTeamIdx)), TEAM_GetName( ulTeamIdx), ( skulltag ) ? "skull" : "flag" );
+		SERVER_Printf( PRINT_MEDIUM, "%s \\c-lost the \\c%c%s \\c-%s.\n", pPlayer->userinfo.GetName(), V_GetColorChar( TEAM_GetTextColor( ulTeamIdx)), TEAM_GetName( ulTeamIdx), ( skulltag ) ? "skull" : "flag" );
 		return;
 	}
 
@@ -808,14 +808,14 @@ void TEAM_TimeExpired( void )
 	// there aren't any, then just end the map.
 	if ( SERVER_CalcNumPlayers( ))
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNPOINTS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			lHighestScore = TEAM_GetHighestScoreCount( );
 		else
 			lHighestScore = TEAM_GetHighestFragCount( );
 
 		for ( ULONG i = 0; i < teams.Size( ); i++ )
 		{
-			if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNPOINTS )
+			if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS )
 			{
 				if ( lHighestScore == static_cast<unsigned> (TEAM_GetScore( i )))
 				{
@@ -872,11 +872,7 @@ void TEAM_TimeExpired( void )
 		TEAM_DoWinSequence( lWinner );
 	}
 
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-	else
-		Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+	NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 	GAME_SetEndLevelDelay( 5 * TICRATE );
 }
 
@@ -1050,15 +1046,12 @@ void TEAM_SetScore( ULONG ulTeamIdx, LONG lScore, bool bAnnouncer )
 	}
 
 	// Implement the pointlimit.
-	if ( pointlimit <= 0 || ( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( pointlimit <= 0 || NETWORK_InClientMode() )
 		return;
 
 	if ( TEAM_GetScore( ulTeamIdx ) >= (LONG)pointlimit )
 	{
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_Printf( PRINT_HIGH, "\\c%c%s \\c-has won the game!\n", V_GetColorChar( TEAM_GetTextColor( ulTeamIdx )), TEAM_GetName( ulTeamIdx ));
-		else
-			Printf( "%s has won the game!\n", TEAM_GetName( ulTeamIdx ));
+		NETWORK_Printf( "\\c%c%s \\c-has won the game!\n", V_GetColorChar( TEAM_GetTextColor( ulTeamIdx )), TEAM_GetName( ulTeamIdx ));
 
 		// Do the win sequence for the winner.
 		TEAM_DoWinSequence( ulTeamIdx );
@@ -1074,7 +1067,7 @@ const char *TEAM_GetSmallHUDIcon( ULONG ulTeamIdx )
 {
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEFLAGASTEAMITEM )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USEFLAGASTEAMITEM )
 			return ( teams[ulTeamIdx].SmallFlagHUDIcon.GetChars( ));
 		else
 			return ( teams[ulTeamIdx].SmallSkullHUDIcon.GetChars( ) );
@@ -1102,7 +1095,7 @@ const char *TEAM_GetLargeHUDIcon( ULONG ulTeamIdx )
 {
 	if ( ulTeamIdx < teams.Size( ))
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEFLAGASTEAMITEM )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USEFLAGASTEAMITEM )
 			return ( teams[ulTeamIdx].LargeFlagHUDIcon.GetChars( ));
 		else
 			return ( teams[ulTeamIdx].LargeSkullHUDIcon.GetChars( ) );
@@ -1163,7 +1156,7 @@ const PClass *TEAM_GetItem( ULONG ulTeamIdx )
 {
 	if ( TEAM_CheckIfValid( ulTeamIdx ))
 	{
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEFLAGASTEAMITEM )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USEFLAGASTEAMITEM )
 			return ( PClass::FindClass( teams[ulTeamIdx].FlagItem.GetChars( )));
 		else
 			return ( PClass::FindClass( teams[ulTeamIdx].SkullItem.GetChars( )));
@@ -1292,7 +1285,7 @@ void TEAM_SetFragCount( ULONG ulTeamIdx, LONG lFragCount, bool bAnnounce )
 	// Potentially play some announcer sounds resulting from this frag ("Teams are tied!"),
 	// etc.
 	if (( bAnnounce ) &&
-		(GAMEMODE_GetFlags(GAMEMODE_GetCurrentMode()) & GMF_PLAYERSEARNFRAGS ))
+		(GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS ))
 	{
 		ANNOUNCER_PlayTeamFragSounds( ulTeamIdx, teams[ulTeamIdx].lFragCount, lFragCount );
 	}
@@ -1566,7 +1559,7 @@ bool TEAM_ShouldUseTeam( ULONG ulTeam )
 	if ( TEAM_CheckIfValid( ulTeam ) == false )
 		return ( false );
 
-	if ( teamgame && teams[ulTeam].TeamStarts.Size( ) < 1 )
+	if ( ( GAMEMODE_GetCurrentFlags() & GMF_TEAMGAME ) && teams[ulTeam].TeamStarts.Size( ) < 1 )
 		return ( false );
 
 	return ( true );
@@ -1736,6 +1729,16 @@ ULONG TEAM_GetNextTeam( ULONG ulTeamIdx )
 	return ( ulNewTeamIdx );
 }
 
+//*****************************************************************************
+//
+bool TEAM_ShouldJoinTeam()
+{
+	return ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
+		&& ((( GAMEMODE_GetCurrentFlags() & GMF_TEAMGAME ) == 0 )
+			|| ( TemporaryTeamStarts.Size() == 0 ))
+		&& (( dmflags2 & DF2_NO_TEAM_SELECT ) == 0 );
+}
+
 //****************************************************************************
 //
 bool TEAM_IsActorAllowedForPlayer( AActor *pActor, player_t *pPlayer )
@@ -1768,7 +1771,7 @@ bool TEAM_IsClassAllowedForPlayer( ULONG ulClass, player_t *pPlayer )
 bool TEAM_CheckTeamRestriction( ULONG ulTeam, ULONG ulTeamRestriction )
 {
 	// [BB] No teamgame, so no team restrictions apply.
-	if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) )
+	if ( !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) )
 		return true;
 
 	// [BB] Not restricted to a certain team.
@@ -1832,8 +1835,7 @@ ULONG TEAM_FindValidClassForPlayer( player_t *pPlayer )
 void TEAM_EnsurePlayerHasValidClass( player_t *pPlayer )
 {
 	// [BB] This is server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -1844,18 +1846,18 @@ void TEAM_EnsurePlayerHasValidClass( player_t *pPlayer )
 
 	// [BB] The random class is available to all players, P_SpawnPlayer needs to take 
 	// care of only selecting valid random classes.
-	if ( pPlayer->userinfo.PlayerClass == -1 )
+	if ( pPlayer->userinfo.GetPlayerClassNum() == -1 )
 		return;
 
 	// [BB] The additional checks prevent this from being done when there is only one class and while the map is loaded.
 	const bool forcerandom = ( sv_forcerandomclass && (PlayerClasses.Size () > 1) && ( gameaction == ga_nothing ) && PLAYER_IsValidPlayer ( static_cast<ULONG> ( pPlayer - players ) ) );
 
 	// [BB] The class is valid, nothing to do.
-	if ( TEAM_IsClassAllowedForPlayer ( pPlayer->userinfo.PlayerClass, pPlayer ) && ( ( forcerandom == false ) || ( pPlayer->userinfo.PlayerClass == -1 ) ) )
+	if ( TEAM_IsClassAllowedForPlayer ( pPlayer->userinfo.GetPlayerClassNum(), pPlayer ) && ( ( forcerandom == false ) || ( pPlayer->userinfo.GetPlayerClassNum() == -1 ) ) )
 		return;
 
 	// [BB] The current class is invalid, select a valid one.
-	pPlayer->userinfo.PlayerClass = forcerandom ? -1 : TEAM_FindValidClassForPlayer ( pPlayer );
+	pPlayer->userinfo.PlayerClassNumChanged ( forcerandom ? -1 : TEAM_FindValidClassForPlayer ( pPlayer ) );
 	// [BB] This should respawn the player at the appropriate spot. Set the player state to
 	// PST_REBORNNOINVENTORY so everything (weapons, etc.) is cleared.
 	pPlayer->playerstate = PST_REBORNNOINVENTORY;
@@ -1902,7 +1904,7 @@ bool TEAM_IsActorVisibleToPlayer( const AActor *pActor, player_t *pPlayer )
 		return true;
 
 	// [BB] Finally check the team restricion.
-	return TEAM_CheckTeamRestriction( pPlayer->ulTeam, pActor->ulVisibleToTeam );
+	return TEAM_CheckTeamRestriction( pPlayer->ulTeam, pActor->VisibleToTeam );
 }
 
 //*****************************************************************************
@@ -2072,7 +2074,7 @@ CUSTOM_CVAR( Bool, domination, false, CVAR_SERVERINFO | CVAR_LATCH | CVAR_CAMPAI
 CCMD( team )
 {
 	// Not a valid team mode. Ignore.
-	if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) )
+	if ( !( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) )
 		return;
 
 	// If the played inputted a team they'd like to join (such as, "team red"), handle that
@@ -2125,7 +2127,7 @@ CCMD( changeteam )
 	}
 
 	// Not a team mode.
-	if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS ) == false )
+	if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS ) == false )
 	{
 		Printf( "You can only change your team in a team game.\n" );
 		return;
@@ -2291,12 +2293,12 @@ CCMD( changeteam )
 		// Player was on a team, so tell everyone that he's changing teams.
 		if ( bOnTeam )
 		{
-			Printf( "%s \\c-defected to the \\c%c%s \\c-team.\n", players[consoleplayer].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( players[consoleplayer].ulTeam ) ), TEAM_GetName( players[consoleplayer].ulTeam ));
+			Printf( "%s \\c-defected to the \\c%c%s \\c-team.\n", players[consoleplayer].userinfo.GetName(), V_GetColorChar( TEAM_GetTextColor( players[consoleplayer].ulTeam ) ), TEAM_GetName( players[consoleplayer].ulTeam ));
 		}
 		// Otherwise, tell everyone he's joining a team.
 		else
 		{
-			Printf( "%s \\c-joined the \\c%c%s \\c-team.\n", players[consoleplayer].userinfo.netname, V_GetColorChar( TEAM_GetTextColor( players[consoleplayer].ulTeam ) ), TEAM_GetName( players[consoleplayer].ulTeam ));
+			Printf( "%s \\c-joined the \\c%c%s \\c-team.\n", players[consoleplayer].userinfo.GetName(), V_GetColorChar( TEAM_GetTextColor( players[consoleplayer].ulTeam ) ), TEAM_GetName( players[consoleplayer].ulTeam ));
 		}
 
 		if ( players[consoleplayer].mo )
@@ -2318,7 +2320,7 @@ CCMD( changeteam )
 		players[consoleplayer].bSpectating = false;
 		players[consoleplayer].bDeadSpectator = false;
 
-		if ( teamgame )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_TEAMGAME )
 			G_TeamgameSpawnPlayer( consoleplayer, players[consoleplayer].ulTeam, true );
 		else
 			G_DeathMatchSpawnPlayer( consoleplayer, true );
@@ -2337,7 +2339,7 @@ CUSTOM_CVAR( Int, pointlimit, 0, CVAR_SERVERINFO | CVAR_CAMPAIGNLOCK )
 
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 
 		// Update the scoreboard.

@@ -30,7 +30,6 @@
 #include "doomstat.h"
 #include "s_sound.h"
 #include "i_system.h"
-#include "r_draw.h"
 #include "gi.h"
 #include "m_random.h"
 #include "p_pspr.h"
@@ -44,7 +43,7 @@
 #include "w_wad.h"
 #include "cmdlib.h"
 #include "sbar.h"
-#include "f_finale.h"
+#include "intermission/intermission.h"
 #include "c_console.h"
 #include "doomdef.h"
 #include "c_dispatch.h"
@@ -52,6 +51,9 @@
 #include "thingdef/thingdef.h"
 #include "g_level.h"
 #include "d_net.h"
+#include "gstrings.h"
+#include "farchive.h"
+#include "r_renderer.h"
 // [BB] New #includes.
 #include "sv_commands.h"
 #include "a_doomglobal.h"
@@ -61,7 +63,6 @@
 #include "team.h"
 #include "network.h"
 #include "joinqueue.h"
-#include "m_menu.h"
 #include "d_gui.h"
 #include "lastmanstanding.h"
 #include "cooperative.h"
@@ -76,6 +77,7 @@
 #include "gamemode.h"
 #include "invasion.h"
 #include "d_netinf.h"
+#include "g_shared/pwo.h"
 
 static FRandom pr_skullpop ("SkullPop");
 
@@ -87,6 +89,8 @@ CVAR (Bool, cl_noprediction, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 static player_t PredictionPlayerBackup;
 static BYTE PredictionActorBackup[sizeof(AActor)];
 static TArray<sector_t *> PredictionTouchingSectorsBackup;
+static TArray<AActor *> PredictionSectorListBackup;
+static TArray<msecnode_t *> PredictionSector_sprev_Backup;
 
 // [Dusk] Determine speed spectators will move at
 CUSTOM_CVAR (Float, cl_spectatormove, 1.0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG) {
@@ -127,40 +131,57 @@ bool FPlayerClass::CheckSkin (int skin)
 	return false;
 }
 
+//===========================================================================
+//
+// GetDisplayName
+//
+//===========================================================================
+
+const char *GetPrintableDisplayName(const PClass *cls)
+{ 
+	// Fixme; This needs a decent way to access the string table without creating a mess.
+	const char *name = cls->Meta.GetMetaString(APMETA_DisplayName);
+	return name;
+}
+
+bool ValidatePlayerClass(const PClass *ti, const char *name)
+{
+	if (!ti)
+	{
+		Printf ("Unknown player class '%s'\n", name);
+		return false;
+	}
+	else if (!ti->IsDescendantOf (RUNTIME_CLASS (APlayerPawn)))
+	{
+		Printf ("Invalid player class '%s'\n", name);
+		return false;
+	}
+	else if (ti->Meta.GetMetaString (APMETA_DisplayName) == NULL)
+	{
+		Printf ("Missing displayname for player class '%s'\n", name);
+		return false;
+	}
+	return true;
+}
+
 void SetupPlayerClasses ()
 {
 	FPlayerClass newclass;
 
-	newclass.Flags = 0;
+	PlayerClasses.Clear();
+	for (unsigned i=0; i<gameinfo.PlayerClasses.Size(); i++)
+	{
+		newclass.Flags = 0;
+		newclass.Type = PClass::FindClass(gameinfo.PlayerClasses[i]);
 
-	if (gameinfo.gametype == GAME_Doom)
-	{
-		newclass.Type = PClass::FindClass (NAME_DoomPlayer);
-		PlayerClasses.Push (newclass);
-	}
-	else if (gameinfo.gametype == GAME_Heretic)
-	{
-		newclass.Type = PClass::FindClass (NAME_HereticPlayer);
-		PlayerClasses.Push (newclass);
-	}
-	else if (gameinfo.gametype == GAME_Hexen)
-	{
-		newclass.Type = PClass::FindClass (NAME_FighterPlayer);
-		PlayerClasses.Push (newclass);
-		newclass.Type = PClass::FindClass (NAME_ClericPlayer);
-		PlayerClasses.Push (newclass);
-		newclass.Type = PClass::FindClass (NAME_MagePlayer);
-		PlayerClasses.Push (newclass);
-	}
-	else if (gameinfo.gametype == GAME_Strife)
-	{
-		newclass.Type = PClass::FindClass (NAME_StrifePlayer);
-		PlayerClasses.Push (newclass);
-	}
-	else if (gameinfo.gametype == GAME_Chex)
-	{
-		newclass.Type = PClass::FindClass (NAME_ChexPlayer);
-		PlayerClasses.Push (newclass);
+		if (ValidatePlayerClass(newclass.Type, gameinfo.PlayerClasses[i]))
+		{
+			if ((GetDefaultByType(newclass.Type)->flags6 & MF6_NOMENU))
+			{
+				newclass.Flags |= PCF_NOMENU;
+			}
+			PlayerClasses.Push (newclass);
+		}
 	}
 }
 
@@ -178,19 +199,7 @@ CCMD (addplayerclass)
 	{
 		const PClass *ti = PClass::FindClass (argv[1]);
 
-		if (!ti)
-		{
-			Printf ("Unknown player class '%s'\n", argv[1]);
-		}
-		else if (!ti->IsDescendantOf (RUNTIME_CLASS (APlayerPawn)))
-		{
-			Printf ("Invalid player class '%s'\n", argv[1]);
-		}
-		else if (ti->Meta.GetMetaString (APMETA_DisplayName) == NULL)
-		{
-			Printf ("Missing displayname for player class '%s'\n", argv[1]);
-		}
-		else
+		if (ValidatePlayerClass(ti, argv[1]))
 		{
 			FPlayerClass newclass;
 
@@ -221,7 +230,8 @@ CCMD (playerclasses)
 {
 	for (unsigned int i = 0; i < PlayerClasses.Size (); i++)
 	{
-		Printf ("% 3d %s\n", i,
+		Printf ("%3d: Class = %s, Name = %s\n", i,
+			PlayerClasses[i].Type->TypeName.GetChars(),
 			PlayerClasses[i].Type->Meta.GetMetaString (APMETA_DisplayName));
 	}
 }
@@ -234,7 +244,10 @@ CCMD (playerclasses)
 // 16 pixels of bob
 #define MAXBOB			0x100000
 
-bool onground;
+FArchive &operator<< (FArchive &arc, player_t *&p)
+{
+	return arc.SerializePointer (players, (BYTE **)&p, sizeof(*players));
+}
 
 // The player_t constructor. Since LogText is not a POD, we cannot just
 // memset it all to 0.
@@ -260,10 +273,12 @@ player_t::player_t()
   CurrentPlayerClass(0),
   backpack(0),
   fragcount(0),
+  WeaponState(0),
   ReadyWeapon(0),
   PendingWeapon(0),
   cheats(0),
   cheats2(0), // [BB]
+  timefreezer(0),
   refire(0),
   killcount(0),
   itemcount(0),
@@ -282,11 +297,10 @@ player_t::player_t()
   PremorphWeapon(0),
   chickenPeck(0),
   jumpTics(0),
+  onground(0),
   respawn_time(0),
   camera(0),
   air_finished(0),
-  accuracy(0),
-  stamina(0),
   BlendR(0),
   BlendG(0),
   BlendB(0),
@@ -342,13 +356,186 @@ player_t::player_t()
   bUnarmed( false )
 {
 	memset (&cmd, 0, sizeof(cmd));
-	memset (&userinfo, 0, sizeof(userinfo));
+	// [BB] Check if this is still necessary.
+	userinfo.Reset();
 	memset (psprites, 0, sizeof(psprites));
 
 	// [BC] Initialize additonal ST properties.
 	memset( &ulMedalCount, 0, sizeof( ULONG ) * NUM_MEDALS );
 	memset( &ServerXYZ, 0, sizeof( fixed_t ) * 3 );
-	memset( &ServerXYZMom, 0, sizeof( fixed_t ) * 3 );
+	memset( &ServerXYZVel, 0, sizeof( fixed_t ) * 3 );
+}
+
+player_t &player_t::operator=(const player_t &p)
+{
+	mo = p.mo;
+	playerstate = p.playerstate;
+	cmd = p.cmd;
+	original_cmd = p.original_cmd;
+	original_oldbuttons = p.original_oldbuttons;
+	// Intentionally not copying userinfo!
+	cls = p.cls;
+	DesiredFOV = p.DesiredFOV;
+	FOV = p.FOV;
+	viewz = p.viewz;
+	viewheight = p.viewheight;
+	deltaviewheight = p.deltaviewheight;
+	bob = p.bob;
+	velx = p.velx;
+	vely = p.vely;
+	centering = p.centering;
+	turnticks = p.turnticks;
+	attackdown = p.attackdown;
+	usedown = p.usedown;
+	oldbuttons = p.oldbuttons;
+	health = p.health;
+	inventorytics = p.inventorytics;
+	CurrentPlayerClass = p.CurrentPlayerClass;
+	backpack = p.backpack;
+	// [BB] Zandronum doesn't have this.
+	//memcpy(frags, &p.frags, sizeof(frags));
+	fragcount = p.fragcount;
+	/* [BB] Zandronum doesn't have these.
+	lastkilltime = p.lastkilltime;
+	multicount = p.multicount;
+	spreecount = p.spreecount;
+	*/
+	WeaponState = p.WeaponState;
+	ReadyWeapon = p.ReadyWeapon;
+	PendingWeapon = p.PendingWeapon;
+	cheats = p.cheats;
+	timefreezer = p.timefreezer;
+	refire = p.refire;
+	// [BB] Zandronum doesn't have this.
+	//inconsistant = p.inconsistant;
+	waiting = p.waiting;
+	killcount = p.killcount;
+	itemcount = p.itemcount;
+	secretcount = p.secretcount;
+	damagecount = p.damagecount;
+	bonuscount = p.bonuscount;
+	hazardcount = p.hazardcount;
+	poisoncount = p.poisoncount;
+	poisontype = p.poisontype;
+	poisonpaintype = p.poisonpaintype;
+	poisoner = p.poisoner;
+	attacker = p.attacker;
+	extralight = p.extralight;
+	fixedcolormap = p.fixedcolormap;
+	fixedlightlevel = p.fixedlightlevel;
+	memcpy(psprites, &p.psprites, sizeof(psprites));
+	morphTics = p.morphTics;
+	MorphedPlayerClass = p.MorphedPlayerClass;
+	MorphStyle = p.MorphStyle;
+	MorphExitFlash = p.MorphExitFlash;
+	PremorphWeapon = p.PremorphWeapon;
+	chickenPeck = p.chickenPeck;
+	jumpTics = p.jumpTics;
+	onground = p.onground;
+	respawn_time = p.respawn_time;
+	camera = p.camera;
+	air_finished = p.air_finished;
+	LastDamageType = p.LastDamageType;
+	/* [BB] Zandronum doesn't have these.
+	savedyaw = p.savedyaw;
+	savedpitch = p.savedpitch;
+	angle = p.angle;
+	dest = p.dest;
+	prev = p.prev;
+	enemy = p.enemy;
+	missile = p.missile;
+	mate = p.mate;
+	last_mate = p.last_mate;
+	*/
+	settings_controller = p.settings_controller;
+	/* [BB] Zandronum doesn't have these.
+	skill = p.skill;
+	t_active = p.t_active;
+	t_respawn = p.t_respawn;
+	t_strafe = p.t_strafe;
+	t_react = p.t_react;
+	t_fight = p.t_fight;
+	t_roam = p.t_roam;
+	t_rocket = p.t_rocket;
+	isbot = p.isbot;
+	first_shot = p.first_shot;
+	sleft = p.sleft;
+	allround = p.allround;
+	oldx = p.oldx;
+	oldy = p.oldy;
+	*/
+	BlendR = p.BlendR;
+	BlendG = p.BlendG;
+	BlendB = p.BlendB;
+	BlendA = p.BlendA;
+	LogText = p.LogText;
+	MinPitch = p.MinPitch;
+	MaxPitch = p.MaxPitch;
+	crouching = p.crouching;
+	crouchdir = p.crouchdir;
+	crouchfactor = p.crouchfactor;
+	crouchoffset = p.crouchoffset;
+	crouchviewdelta = p.crouchviewdelta;
+	weapons = p.weapons;
+	ConversationNPC = p.ConversationNPC;
+	ConversationPC = p.ConversationPC;
+	ConversationNPCAngle = p.ConversationNPCAngle;
+	ConversationFaceTalker = p.ConversationFaceTalker;
+
+	// [BB] Zandronum additions
+	bOnTeam = p.bOnTeam;
+	ulTeam = p.ulTeam;
+	lPointCount = p.lPointCount;
+	ulDeathCount = p.ulDeathCount;
+	ulLastFragTick = p.ulLastFragTick;
+	ulLastExcellentTick = p.ulLastExcellentTick;
+	ulLastBFGFragTick = p.ulLastBFGFragTick;
+	ulConsecutiveHits = p.ulConsecutiveHits;
+	ulConsecutiveRailgunHits = p.ulConsecutiveRailgunHits;
+	ulFragsWithoutDeath = p.ulFragsWithoutDeath;
+	ulDeathsWithoutFrag = p.ulDeathsWithoutFrag;
+	ulUnrewardedDamageDealt = p.ulUnrewardedDamageDealt;
+	bChatting = p.bChatting;
+	bInConsole = p.bInConsole;
+	bSpectating = p.bSpectating;
+	bDeadSpectator = p.bDeadSpectator;
+	ulLivesLeft = p.ulLivesLeft;
+	bStruckPlayer = p.bStruckPlayer;
+	ulRailgunShots = p.ulRailgunShots;
+	memcpy(ulMedalCount, &p.ulMedalCount, sizeof( ULONG ) * NUM_MEDALS);
+	pIcon = p.pIcon;
+	lMaxHealthBonus = p.lMaxHealthBonus;
+	ulWins = p.ulWins;
+	pSkullBot = p.pSkullBot;
+	bIsBot = p.bIsBot;
+	bIgnoreChat = p.bIgnoreChat;
+	lIgnoreChatTicks = p.lIgnoreChatTicks;
+	memcpy(ServerXYZ, &p.ServerXYZ, sizeof( ServerXYZ ));
+	memcpy(ServerXYZVel, &p.ServerXYZVel, sizeof( ServerXYZVel ));
+	ulPing = p.ulPing;
+	ulPingAverages = p.ulPingAverages;
+	bReadyToGoOn = p.bReadyToGoOn;
+	bSpawnOkay = p.bSpawnOkay;
+	SpawnX = p.SpawnX;
+	SpawnY = p.SpawnY;
+	SpawnAngle = p.SpawnAngle;
+	OldPendingWeapon = p.OldPendingWeapon;
+	StartingWeaponName = p.StartingWeaponName;
+	bClientSelectedWeapon = p.bClientSelectedWeapon;
+	bLagging = p.bLagging;
+	bSpawnTelefragged = p.bSpawnTelefragged;
+	ulTime = p.ulTime;
+	bUnarmed = p.bUnarmed;
+	memcpy(unlaggedX, &p.unlaggedX, sizeof( unlaggedX ));
+	memcpy(unlaggedY, &p.unlaggedY, sizeof( unlaggedY ));
+	memcpy(unlaggedZ, &p.unlaggedZ, sizeof( unlaggedZ ));
+	restoreX = p.restoreX;
+	restoreY = p.restoreY;
+	restoreZ = p.restoreZ;
+	restoreFloorZ = p.restoreFloorZ;
+	restoreCeilingZ = p.restoreCeilingZ;
+
+	return *this;
 }
 
 // This function supplements the pointer cleanup in dobject.cpp, because
@@ -364,23 +551,27 @@ size_t player_t::FixPointers (const DObject *old, DObject *rep)
 {
 	APlayerPawn *replacement = static_cast<APlayerPawn *>(rep);
 	size_t changed = 0;
-	if (mo == old)				mo = replacement, changed++;
-	if (poisoner == old)		poisoner = replacement, changed++;
-	if (attacker == old)		attacker = replacement, changed++;
-	if (camera == old)			camera = replacement, changed++;
+
+	// The construct *& is used in several of these to avoid the read barriers
+	// that would turn the pointer we want to check to NULL if the old object
+	// is pending deletion.
+	if (mo == old)					mo = replacement, changed++;
+	if (*&poisoner == old)			poisoner = replacement, changed++;
+	if (*&attacker == old)			attacker = replacement, changed++;
+	if (*&camera == old)			camera = replacement, changed++;
 	/* [BB] ST doesn't have these.
-	if (dest == old)			dest = replacement, changed++;
-	if (prev == old)			prev = replacement, changed++;
-	if (enemy == old)			enemy = replacement, changed++;
-	if (missile == old)			missile = replacement, changed++;
-	if (mate == old)			mate = replacement, changed++;
-	if (last_mate == old)		last_mate = replacement, changed++;
+	if (*&dest == old)				dest = replacement, changed++;
+	if (*&prev == old)				prev = replacement, changed++;
+	if (*&enemy == old)				enemy = replacement, changed++;
+	if (*&missile == old)			missile = replacement, changed++;
+	if (*&mate == old)				mate = replacement, changed++;
+	if (*&last_mate == old)			last_mate = replacement, changed++;
 	*/
-	if (ReadyWeapon == old)		ReadyWeapon = static_cast<AWeapon *>(rep), changed++;
-	if (PendingWeapon == old)	PendingWeapon = static_cast<AWeapon *>(rep), changed++;
-	if (PremorphWeapon == old)	PremorphWeapon = static_cast<AWeapon *>(rep), changed++;
-	if (ConversationNPC == old)	ConversationNPC = replacement, changed++;
-	if (ConversationPC == old)	ConversationPC = replacement, changed++;
+	if (ReadyWeapon == old)			ReadyWeapon = static_cast<AWeapon *>(rep), changed++;
+	if (PendingWeapon == old)		PendingWeapon = static_cast<AWeapon *>(rep), changed++;
+	if (*&PremorphWeapon == old)	PremorphWeapon = static_cast<AWeapon *>(rep), changed++;
+	if (*&ConversationNPC == old)	ConversationNPC = replacement, changed++;
+	if (*&ConversationPC == old)	ConversationPC = replacement, changed++;
 	// [BC]
 	if ( pIcon == old )		pIcon = static_cast<AFloatyIcon *>( rep ), changed++;
 	if ( OldPendingWeapon == old )		OldPendingWeapon = static_cast<AWeapon *>( rep ), changed++;
@@ -437,23 +628,65 @@ void player_t::SetLogNumber (int num)
 		data[length]=0;
 		SetLogText (data);
 		delete[] data;
-
-		// Print log text to console
-		AddToConsole(-1, TEXTCOLOR_GOLD);
-		AddToConsole(-1, LogText);
-		AddToConsole(-1, "\n");
 	}
 }
 
 void player_t::SetLogText (const char *text)
 {
 	LogText = text;
+
+	// Print log text to console
+	AddToConsole(-1, TEXTCOLOR_GOLD);
+	AddToConsole(-1, LogText);
+	AddToConsole(-1, "\n");
 }
 
 int player_t::GetSpawnClass()
 {
 	const PClass * type = PlayerClasses[CurrentPlayerClass].Type;
 	return static_cast<APlayerPawn*>(GetDefaultByType(type))->SpawnMask;
+}
+
+//===========================================================================
+//
+// player_t :: SendPitchLimits
+//
+// Ask the local player's renderer what pitch restrictions should be imposed
+// and let everybody know. Only sends data for the consoleplayer, since the
+// local player is the only one our data is valid for.
+//
+//===========================================================================
+
+void player_t::SendPitchLimits() const
+{
+	// [BB] Client and server have to set the pitch limits directly and for all players.
+	if ( ( NETWORK_InClientMode() == false ) && ( NETWORK_GetState( ) != NETSTATE_SERVER ) )
+	{
+		if (this - players == consoleplayer)
+		{
+			Net_WriteByte(DEM_SETPITCHLIMIT);
+			Net_WriteByte(Renderer->GetMaxViewPitch(false));	// up
+			Net_WriteByte(Renderer->GetMaxViewPitch(true));		// down
+		}
+	}
+	else
+	{
+		// [BB] The extra player for the free spectate mode doesn't have a valid player index.
+		const unsigned int playerIndex = this - players;
+		if ( playerIndex < MAXPLAYERS )
+		{
+			if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+			{
+				players[playerIndex].MinPitch = Renderer->GetMaxViewPitch(false) * -ANGLE_1;
+				players[playerIndex].MaxPitch = Renderer->GetMaxViewPitch(true) * ANGLE_1;
+			}
+			else
+			{
+				players[playerIndex].MinPitch = - 32 * ANGLE_1;
+				players[playerIndex].MaxPitch = 56 * ANGLE_1;
+			}
+		}
+	}
 }
 
 //===========================================================================
@@ -486,11 +719,38 @@ void APlayerPawn::Serialize (FArchive &arc)
 		<< InvSel
 		<< MorphWeapon
 		<< DamageFade
-		<< PlayerFlags;
-	if (SaveVersion < 2435)
+		<< PlayerFlags
+		<< FlechetteType;
+	if (SaveVersion < 3829)
 	{
-		DamageFade.a = 255;
+		GruntSpeed = 12*FRACUNIT;
+		FallingScreamMinSpeed = 35*FRACUNIT;
+		FallingScreamMaxSpeed = 40*FRACUNIT;
 	}
+	else
+	{
+		arc << GruntSpeed << FallingScreamMinSpeed << FallingScreamMaxSpeed;
+	}
+	if (SaveVersion >= 4502)
+	{
+		arc << UseRange;
+	}
+	if (SaveVersion >= 4503)
+	{
+		arc << AirCapacity;
+	}
+}
+
+//===========================================================================
+//
+// APlayerPawn :: MarkPrecacheSounds
+//
+//===========================================================================
+
+void APlayerPawn::MarkPrecacheSounds() const
+{
+	Super::MarkPrecacheSounds();
+	S_MarkPlayerSounds(GetSoundClass());
 }
 
 //===========================================================================
@@ -544,7 +804,7 @@ void APlayerPawn::BeginPlay ()
 
 void APlayerPawn::Tick()
 {
-	if (player != NULL && player->mo == this && player->morphTics == 0 && player->playerstate != PST_DEAD)
+	if (player != NULL && player->mo == this && player->CanCrouch() && player->playerstate != PST_DEAD)
 	{
 		// [BC] Make the player flat, so he can travel under doors and such.
 		if ( player->bSpectating )
@@ -569,6 +829,19 @@ void APlayerPawn::PostBeginPlay()
 {
 	Super::PostBeginPlay();
 	SetupWeaponSlots();
+
+	// Voodoo dolls: restore original floorz/ceilingz logic
+	if (player == NULL || player->mo != this)
+	{
+		dropoffz = floorz = Sector->floorplane.ZatPoint(x, y);
+		ceilingz = Sector->ceilingplane.ZatPoint(x, y);
+		P_FindFloorCeiling(this, FFCF_ONLYSPAWNPOS);
+		z = floorz;
+	}
+	else
+	{
+		player->SendPitchLimits();
+	}
 }
 
 //===========================================================================
@@ -586,17 +859,29 @@ void APlayerPawn::SetupWeaponSlots()
 	if (player != NULL && player->mo == this)
 	{
 		player->weapons.StandardSetup(GetClass());
+		// If we're the local player, then there's a bit more work to do.
+		// This also applies if we're a bot and this is the net arbitrator.
 		// [BB] Since ST doesn't use the DEM_* stuff let clients do this
 		// for all players. Otherwise the KEYCONF lump would be completely ignored
 		// on clients for all players other than the consoleplayer.
 		if ( (player - players == consoleplayer) || NETWORK_InClientMode() )
-		{ // If we're the local player, then there's a bit more work to do.
+			// (player->isbot && consoleplayer == Net_Arbitrator)) // [BB] Zandronum treats bots differently.
+		{
 			FWeaponSlots local_slots(player->weapons);
-			local_slots.LocalSetup(GetClass());
+			/*  [BB] Zandronum treats bots differently.
+			if (player->isbot)
+			{ // Bots only need weapons from KEYCONF, not INI modifications.
+				P_PlaybackKeyConfWeapons(&local_slots);
+			}
+			else
+			*/
+			{
+				local_slots.LocalSetup(GetClass());
+			}
 			// [BB] SendDifferences uses DEM_* stuff, that ST never uses in
 			// multiplayer games, so we have to handle this differently.
 			if ( NETWORK_GetState( ) != NETSTATE_CLIENT )
-				local_slots.SendDifferences(player->weapons);
+				local_slots.SendDifferences(int(player - players), player->weapons);
 			else
 				player->weapons = local_slots;
 		}
@@ -699,7 +984,7 @@ bool APlayerPawn::UseInventory (AInventory *item)
 	{ // You can't use items if you're totally frozen
 		return false;
 	}
-	if (( level.flags2 & LEVEL2_FROZEN ) && ( player == NULL || !( player->cheats & CF_TIMEFREEZE )))
+	if ((level.flags2 & LEVEL2_FROZEN) && (player == NULL || player->timefreezer == 0))
 	{
 		// Time frozen
 		return false;
@@ -753,7 +1038,8 @@ AWeapon *APlayerPawn::BestWeapon (const PClass *ammotype)
 	int bestOrder = INT_MAX;
 	AInventory *item;
 	AWeapon *weap;
-	bool tomed = NULL != FindInventory (RUNTIME_CLASS(APowerWeaponLevel2));
+	bool tomed = NULL != FindInventory (RUNTIME_CLASS(APowerWeaponLevel2), true);
+	int bestWeight = INT_MIN; // [TP]
 
 	// Find the best weapon the player has.
 	for (item = Inventory; item != NULL; item = item->Inventory)
@@ -763,9 +1049,25 @@ AWeapon *APlayerPawn::BestWeapon (const PClass *ammotype)
 
 		weap = static_cast<AWeapon *> (item);
 
-		// Don't select it if it's worse than what was already found.
-		if (weap->SelectionOrder > bestOrder)
-			continue;
+		// [TP] If PWO is active, a weight check overrides the selection order one (unless the
+		// weights are the same)
+		int weight = 0;
+
+		if ( PWO_IsActive( player ))
+		{
+			PWOWeaponInfo* info = PWOWeaponInfo::FindInfo( weap->GetClass() );
+			weight = info ? info->GetWeight() : INT_MIN;
+
+			if ( weight < bestWeight )
+				continue;
+		}
+
+		if ( ( PWO_IsActive( player ) == false ) || ( weight == bestWeight ) )
+		{
+			// Don't select it if it's worse than what was already found.
+			if (weap->SelectionOrder > bestOrder)
+				continue;
+		}
 
 		// Don't select it if its primary fire doesn't use the desired ammo.
 		if (ammotype != NULL &&
@@ -786,9 +1088,16 @@ AWeapon *APlayerPawn::BestWeapon (const PClass *ammotype)
 			!weap->CheckAmmo (AWeapon::PrimaryFire, false))
 			continue;
 
+		// Don't select if if there isn't enough ammo as determined by the weapon's author.
+		if (weap->MinSelAmmo1 > 0 && (weap->Ammo1 == NULL || weap->Ammo1->Amount < weap->MinSelAmmo1))
+			continue;
+		if (weap->MinSelAmmo2 > 0 && (weap->Ammo2 == NULL || weap->Ammo2->Amount < weap->MinSelAmmo2))
+			continue;
+
 		// This weapon is usable!
 		bestOrder = weap->SelectionOrder;
 		bestMatch = weap;
+		bestWeight = weight; // [TP]
 	}
 	return bestMatch;
 }
@@ -809,10 +1118,16 @@ AWeapon *APlayerPawn::PickNewWeapon (const PClass *ammotype)
 
 	if (best != NULL)
 	{
+		// [EP] We can't rely on the 'this->player' pointer when doing network stuff,
+		// because 'this' may be the morphed player body and can be destroyed if
+		// the 'Deselect' state in the dropped weapon destroys the morph item, hence
+		// making the player unmorph.
+		int playernum = player - players;
+
 		player->PendingWeapon = best;
 		if (player->ReadyWeapon != NULL)
 		{
-			P_SetPsprite (player, ps_weapon, player->ReadyWeapon->GetDownState());
+			P_DropWeapon(player);
 		}
 		else if (player->PendingWeapon != WP_NOCHANGE)
 		{
@@ -820,7 +1135,7 @@ AWeapon *APlayerPawn::PickNewWeapon (const PClass *ammotype)
 		}
 
 		// [BC] In client mode, tell the server which weapon we're using.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && ( player - players == consoleplayer ))
+		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) && ( playernum == consoleplayer ))
 		{
 			CLIENTCOMMANDS_WeaponSelect( best->GetClass( ));
 
@@ -831,8 +1146,8 @@ AWeapon *APlayerPawn::PickNewWeapon (const PClass *ammotype)
 			}
 		}
 		// [BB] The server needs to tell the clients about bot weapon changes.
-		else if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( player->bIsBot == true ) )
-			SERVERCOMMANDS_SetPlayerPendingWeapon( static_cast<ULONG> ( player - players ) );
+		else if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( players[playernum].bIsBot == true ) )
+			SERVERCOMMANDS_SetPlayerPendingWeapon( static_cast<ULONG> ( playernum ) );
 	}
 	return best;
 }
@@ -849,7 +1164,7 @@ AWeapon *APlayerPawn::PickNewWeapon (const PClass *ammotype)
 void APlayerPawn::CheckWeaponSwitch(const PClass *ammotype)
 {
 	if (( NETWORK_GetState( ) != NETSTATE_SERVER ) && // [BC] Let clients decide if they want to switch weapons.
-		( player->userinfo.switchonpickup > 0 ) &&
+		( player->userinfo.GetSwitchOnPickup() > 0 ) &&
 		player->PendingWeapon == WP_NOCHANGE && 
 		(player->ReadyWeapon == NULL ||
 		 (player->ReadyWeapon->WeaponFlags & WIF_WIMPY_WEAPON)))
@@ -1033,19 +1348,21 @@ void APlayerPawn::FilterCoopRespawnInventory (APlayerPawn *oldplayer)
 //
 //===========================================================================
 
-const char *APlayerPawn::GetSoundClass ()
+const char *APlayerPawn::GetSoundClass() const
 {
 	// [BC] If this player's skin is disabled, just use the base sound class.
-	if (( cl_skins == 1 ) || (( cl_skins >= 2 ) &&
-		( player != NULL ) &&
-		( player->userinfo.skin < static_cast<signed> (skins.Size()) ) &&
-		( skins[player->userinfo.skin].bCheat == false )))
+	// [BB] Voodoo dolls don't have valid userinfo.
+	if (( player != NULL ) && ( player->mo == this ) &&
+		(( cl_skins == 1 ) || (( cl_skins >= 2 ) &&
+		( player->userinfo.GetSkin() < static_cast<signed> (skins.Size()) ) &&
+		( skins[player->userinfo.GetSkin()].bCheat == false ))))
 	{
 		if (player != NULL &&
-			(unsigned int)player->userinfo.skin >= PlayerClasses.Size () &&
-			(size_t)player->userinfo.skin < skins.Size())
+		(player->mo == NULL || !(player->mo->flags4 &MF4_NOSKIN)) &&
+			(unsigned int)player->userinfo.GetSkin() >= PlayerClasses.Size () &&
+			(size_t)player->userinfo.GetSkin() < skins.Size())
 		{
-			return skins[player->userinfo.skin].name;
+			return skins[player->userinfo.GetSkin()].name;
 		}
 	}
 
@@ -1115,7 +1432,7 @@ bool APlayerPawn::ResetAirSupply (bool playgasp)
 	{
 		S_Sound (this, CHAN_VOICE, "*gasp", 1, ATTN_NORM);
 	}
-	if (level.airsupply> 0) player->air_finished = level.time + level.airsupply;
+	if (level.airsupply> 0 && player->mo->AirCapacity > 0) player->air_finished = level.time + FixedMul(level.airsupply, player->mo->AirCapacity);
 	else player->air_finished = INT_MAX;
 	return wasdrowning;
 }
@@ -1185,16 +1502,16 @@ void APlayerPawn::GiveDefaultInventory ()
 	// [GRB] Give inventory specified in DECORATE
 	player->health = GetDefault ()->health;
 
-	// [BB] Spectators are supposed to have no inventory, but they should get their health.
-	if ( player->bSpectating ) return;
+	// [BB] True spectators are supposed to have no inventory, but they should get their health.
+	if ( player->bSpectating && (!player->bDeadSpectator || !( zadmflags & ZADF_DEAD_PLAYERS_CAN_KEEP_INVENTORY ) ) ) return;
 
 	// [BC] Initialize the max. health bonus.
 	player->lMaxHealthBonus = 0;
 
 	// [BC] If the user has chosen to handicap himself, do that now.
-	if (( deathmatch || teamgame || alwaysapplydmflags ) && player->userinfo.lHandicap )
+	if (( deathmatch || teamgame || alwaysapplydmflags ) && player->userinfo.GetHandicap() )
 	{
-		player->health -= player->userinfo.lHandicap;
+		player->health -= player->userinfo.GetHandicap();
 
 		// Don't allow player to be DOA.
 		if ( player->health <= 0 )
@@ -1450,7 +1767,7 @@ void APlayerPawn::GiveDefaultInventory ()
 
 			player->health = deh.MegasphereHealth;
 			player->mo->GiveInventoryTypeRespectingReplacements( PClass::FindClass( "GreenArmor" ) );
-			player->health -= player->userinfo.lHandicap;
+			player->health -= player->userinfo.GetHandicap();
 
 			// Don't allow player to be DOA.
 			if ( player->health <= 0 )
@@ -1461,9 +1778,7 @@ void APlayerPawn::GiveDefaultInventory ()
 			PLAYER_SetWeapon( player, pPendingWeapon, true );
 		}
 		// [BC] If the user has the shotgun start flag set, do that!
-		else if (( dmflags2 & DF2_COOP_SHOTGUNSTART ) &&
-			( deathmatch == false ) &&
-			( teamgame == false ))
+		else if ( dmflags2 & DF2_COOP_SHOTGUNSTART )
 		{
 			pInventory = player->mo->GiveInventoryTypeRespectingReplacements( PClass::FindClass( "Shotgun" ) );
 			if ( pInventory )
@@ -1563,7 +1878,7 @@ void APlayerPawn::GiveDefaultInventory ()
 
 			player->health = deh.MegasphereHealth;
 			player->mo->GiveInventoryTypeRespectingReplacements( PClass::FindClass( "SilverShield" ) );
-			player->health -= player->userinfo.lHandicap;
+			player->health -= player->userinfo.GetHandicap();
 
 			// Don't allow player to be DOA.
 			if ( player->health <= 0 )
@@ -1622,27 +1937,26 @@ void APlayerPawn::ActivateMorphWeapon ()
 //
 //===========================================================================
 
-void APlayerPawn::Die (AActor *source, AActor *inflictor)
+void APlayerPawn::Die (AActor *source, AActor *inflictor, int dmgflags)
 {
 	// [BB] Drop any important items the player may be carrying before handling
 	// any other part of the death logic.
-	if ( !NETWORK_InClientMode() )
+	if ( NETWORK_InClientMode() == false )
 		DropImportantItems ( false, source );
 
-	Super::Die (source, inflictor);
+	Super::Die (source, inflictor, dmgflags);
 
 	if (player != NULL && player->mo == this) player->bonuscount = 0;
 
 	// [BC] Nothing for the client to do here.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
 	if (player != NULL && player->mo != this)
 	{ // Make the real player die, too
-		player->mo->Die ( source, inflictor );
+		player->mo->Die (source, inflictor, dmgflags);
 		return;
 	}
 	// [BC] There was an "else" here that was completely unnecessary.
@@ -1735,9 +2049,9 @@ void APlayerPawn::Die (AActor *source, AActor *inflictor)
 			static_cast<ACooperativeBackpack *>( pBackpack )->FillBackpack( player );
 	}
 */
-	if (( NETWORK_GetState( ) == NETSTATE_SINGLE ) && (level.flags2 & LEVEL2_DEATHSLIDESHOW))
+	if (( NETWORK_GetState( ) == NETSTATE_SINGLE ) && level.info->deathsequence != NAME_None)
 	{
-		F_StartSlideshow ();
+		F_StartIntermission(level.info->deathsequence, FSTATE_EndingGame);
 	}
 }
 
@@ -1764,7 +2078,7 @@ void APlayerPawn::DropImportantItems( bool bLeavingGame, AActor *pSource )
 
 				// Tell the clients that this player no longer possesses a flag.
 				if (( bLeavingGame == false ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-					SERVERCOMMANDS_TakeInventory( player - players, TEAM_GetItem( i )->TypeName.GetChars( ), 0 );
+					SERVERCOMMANDS_TakeInventory( player - players, TEAM_GetItem( i ), 0 );
 				if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 					SCOREBOARD_RefreshHUD( );
 
@@ -1817,7 +2131,7 @@ void APlayerPawn::DropImportantItems( bool bLeavingGame, AActor *pSource )
 
 			// Tell the clients that this player no longer possesses a flag.
 			if (( bLeavingGame == false ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-				SERVERCOMMANDS_TakeInventory( player - players, "WhiteFlag", 0 );
+				SERVERCOMMANDS_TakeInventory( player - players, PClass::FindClass( "WhiteFlag" ), 0 );
 			if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 				SCOREBOARD_RefreshHUD( );
 
@@ -1867,7 +2181,7 @@ void APlayerPawn::DropImportantItems( bool bLeavingGame, AActor *pSource )
 
 			// Tell the clients that this player no longer possesses the terminator orb.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_TakeInventory( player - players, "PowerTerminatorArtifact", 0 );
+				SERVERCOMMANDS_TakeInventory( player - players, PClass::FindClass( "PowerTerminatorArtifact" ), 0 );
 			else
 				SCOREBOARD_RefreshHUD( );
 		}
@@ -1883,7 +2197,7 @@ void APlayerPawn::DropImportantItems( bool bLeavingGame, AActor *pSource )
 
 			// Tell the clients that this player no longer possesses the stone.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_TakeInventory( player - players, "PowerPossessionArtifact", 0 );
+				SERVERCOMMANDS_TakeInventory( player - players, PClass::FindClass( "PowerPossessionArtifact" ), 0 );
 			else
 				SCOREBOARD_RefreshHUD( );
 
@@ -1977,7 +2291,7 @@ void APlayerPawn::Destroy( void )
 // [Dusk] This is in a separate function now.
 //
 //===========================================================================
-fixed_t APlayerPawn::CalcJumpMomz( )
+fixed_t APlayerPawn::CalcJumpVelz()
 {
 	fixed_t z = JumpZ * 35 / TICRATE;
 
@@ -2002,7 +2316,7 @@ fixed_t APlayerPawn::CalcJumpHeight( bool bAddStepZ )
 	// To get the jump height we simulate a jump with the player's jumpZ with
 	// the environment's gravity. The grav equation was copied from p_mobj.cpp.
 	// Should it be made a function?
-	fixed_t velz = CalcJumpMomz( ),
+	fixed_t velz = CalcJumpVelz(),
 	        grav = (fixed_t)(level.gravity * Sector->gravity * FIXED2FLOAT(gravity) * 81.92),
 	        z = 0;
 
@@ -2170,102 +2484,80 @@ DEFINE_ACTION_FUNCTION(AActor, A_CheckPlayerDone)
 //
 // P_CheckPlayerSprites
 //
-// Here's the place where crouching sprites are handled
-// This must be called each frame before rendering
+// Here's the place where crouching sprites are handled.
+// R_ProjectSprite() calls this for any players.
 //
 //===========================================================================
 
-void P_CheckPlayerSprites()
+void P_CheckPlayerSprite(AActor *actor, int &spritenum, fixed_t &scalex, fixed_t &scaley)
 {
 	LONG	lSkin;
 
-	for(int i=0; i<MAXPLAYERS; i++)
+	player_t *player = actor->player;
+
+	int crouchspriteno;
+
+	// [BC] Because of cl_skins, we might not necessarily use the player's
+	// desired skin.
+	lSkin = player->userinfo.GetSkin();
+
+	// [BB] MF4_NOSKIN should force the player to have the base skin too, the same is true for morphed players.
+	if (( cl_skins <= 0 ) || ((( cl_skins >= 2 ) && ( skins[player->userinfo.GetSkin()].bCheat ))) || (actor->flags4 & MF4_NOSKIN) || player->morphTics )
+		lSkin = R_FindSkin( "base", player->CurrentPlayerClass );
+
+	// [BB] If the weapon has a PreferredSkin defined, make the player use it here.
+	if ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) )
 	{
-		player_t * player = &players[i];
-		APlayerPawn * mo = player->mo;
-
-		if (playeringame[i] && mo != NULL)
+		LONG lDesiredSkin = R_FindSkin( player->ReadyWeapon->PreferredSkin.GetChars(), player->CurrentPlayerClass );
+		if ( lDesiredSkin != lSkin )
 		{
-			int crouchspriteno;
-			fixed_t defscaleY = mo->GetDefault()->scaleY;
-			fixed_t defscaleX = mo->GetDefault()->scaleX;
-			
-			// [BC] Because of cl_skins, we might not necessarily use the player's
-			// desired skin.
-			lSkin = player->userinfo.skin;
+			lSkin = lDesiredSkin;
+			spritenum = skins[lSkin].sprite;
+		}
+	}
+	// [BB] No longer using a weapon with a preferred skin, reset the sprite.
+	else if ( ( spritenum != skins[lSkin].sprite ) && ( spritenum != skins[lSkin].crouchsprite )
+			&& ( spritenum != actor->state->sprite ) )
+	{
+		spritenum = skins[lSkin].sprite;
+	}
 
-			// [BB] MF4_NOSKIN should force the player to have the base skin too, the same is true for morphed players.
-			if (( cl_skins <= 0 ) || ((( cl_skins >= 2 ) && ( skins[player->userinfo.skin].bCheat ))) || (player->mo->flags4 & MF4_NOSKIN) || player->morphTics )
-				lSkin = R_FindSkin( "base", player->CurrentPlayerClass );
+	// [BB] PreferredSkin overrides NOSKIN.
+	if (lSkin != 0 && ( !(player->mo->flags4 & MF4_NOSKIN) || ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) ) ) )
+	{
+		// Convert from default scale to skin scale.
+		fixed_t defscaleY = actor->GetDefault()->scaleY;
+		fixed_t defscaleX = actor->GetDefault()->scaleX;
+		scaley = Scale(scaley, skins[lSkin].ScaleY, defscaleY);
+		scalex = Scale(scalex, skins[lSkin].ScaleX, defscaleX);
+	}
 
-			// [BB] If the weapon has a PreferredSkin defined, make the player use it here.
-			if ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) )
-			{
-				LONG lDesiredSkin = R_FindSkin( player->ReadyWeapon->PreferredSkin.GetChars(), player->CurrentPlayerClass );
-				if ( lDesiredSkin != lSkin )
-				{
-					lSkin = lDesiredSkin;
-					mo->sprite = skins[lSkin].sprite;
-				}
-			}
-			// [BB] No longer using a weapon with a preferred skin, reset the sprite.
-			else if ( ( mo->sprite != skins[lSkin].sprite ) && ( mo->sprite != skins[lSkin].crouchsprite )
-					&& ( mo->sprite != mo->state->sprite ) )
-			{
-				mo->sprite = skins[lSkin].sprite;
-			}
+	// Set the crouch sprite?
+	if (player->crouchfactor < FRACUNIT*3/4)
+	{
+		if (spritenum == actor->SpawnState->sprite || spritenum == player->mo->crouchsprite) 
+		{
+			crouchspriteno = player->mo->crouchsprite;
+		}
+		// [BB] PreferredSkin overrides NOSKIN.
+		else if ( ( !(actor->flags4 & MF4_NOSKIN) || ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) ) ) &&
+				(spritenum == skins[lSkin].sprite ||
+				 spritenum == skins[lSkin].crouchsprite))
+		{
+			crouchspriteno = skins[lSkin].crouchsprite;
+		}
+		else
+		{ // no sprite -> squash the existing one
+			crouchspriteno = -1;
+		}
 
-			// [BB] PreferredSkin overrides NOSKIN.
-			if (lSkin != 0 && ( !(player->mo->flags4 & MF4_NOSKIN) || ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) ) ) )
-			{
-				defscaleY = skins[lSkin].ScaleY;
-				defscaleX = skins[lSkin].ScaleX;
-			}
-			
-			// Set the crouch sprite
-			if (player->crouchfactor < FRACUNIT*3/4)
-			{
-
-				if (mo->sprite == mo->SpawnState->sprite || mo->sprite == mo->crouchsprite) 
-				{
-					crouchspriteno = mo->crouchsprite;
-				}
-				// [BB] PreferredSkin overrides NOSKIN.
-				else if ( ( !(player->mo->flags4 & MF4_NOSKIN) || ( player->ReadyWeapon && ( player->ReadyWeapon->PreferredSkin != NAME_None ) ) ) &&
-						(mo->sprite == skins[lSkin].sprite ||
-						 mo->sprite == skins[lSkin].crouchsprite))
-				{
-					crouchspriteno = skins[lSkin].crouchsprite;
-				}
-				else
-				{
-					// no sprite -> squash the existing one
-					crouchspriteno = -1;
-				}
-
-				if (crouchspriteno > 0) 
-				{
-					mo->sprite = crouchspriteno;
-					mo->scaleY = defscaleY;
-				}
-				else if (player->playerstate != PST_DEAD)
-				{
-					mo->scaleY = player->crouchfactor < FRACUNIT*3/4 ? defscaleY/2 : defscaleY;
-				}
-			}
-			else	// Set the normal sprite
-			{
-				if (mo->sprite == mo->crouchsprite)
-				{
-					mo->sprite = mo->SpawnState->sprite;
-				}
-				else if (mo->sprite == skins[lSkin].crouchsprite)
-				{
-					mo->sprite = skins[lSkin].sprite;
-				}
-				mo->scaleY = defscaleY;
-			}
-			mo->scaleX = defscaleX;
+		if (crouchspriteno > 0) 
+		{
+			spritenum = crouchspriteno;
+		}
+		else if (player->playerstate != PST_DEAD && player->crouchfactor < FRACUNIT*3/4)
+		{
+			scaley /= 2;
 		}
 	}
 }
@@ -2317,8 +2609,16 @@ void P_ForwardThrust (player_t *player, angle_t angle, fixed_t move)
 // reduced at a regular rate, even on ice (where the player coasts).
 //
 
-void P_Bob (player_t *player, angle_t angle, fixed_t move)
+void P_Bob (player_t *player, angle_t angle, fixed_t move, bool forward)
 {
+	if (forward
+		&& (player->mo->waterlevel || (player->mo->flags & MF_NOGRAVITY))
+		&& player->mo->pitch != 0)
+	{
+		angle_t pitch = (angle_t)player->mo->pitch >> ANGLETOFINESHIFT;
+		move = FixedMul (move, finecosine[pitch]);
+	}
+
 	angle >>= ANGLETOFINESHIFT;
 
 	player->velx += FixedMul(move, finecosine[angle]);
@@ -2363,7 +2663,11 @@ void P_CalcHeight (player_t *player)
 	// it causes bobbing jerkiness when the player moves from ice to non-ice,
 	// and vice-versa.
 
-	if ((player->mo->flags & MF_NOGRAVITY) && !onground)
+	if (player->cheats & CF_NOCLIP2)
+	{
+		player->bob = 0;
+	}
+	else if ((player->mo->flags & MF_NOGRAVITY) && !player->onground)
 	{
 		player->bob = FRACUNIT / 2;
 	}
@@ -2379,7 +2683,7 @@ void P_CalcHeight (player_t *player)
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				player->bob = FixedMul( player->bob, 16384 );
 			else
-				player->bob = FixedMul (player->bob, player->userinfo.MoveBob);
+				player->bob = FixedMul (player->bob, player->userinfo.GetMoveBob());
 
 			// [BB] I've seen bob becoming negative for a high ping clients (250+) on low gravity servers (sv_gravity 200)
 			// when moving forward in the air for too long. Overflow problem? Nevertheless, setting negative values
@@ -2408,7 +2712,7 @@ void P_CalcHeight (player_t *player)
 			// [BC] We need to cap level.time, because if it gets too big, DivScale
 			// can crash.
 			angle = DivScale13 (level.time % 65536, 120*TICRATE/35) & FINEMASK;
-			bob = FixedMul (player->userinfo.StillBob, finesine[angle]);
+			bob = FixedMul (player->userinfo.GetStillBob(), finesine[angle]);
 		}
 		else
 		{
@@ -2484,7 +2788,7 @@ CUSTOM_CVAR (Float, sv_aircontrol, 0.00390625f, CVAR_SERVERINFO|CVAR_NOSAVE)
 	// [BB] Let the clients know about the change.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %f\n", self.GetName( ), (float)self );
+		SERVER_Printf( "%s changed to: %f\n", self.GetName( ), (float)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 	}
 }
@@ -2492,13 +2796,16 @@ CUSTOM_CVAR (Float, sv_aircontrol, 0.00390625f, CVAR_SERVERINFO|CVAR_NOSAVE)
 void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 {
 	// [BB] A client doesn't know enough about the other players to make their movement.
-	if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+	if ( NETWORK_InClientMode() &&
 		(( player - players ) != consoleplayer ) && !CLIENTDEMO_IsFreeSpectatorPlayer ( player ))
 	{
 		return;
 	}
 
 	APlayerPawn *mo = player->mo;
+
+	// [Leo] cl_spectatormove is now applied here to avoid code duplication.
+	fixed_t spectatormove = FLOAT2FIXED(cl_spectatormove);
 
 	// [RH] 180-degree turn overrides all other yaws
 	if (player->turnticks)
@@ -2515,7 +2822,7 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 	if ( GAME_GetEndLevelDelay( ) && ( player->bSpectating == false ))
 		memset( cmd, 0, sizeof( ticcmd_t ));
 
-	onground = (mo->z <= mo->floorz) || (mo->flags2 & MF2_ONMOBJ) || (mo->BounceFlags & BOUNCE_MBF);
+	player->onground = (mo->z <= mo->floorz) || (mo->flags2 & MF2_ONMOBJ) || (mo->BounceFlags & BOUNCE_MBF) || (player->cheats & CF_NOCLIP2);
 
 	// killough 10/98:
 	//
@@ -2533,7 +2840,7 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 
 		movefactor = P_GetMoveFactor (mo, &friction);
 		bobfactor = friction < ORIG_FRICTION ? movefactor : ORIG_FRICTION_FACTOR;
-		if (!onground && !(player->mo->flags & MF_NOGRAVITY) && !player->mo->waterlevel)
+		if (!player->onground && !(player->mo->flags & MF_NOGRAVITY) && !player->mo->waterlevel)
 		{
 			// [RH] allow very limited movement if not on ground.
 			if ( zacompatflags & ZACOMPATF_LIMITED_AIRMOVEMENT )
@@ -2555,8 +2862,8 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 		fm = FixedMul (fm, player->mo->Speed);
 		sm = FixedMul (sm, player->mo->Speed);
 
-		// When crouching speed and bobbing have to be reduced
-		if (player->morphTics==0 && player->crouchfactor != FRACUNIT)
+		// When crouching, speed and bobbing have to be reduced
+		if (player->CanCrouch() && player->crouchfactor != FRACUNIT)
 		{
 			fm = FixedMul(fm, player->crouchfactor);
 			sm = FixedMul(sm, player->crouchfactor);
@@ -2568,12 +2875,12 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 
 		if (forwardmove)
 		{
-			P_Bob (player, mo->angle, (cmd->ucmd.forwardmove * bobfactor) >> 8);
+			P_Bob (player, mo->angle, (cmd->ucmd.forwardmove * bobfactor) >> 8, true);
 			P_ForwardThrust (player, mo->angle, forwardmove);
 		}
 		if (sidemove)
 		{
-			P_Bob (player, mo->angle-ANG90, (cmd->ucmd.sidemove * bobfactor) >> 8);
+			P_Bob (player, mo->angle-ANG90, (cmd->ucmd.sidemove * bobfactor) >> 8, false);
 			P_SideThrust (player, mo->angle, sidemove);
 		}
 /*
@@ -2605,31 +2912,49 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 	}
 
 	// [RH] check for jump
-	if ( cmd->ucmd.buttons & BT_JUMP && ( player->bSpectating == false ))
+	if ( cmd->ucmd.buttons & BT_JUMP )
 	{
 		if (player->mo->waterlevel >= 2)
 		{
-			player->mo->velz = 4*FRACUNIT;
+			player->mo->velz = FixedMul(4*FRACUNIT, player->mo->Speed);
+
+			// [Leo] Apply cl_spectatormove here.
+			if ( player->bSpectating )
+				player->mo->velz = FixedMul(player->mo->velz, spectatormove);
 		}
 		else if (player->mo->flags2 & MF2_FLY)
 		{
 			player->mo->velz = 3*FRACUNIT;
+
+			// [Leo] Apply cl_spectatormove here.
+			if ( player->bSpectating )
+				player->mo->velz = FixedMul(player->mo->velz, spectatormove);
 		}
-		else if (level.IsJumpingAllowed() && onground && !player->jumpTics )
+		// [Leo] Spectators shouldn't be limited by the server settings.
+		else if ((player->bSpectating || level.IsJumpingAllowed()) && player->onground && player->jumpTics == 0)
 		{
-			fixed_t	JumpMomz;
+			fixed_t	JumpVelz;
 			ULONG	ulJumpTicks;
 
 			// Set base jump velocity.
 			// [Dusk] Exported this into a function as I need it elsewhere as well.
-			JumpMomz = player->mo->CalcJumpMomz( );
+			JumpVelz = player->mo->CalcJumpVelz();
 
 			// Set base jump ticks.
-			ulJumpTicks = 18 * TICRATE / 35;
+			// [BB] In ZDoom revision 2970 changed the jumping behavior.
+			if ( zacompatflags & ZACOMPATF_SKULLTAG_JUMPING )
+				ulJumpTicks = 18 * TICRATE / 35;
+			else
+				ulJumpTicks = -1;
 
 			// [BB] We may not play the sound while predicting, otherwise it'll stutter.
 			if ( CLIENT_PREDICT_IsPredicting( ) == false )
 				S_Sound (player->mo, CHAN_BODY, "*jump", 1, ATTN_NORM);
+
+			// [EP] Inform the other clients to play the sound.
+			if ( NETWORK_GetState() == NETSTATE_SERVER )
+				SERVERCOMMANDS_SoundActor( player->mo, CHAN_BODY, "*jump", 1, ATTN_NORM, player - players, SVCF_SKIPTHISCLIENT );
+
 			player->mo->flags2 &= ~MF2_ONMOBJ;
 
 			// [BC] Increase jump delay if the player has the high jump power.
@@ -2640,7 +2965,7 @@ void P_MovePlayer (player_t *player, ticcmd_t *cmd)
 			if ( player->mo->floorsector->GetFlags(sector_t::floor) & PLANEF_SPRINGPAD )
 				ulJumpTicks = 0;
 
-			player->mo->velz += JumpMomz;
+			player->mo->velz += JumpVelz;
 			player->jumpTics = ulJumpTicks;
 		}
 	}
@@ -2659,8 +2984,7 @@ void P_FallingDamage (AActor *actor)
 	fixed_t vel;
 
 	// [BB] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -2762,12 +3086,12 @@ void P_DeathThink (player_t *player)
 
 	P_MovePsprites (player);
 
-	onground = (player->mo->z <= player->mo->floorz);
+	player->onground = (player->mo->z <= player->mo->floorz);
 	if (player->mo->IsKindOf (RUNTIME_CLASS(APlayerChunk)))
 	{ // Flying bloody skull or flying ice chunk
 		player->viewheight = 6 * FRACUNIT;
 		player->deltaviewheight = 0;
-		if (onground)
+		if (player->onground)
 		{
 			if (player->mo->pitch > -(int)ANGLE_1*19)
 			{
@@ -2843,10 +3167,23 @@ void P_DeathThink (player_t *player)
 	}		
 
 	// [BC] Respawning is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
+	}
+
+	// [RK] Handle player respawn time when force respawn is on
+	// normally players can't respawn manually until the level time is larger than respawn time
+	// since sv_forcerespawntime adds onto a player's respawn time, we'll set the time to 0 when they press use
+	// this statement factors in compat_instantrespawn and determines whether a player can respawn instantly or has to wait
+	if ( dmflags & DF_FORCE_RESPAWN )
+	{
+		if (( level.time >= ( player->respawn_time - ( sv_forcerespawntime*TICRATE )) && (( zacompatflags & ZACOMPATF_INSTANTRESPAWN ) == false ))
+			|| ( level.time < player->respawn_time && ( zacompatflags & ZACOMPATF_INSTANTRESPAWN )))
+		{
+			if (( player->cmd.ucmd.buttons & BT_USE ) || (( player->userinfo.GetClientFlags() & CLIENTFLAGS_RESPAWNONFIRE ) && ( player->cmd.ucmd.buttons & BT_ATTACK ) && (( player->oldbuttons & BT_ATTACK ) == false )))
+				player->respawn_time = 0;
+		}
 	}
 
 	// [BB] If lives are limited and the game is in progess, possibly put the player in dead spectator mode.
@@ -2890,7 +3227,7 @@ void P_DeathThink (player_t *player)
 
 	if ( level.time >= player->respawn_time )
 	{
-		if (((( player->cmd.ucmd.buttons & BT_USE ) || ( ( player->userinfo.clientFlags & CLIENTFLAGS_RESPAWNONFIRE ) && ( player->cmd.ucmd.buttons & BT_ATTACK ) && (( player->oldbuttons & BT_ATTACK ) == false ))) || 
+		if (((( player->cmd.ucmd.buttons & BT_USE ) || ( ( player->userinfo.GetClientFlags() & CLIENTFLAGS_RESPAWNONFIRE ) && ( player->cmd.ucmd.buttons & BT_ATTACK ) && (( player->oldbuttons & BT_ATTACK ) == false ))) || 
 			(( deathmatch || teamgame || alwaysapplydmflags ) &&
 			( dmflags & DF_FORCE_RESPAWN ))) && !(dmflags2 & DF2_NO_RESPAWN) )
 		{
@@ -2908,7 +3245,7 @@ void P_DeathThink (player_t *player)
 		}
 //		else if ( player->pSkullBot )
 //		{
-//			Printf( "WARNING! Bot %s dead and not hitting repawn in state %s!\n", player->userinfo.netname, player->pSkullBot->m_ScriptData.szStateName[player->pSkullBot->m_ScriptData.lCurrentStateIdx] );
+//			Printf( "WARNING! Bot %s dead and not hitting repawn in state %s!\n", player->userinfo.GetName(), player->pSkullBot->m_ScriptData.szStateName[player->pSkullBot->m_ScriptData.lCurrentStateIdx] );
 //		}
 	}
 /* [BB] For some reason Skulltag does this a little differently above. Todo: Unify this, to make merging ZDoom updates easier.
@@ -2968,16 +3305,14 @@ void PLAYER_JoinGameFromSpectators( int iChar )
 
 	// [BB] In single player, allow the player to switch its class when changing from spectator to player.
 	if ( ( NETWORK_GetState( ) == NETSTATE_SINGLE ) || ( NETWORK_GetState( ) == NETSTATE_SINGLE_MULTIPLAYER ) )
-		SinglePlayerClass[consoleplayer] = players[consoleplayer].userinfo.PlayerClass;
+		SinglePlayerClass[consoleplayer] = players[consoleplayer].userinfo.GetPlayerClassNum();
 
-	players[consoleplayer].playerstate = PST_ENTERNOINVENTORY;
-	players[consoleplayer].bSpectating = false;
-	players[consoleplayer].bDeadSpectator = false;
+	PLAYER_SpectatorJoinsGame( &players[consoleplayer] );
 	players[consoleplayer].camera = players[consoleplayer].mo;
-	Printf( "%s \\c-joined the game.\n", players[consoleplayer].userinfo.netname );
+	Printf( "%s \\c-joined the game.\n", players[consoleplayer].userinfo.GetName() );
 
 	// [BB] If players are supposed to be on teams, select one for the player now.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 		PLAYER_SetTeam( &players[consoleplayer], TEAM_ChooseBestTeamForPlayer( ), true );
 }
 
@@ -3018,7 +3353,7 @@ void P_CrouchMove(player_t * player, int direction)
 
 	// check whether the move is ok
 	player->mo->height = FixedMul(defaultheight, player->crouchfactor);
-	if (!P_TryMove(player->mo, player->mo->x, player->mo->y, false, false))
+	if (!P_TryMove(player->mo, player->mo->x, player->mo->y, false, NULL))
 	{
 		player->mo->height = savedheight;
 		if (direction > 0)
@@ -3053,7 +3388,7 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		// Just print an error if a bot tried to spawn.
 		if ( player->pSkullBot )
 		{
-			Printf( "%s \\c-left: No player %td start\n", player->userinfo.netname, player - players + 1 );
+			Printf( "%s \\c-left: No player %td start\n", player->userinfo.GetName(), player - players + 1 );
 			BOTS_RemoveBot( player - players, false );
 			return;
 		}
@@ -3069,11 +3404,14 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			}
 			else
 			{
-				if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))) &&
+				if ( NETWORK_InClientMode() &&
 					(( player - players ) != consoleplayer ))
 				{
 					//PLAYER_SetSpectator(player, true, false);
-					Printf( "P_PlayerThink: No body for player %td!\n", player - players + 1 );
+					// [BB] Since the full update may be distributed over multiple tics, we
+					// can start ticking the world before all player bodies are spawned.
+					if ( CLIENT_GetFullUpdateIncomplete() == false )
+						Printf( "P_PlayerThink: No body for player %td!\n", player - players + 1 );
 					return;
 				}
 				else
@@ -3101,9 +3439,9 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			player->ReadyWeapon != NULL &&			// No adjustment if no weapon.
 			player->ReadyWeapon->FOVScale != 0)		// No adjustment if the adjustment is zero.
 		{
-			// A negative scale is used top prevent G_AddViewAngle/G_AddViewPitch
+			// A negative scale is used to prevent G_AddViewAngle/G_AddViewPitch
 			// from scaling with the FOV scale.
-			desired *= fabs(player->ReadyWeapon->FOVScale);
+			desired *= fabsf(player->ReadyWeapon->FOVScale);
 		}
 		if (player->FOV != desired)
 	{
@@ -3126,94 +3464,6 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		}
 	}
 
-	// Allow the spectator to do a few things, then break out.
-	if ( player->bSpectating )
-	{
-		int	look;
-
-		// Lower the weapon completely.
-		P_SetPsprite( player, ps_weapon, NULL );
-
-		// [RH] Look up/down stuff
-		cmd = &player->cmd;
-		look = cmd->ucmd.pitch << 16;
-
-		// Allow the player to fly around when a spectator.
-		player->mo->flags |= MF_NOGRAVITY;
-		player->mo->flags2 |= MF2_FLY;
-
-		// No-clip cheat
-		if (player->cheats & CF_NOCLIP)
-			player->mo->flags |= MF_NOCLIP;
-		else
-			player->mo->flags &= ~MF_NOCLIP;
-
-		// The player's view pitch is clamped between -32 and +56 degrees,
-		// which translates to about half a screen height up and (more than)
-		// one full screen height down from straight ahead when view panning
-		// is used.
-		if (look)
-		{
-			if (look == -32768 << 16)
-			{ // center view
-				player->mo->pitch = 0;
-			}
-			else
-			{
-				player->mo->pitch -= look;
-				if (look > 0)
-				{ // look up
-					// [BB] The server doesn't have a screen.
-					player->mo->pitch = MAX(player->mo->pitch, ( NETWORK_GetState( ) != NETSTATE_SERVER ) ? screen->GetMaxViewPitch(false) : (32*ANGLE_1) );
-				}
-				else
-				{ // look down
-					// [BB] The server doesn't have a screen.
-					player->mo->pitch = MIN(player->mo->pitch, ( NETWORK_GetState( ) != NETSTATE_SERVER ) ?  screen->GetMaxViewPitch(true) : (56*ANGLE_1) );
-				}
-			}
-		}
-
-		// Update player's velocity by input.
-		if ( player->mo->reactiontime )
-			player->mo->reactiontime--;
-		else
-			P_MovePlayer( player, &player->cmd );
-
-		// [RH] check for jump
-		// [Dusk] Apply cl_spectatormove
-		if ( cmd->ucmd.buttons & BT_JUMP )
-			player->mo->velz = FixedMul(3 * FRACUNIT, FLOAT2FIXED(cl_spectatormove));
-
-		if ( cmd->ucmd.upmove == -32768 )
-		{ // Only land if in the air
-			if ((player->mo->flags2 & MF2_FLY) && player->mo->waterlevel < 2)
-			{
-				player->mo->flags2 &= ~MF2_FLY;
-				player->mo->flags &= ~MF_NOGRAVITY;
-			}
-		}
-		// [Dusk] Apply cl_spectatormove here
-		else if ( cmd->ucmd.upmove != 0 )
-			player->mo->velz = FixedMul(cmd->ucmd.upmove << 9, FLOAT2FIXED(cl_spectatormove));
-
-		// Calculate player's viewheight.
-		P_CalcHeight( player );
-
-		// If this is a bot, run its logic.
-		if ( player->pSkullBot )
-			player->pSkullBot->Tick( );
-
-		// [RH] Check for fast turn around
-		if (cmd->ucmd.buttons & BT_TURN180 && !(player->oldbuttons & BT_TURN180))
-		{
-			player->turnticks = TURN180_TICKS;
-		}
-
-		// Done with spectator specific logic.
-		return;
-	}
-
 	if ( CLIENT_PREDICT_IsPredicting( ) == false )
 	{
 		if (player->inventorytics)
@@ -3221,14 +3471,30 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			player->inventorytics--;
 		}
 	}
+	// Don't interpolate the view for more than one tic
+	player->cheats &= ~CF_INTERPVIEW;
+
 	// No-clip cheat
-	if (player->cheats & CF_NOCLIP || (player->mo->GetDefault()->flags & MF_NOCLIP))
+	if ((player->cheats & (CF_NOCLIP | CF_NOCLIP2)) == CF_NOCLIP2)
+	{ // No noclip2 without noclip
+		player->cheats &= ~CF_NOCLIP2;
+	}
+	// [Leo] Spectators have the noclip cheat off by default.
+	if (player->cheats & (CF_NOCLIP | CF_NOCLIP2) || ((player->mo->GetDefault()->flags & MF_NOCLIP) && (player->bSpectating == false)))
 	{
 		player->mo->flags |= MF_NOCLIP;
 	}
 	else
 	{
 		player->mo->flags &= ~MF_NOCLIP;
+	}
+	if (player->cheats & CF_NOCLIP2)
+	{
+		player->mo->flags |= MF_NOGRAVITY;
+	}
+	else if (!(player->mo->flags2 & MF2_FLY) && !(player->mo->GetDefault()->flags & MF_NOGRAVITY))
+	{
+		player->mo->flags &= ~MF_NOGRAVITY;
 	}
 
 	// If we're predicting, use the ticcmd we pass in.
@@ -3242,7 +3508,7 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 	player->original_cmd = cmd->ucmd;
 
 	if (player->mo->flags & MF_JUSTATTACKED &&
-		(( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))))
+		NETWORK_InClientMode() )
 	{ // Chainsaw/Gauntlets attack auto forward motion
 		cmd->ucmd.yaw = 0;
 		cmd->ucmd.forwardmove = 0xc800/2;
@@ -3250,9 +3516,7 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		player->mo->flags &= ~MF_JUSTATTACKED;
 	}
 
-	bool totallyfrozen = (player->cheats & CF_TOTALLYFROZEN || gamestate == GS_TITLELEVEL ||
-		(( level.flags2 & LEVEL2_FROZEN ) && ( player == NULL || !( player->cheats & CF_TIMEFREEZE )))
-		);
+	bool totallyfrozen = P_IsPlayerTotallyFrozen(player);
 
 	// [BB] Why should a predicting client ignore CF_TOTALLYFROZEN and CF_FROZEN?
 	//if ( CLIENT_PREDICT_IsPredicting( ) == false )
@@ -3301,9 +3565,9 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 	}
 	// [BC] Don't do this for clients other than ourself in client mode.
 	// [BB] Also, don't do this while predicting.
-	if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) || ( (( player - players ) == consoleplayer ) && ( CLIENT_PREDICT_IsPredicting( ) == false ) ))
+	if (( NETWORK_InClientMode() == false ) || ( (( player - players ) == consoleplayer ) && ( CLIENT_PREDICT_IsPredicting( ) == false ) ))
 	{
-		if (player->morphTics == 0 && player->health > 0 && level.IsCrouchingAllowed())
+		if (player->CanCrouch() && player->health > 0 && level.IsCrouchingAllowed())
 		{
 			if (!totallyfrozen)
 			{
@@ -3311,11 +3575,11 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			
 				if (crouchdir == 0)
 				{
-					crouchdir = (player->cmd.ucmd.buttons & BT_CROUCH)? -1 : 1;
+					crouchdir = (player->cmd.ucmd.buttons & BT_CROUCH) ? -1 : 1;
 				}
 				else if (player->cmd.ucmd.buttons & BT_CROUCH)
 				{
-					player->crouching=0;
+					player->crouching = 0;
 				}
 				if (crouchdir == 1 && player->crouchfactor < FRACUNIT &&
 					player->mo->z + player->mo->height < player->mo->ceilingz)
@@ -3346,18 +3610,22 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		player->oldbuttons = player->cmd.ucmd.buttons;
 		return;
 	}
-
-	if (player->jumpTics)
+	if (player->jumpTics != 0)
 	{
 		player->jumpTics--;
+		if (player->onground && player->jumpTics < -18)
+		{
+			player->jumpTics = 0;
+		}
 	}
 	if (player->morphTics)// && !(player->cheats & CF_PREDICTING))
 	{
 		player->mo->MorphPlayerThink ();
 	}
 
+	// [Leo] Spectators shouldn't be limited by the server settings.
 	// [RH] Look up/down stuff
-	if (!level.IsFreelookAllowed())
+	if (!level.IsFreelookAllowed() && player->bSpectating == false)
 	{
 		player->mo->pitch = 0;
 	}
@@ -3380,18 +3648,45 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 				}
 				else
 				{
+					fixed_t oldpitch = player->mo->pitch;
 					player->mo->pitch -= look;
 					if (look > 0)
 					{ // look up
-						// [BB] The server doesn't have a screen.
-						player->mo->pitch = MAX(player->mo->pitch, ( NETWORK_GetState( ) != NETSTATE_SERVER ) ? screen->GetMaxViewPitch(false) : (32*ANGLE_1) );
+						// [BB] Zandronum handles pitch differently.
+						const fixed_t pitchLimit = - ( ( NETWORK_GetState( ) != NETSTATE_SERVER ) ? Renderer->GetMaxViewPitch(false) : 32 ) * ANGLE_1;
+						player->mo->pitch = MAX(player->mo->pitch, pitchLimit );
+						if (player->mo->pitch > oldpitch)
+						{
+							player->mo->pitch = pitchLimit;
+						}
 					}
 					else
 					{ // look down
-						// [BB] The server doesn't have a screen.
-						player->mo->pitch = MIN(player->mo->pitch, ( NETWORK_GetState( ) != NETSTATE_SERVER ) ?  screen->GetMaxViewPitch(true) : (56*ANGLE_1) );
+						// [BB] Zandronum handles pitch differently.
+						const fixed_t pitchLimit = ( ( NETWORK_GetState( ) != NETSTATE_SERVER ) ? Renderer->GetMaxViewPitch(true) : 56 ) * ANGLE_1;
+						player->mo->pitch = MIN(player->mo->pitch, pitchLimit );
+						if (player->mo->pitch < oldpitch)
+						{
+							player->mo->pitch = pitchLimit;
+						}
 					}
 				}
+			}
+		}
+	}
+	if (player->centering)
+	{
+		if (abs(player->mo->pitch) > 2*ANGLE_1)
+		{
+			player->mo->pitch = FixedMul(player->mo->pitch, FRACUNIT*2/3);
+		}
+		else
+		{
+			player->mo->pitch = 0;
+			player->centering = false;
+			if (player - players == consoleplayer)
+			{
+				LocalViewPitch = 0;
 			}
 		}
 	}
@@ -3427,14 +3722,19 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			{
 				cmd->ucmd.upmove = ksgn (cmd->ucmd.upmove) * 0x300;
 			}
-			if (player->mo->waterlevel >= 2 || (player->mo->flags2 & MF2_FLY))
+			if (player->mo->waterlevel >= 2 || (player->mo->flags2 & MF2_FLY) || (player->cheats & CF_NOCLIP2))
 			{
-				player->mo->velz = cmd->ucmd.upmove << 9;
+				player->mo->velz = FixedMul(player->mo->Speed, cmd->ucmd.upmove << 9);
+
+				// [Leo] Apply cl_spectatormove here.
+				if ( player->bSpectating )
+					player->mo->velz = FixedMul(player->mo->velz, FLOAT2FIXED(cl_spectatormove));
+
 				if (player->mo->waterlevel < 2 && !(player->mo->flags & MF_NOGRAVITY))
 				{
 					player->mo->flags2 |= MF2_FLY;
 					player->mo->flags |= MF_NOGRAVITY;
-					if (player->mo->velz <= -39*FRACUNIT)
+					if ((player->mo->velz <= -39 * FRACUNIT) && !CLIENT_PREDICT_IsPredicting( )) // [BB] Adapted prediction.
 					{ // Stop falling scream
 						S_StopSound (player->mo, CHAN_VOICE);
 					}
@@ -3455,6 +3755,13 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 
 	P_CalcHeight (player);
 
+	// [Leo] Done with spectator specific logic.
+	if (player->bSpectating)
+	{
+		P_SetPsprite( player, ps_weapon, NULL );
+		return;
+	}
+
 	if ( CLIENT_PREDICT_IsPredicting( ) == false )
 	{
 		P_PlayerOnSpecial3DFloor (player);
@@ -3463,8 +3770,8 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 			P_PlayerInSpecialSector (player);
 		}
 		P_PlayerOnSpecialFlat (player, P_GetThingFloorType (player->mo));
-		if (player->mo->velz <= -35*FRACUNIT &&
-			player->mo->velz >= -40*FRACUNIT && !player->morphTics &&
+		if (player->mo->velz <= -player->mo->FallingScreamMinSpeed &&
+			player->mo->velz >= -player->mo->FallingScreamMaxSpeed && !player->morphTics &&
 			player->mo->waterlevel == 0)
 		{
 			int id = S_FindSkinnedSound (player->mo, "*falling");
@@ -3516,7 +3823,7 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		{
 			player->hazardcount--;
 			// [BB] The clients only tick down, the server handles the damage.
-			if ( NETWORK_InClientMode( ) == false )
+			if ( NETWORK_InClientMode() == false )
 			{
 				if (!(level.time & 31) && player->hazardcount > 16*TICRATE)
 					P_DamageMobj (player->mo, NULL, NULL, 5, NAME_Slime);
@@ -3534,26 +3841,8 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		}
 
 		// [BC] Don't do the following block in client mode.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 		{
-			// [BC] Apply regeneration.
-			if (( level.time & 31 ) == 0 && ( player->cheats & CF_REGENERATION ) && ( player->health ))
-			{
-				if ( P_GiveBody( player->mo, 5 ))
-				{
-					S_Sound( player->mo, CHAN_ITEM, "misc/i_pkup", 1, ATTN_NORM );
-
-					// [BC] If we're the server, send out the health change, and play the
-					// health sound.
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					{
-						SERVERCOMMANDS_SetPlayerHealth( player - players );
-						SERVERCOMMANDS_SoundActor( player->mo, CHAN_ITEM, "misc/i_pkup", 1, ATTN_NORM );
-					}
-				}
-			}
-
 			// Apply degeneration.
 			if ( dmflags2 & DF2_YES_DEGENERATION )
 			{
@@ -3586,15 +3875,14 @@ void P_PlayerThink (player_t *player, ticcmd_t *pCmd)
 		{
 			if (player->mo->waterlevel < 3 ||
 				(player->mo->flags2 & MF2_INVULNERABLE) ||
-				(player->cheats & CF_GODMODE))
+				(player->cheats & (CF_GODMODE | CF_NOCLIP2)))
 			{
 				player->mo->ResetAirSupply ();
 			}
 			else if (player->air_finished <= level.time && !(level.time & 31))
 			{
 				// [BB] The server handles damaging the players.
-				if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-					( CLIENTDEMO_IsPlaying( ) == false ))
+				if ( NETWORK_InClientMode() == false )
 				{
 					P_DamageMobj (player->mo, NULL, NULL, 2 + ((level.time-player->air_finished)/TICRATE), NAME_Drowning);
 				}
@@ -3639,13 +3927,39 @@ void P_PredictPlayer (player_t *player)
 	player->cheats |= CF_PREDICTING;
 
 	// The ordering of the touching_sectorlist needs to remain unchanged
+	// Also store a copy of all previous sector_thinglist nodes
 	msecnode_t *mnode = act->touching_sectorlist;
+	msecnode_t *snode;
+	PredictionSector_sprev_Backup.Clear();
 	PredictionTouchingSectorsBackup.Clear ();
 
 	while (mnode != NULL)
 	{
 		PredictionTouchingSectorsBackup.Push (mnode->m_sector);
+
+		for (snode = mnode->m_sector->touching_thinglist; snode; snode = snode->m_snext)
+		{
+			if (snode->m_thing == act)
+			{
+				PredictionSector_sprev_Backup.Push(snode->m_sprev);
+				break;
+			}
+		}
+
 		mnode = mnode->m_tnext;
+	}
+
+	// Keep an ordered list off all actors in the linked sector.
+	PredictionSectorListBackup.Clear();
+	if (!(act->flags & MF_NOSECTOR))
+	{
+		AActor *link = act->Sector->thinglist;
+		
+		while (link != NULL)
+		{
+			PredictionSectorListBackup.Push(link);
+			link = link->snext;
+		}
 	}
 
 	// Blockmap ordering also needs to stay the same, so unlink the block nodes
@@ -3682,27 +3996,90 @@ void P_UnPredictPlayer ()
 
 	if (player->cheats & CF_PREDICTING)
 	{
+		unsigned int i;
 		AActor *act = player->mo;
+		AActor *savedcamera = player->camera;
 
 		*player = PredictionPlayerBackup;
 
-		act->UnlinkFromWorld ();
-		memcpy (&act->x, PredictionActorBackup, sizeof(AActor)-((BYTE *)&act->x-(BYTE *)act));
+		// Restore the camera instead of using the backup's copy, because spynext/prev
+		// could cause it to change during prediction.
+		player->camera = savedcamera;
+
+		act->UnlinkFromWorld();
+		memcpy(&act->x, PredictionActorBackup, sizeof(AActor)-((BYTE *)&act->x - (BYTE *)act));
 
 		// Make the sector_list match the player's touching_sectorlist before it got predicted.
-		P_DelSeclist (sector_list);
+		P_DelSeclist(sector_list);
 		sector_list = NULL;
-		for (unsigned int i = PredictionTouchingSectorsBackup.Size (); i-- > 0; )
+		for (i = PredictionTouchingSectorsBackup.Size(); i-- > 0;)
 		{
-			sector_list = P_AddSecnode (PredictionTouchingSectorsBackup[i], act, sector_list);
+			sector_list = P_AddSecnode(PredictionTouchingSectorsBackup[i], act, sector_list);
 		}
 
 		// The blockmap ordering needs to remain unchanged, too. Right now, act has the right
 		// pointers, so temporarily set its MF_NOBLOCKMAP flag so that LinkToWorld() does not
 		// mess with them.
-		act->flags |= MF_NOBLOCKMAP;
-		act->LinkToWorld ();
-		act->flags &= ~MF_NOBLOCKMAP;
+		{
+			DWORD keepflags = act->flags;
+			act->flags |= MF_NOBLOCKMAP;
+			act->LinkToWorld();
+			act->flags = keepflags;
+		}
+
+		// Restore sector links.
+		if (!(act->flags & MF_NOSECTOR))
+		{
+			sector_t *sec = act->Sector;
+			AActor *me, *next;
+			AActor **link;// , **prev;
+
+			// The thinglist is just a pointer chain. We are restoring the exact same things, so we can NULL the head safely
+			sec->thinglist = NULL;
+
+			for (i = PredictionSectorListBackup.Size(); i-- > 0;)
+			{
+				me = PredictionSectorListBackup[i];
+				link = &sec->thinglist;
+				next = *link;
+				if ((me->snext = next))
+					next->sprev = &me->snext;
+				me->sprev = link;
+				*link = me;
+			}
+
+			msecnode_t *snode;
+
+			// Restore sector thinglist order
+			for (i = PredictionTouchingSectorsBackup.Size(); i-- > 0;)
+			{
+				// If we were already the head node, then nothing needs to change
+				if (PredictionSector_sprev_Backup[i] == NULL)
+					continue;
+
+				for (snode = PredictionTouchingSectorsBackup[i]->touching_thinglist; snode; snode = snode->m_snext)
+				{
+					if (snode->m_thing == act)
+					{
+						if (snode->m_sprev)
+							snode->m_sprev->m_snext = snode->m_snext;
+						else
+							snode->m_sector->touching_thinglist = snode->m_snext;
+						if (snode->m_snext)
+							snode->m_snext->m_sprev = snode->m_sprev;
+
+						snode->m_sprev = PredictionSector_sprev_Backup[i];
+
+						// At the moment, we don't exist in the list anymore, but we do know what our previous node is, so we set its current m_snext->m_sprev to us.
+						if (snode->m_sprev->m_snext)
+							snode->m_sprev->m_snext->m_sprev = snode;
+						snode->m_snext = snode->m_sprev->m_snext;
+						snode->m_sprev->m_snext = snode;
+						break;
+					}
+				}
+			}
+		}
 
 		// Now fix the pointers in the blocknode chain
 		FBlockNode *block = act->BlockNode;
@@ -3723,14 +4100,22 @@ void P_UnPredictPlayer ()
 void player_t::Serialize (FArchive &arc)
 {
 	int i;
+	FString skinname;
 
 	arc << cls
 		<< mo
 		<< camera
 		<< playerstate
-		<< cmd
-		<< userinfo
-		<< DesiredFOV << FOV
+		<< cmd;
+	if (arc.IsLoading())
+	{
+		ReadUserInfo(arc, userinfo, skinname);
+	}
+	else
+	{
+		WriteUserInfo(arc, userinfo);
+	}
+	arc << DesiredFOV << FOV
 		<< viewz
 		<< viewheight
 		<< deltaviewheight
@@ -3754,33 +4139,9 @@ void player_t::Serialize (FArchive &arc)
 		<< poisoncount
 		<< poisoner
 		<< attacker
-		<< extralight;
-	if (SaveVersion < 1858)
-	{
-		int fixedmap;
-		arc << fixedmap;
-		fixedcolormap = NOFIXEDCOLORMAP;
-		fixedlightlevel = -1;
-		if (fixedmap >= NUMCOLORMAPS)
-		{
-			fixedcolormap = fixedmap - NUMCOLORMAPS;
-		}
-		else if (fixedmap > 0)
-		{
-			fixedlightlevel = fixedmap;
-		}
-	}
-	else if (SaveVersion < 1893)
-	{
-		int ll;
-		arc	<< fixedcolormap << ll;
-		fixedlightlevel = ll;
-	}
-	else
-	{
-		arc	<< fixedcolormap << fixedlightlevel;
-	}
-	arc << morphTics
+		<< extralight
+		<< fixedcolormap << fixedlightlevel
+		<< morphTics
 		<< MorphedPlayerClass
 		<< MorphStyle
 		<< MorphExitFlash
@@ -3795,7 +4156,6 @@ void player_t::Serialize (FArchive &arc)
 		<< BlendG
 		<< BlendB
 		<< BlendA
-		<< accuracy << stamina
 		// [BB] Skulltag additions - start
 		<< bOnTeam
 		<< ulTeam
@@ -3805,7 +4165,28 @@ void player_t::Serialize (FArchive &arc)
 		<< lMaxHealthBonus
 		<< cheats2
 		// [BB] Skulltag additions - end
-		<< LogText
+		;
+	if (SaveVersion < 3427)
+	{
+		WORD oldaccuracy, oldstamina;
+		arc << oldaccuracy << oldstamina;
+		if (mo != NULL)
+		{
+			mo->accuracy = oldaccuracy;
+			mo->stamina = oldstamina;
+		}
+	}
+	if (SaveVersion < 4041)
+	{
+		// Move weapon state flags from cheats and into WeaponState.
+		WeaponState = ((cheats >> 14) & 1) | ((cheats & (0x37 << 24)) >> (24 - 1));
+		cheats &= ~((1 << 14) | (0x37 << 24));
+	}
+	else
+	{
+		arc << WeaponState;
+	}
+	arc << LogText
 		<< ConversationNPC
 		<< ConversationPC
 		<< ConversationNPCAngle
@@ -3829,12 +4210,55 @@ void player_t::Serialize (FArchive &arc)
 	// [BL] is the player unarmed?
 	arc << bUnarmed;
 
+	if (SaveVersion >= 3475)
+	{
+		arc << poisontype << poisonpaintype;
+	}
+	else if (poisoner != NULL)
+	{
+		poisontype = poisoner->DamageType;
+		poisonpaintype = poisoner->PainType != NAME_None ? poisoner->PainType : poisoner->DamageType;
+	}
+
+	if (SaveVersion >= 3599)
+	{
+		arc << timefreezer;
+	}
+	else
+	{
+		cheats &= ~(1 << 15);	// make sure old CF_TIMEFREEZE bit is cleared
+	}
+	if (SaveVersion < 3640)
+	{
+		cheats &= ~(1 << 17);	// make sure old CF_REGENERATION bit is cleared
+	}
+	if (SaveVersion >= 3780)
+	{
+		arc << settings_controller;
+	}
+	else
+	{
+		settings_controller = (this - players == Net_Arbitrator);
+	}
+	if (SaveVersion >= 4505)
+	{
+		arc << onground;
+	}
+	else
+	{
+		onground = (mo->z <= mo->floorz) || (mo->flags2 & MF2_ONMOBJ) || (mo->BounceFlags & BOUNCE_MBF) || (cheats & CF_NOCLIP2);
+	}
+
 	if (arc.IsLoading ())
 	{
 		// If the player reloaded because they pressed +use after dying, we
 		// don't want +use to still be down after the game is loaded.
 		oldbuttons = ~0;
 		original_oldbuttons = ~0;
+	}
+	if (skinname.IsNotEmpty())
+	{
+		userinfo.SkinChanged(skinname, CurrentPlayerClass);
 	}
 }
 
@@ -3885,4 +4309,13 @@ void P_EnumPlayerColorSets(FName classname, TArray<int> *out)
 		}
 		qsort(&(*out)[0], out->Size(), sizeof(int), intcmp);
 	}
+}
+
+// [Leo] Added spectator check.
+bool P_IsPlayerTotallyFrozen(const player_t *player)
+{
+	return
+		gamestate == GS_TITLELEVEL ||
+		player->cheats & CF_TOTALLYFROZEN ||
+		((level.flags2 & LEVEL2_FROZEN) && player->timefreezer == 0 && (player->bSpectating == false));
 }

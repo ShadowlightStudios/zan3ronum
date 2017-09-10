@@ -50,6 +50,7 @@
 #include "timidity/timidity.h"
 #include "g_level.h"
 #include "po_man.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "cl_demo.h"
 #include "deathmatch.h"
@@ -105,7 +106,7 @@ extern float S_GetMusicVolume (const char *music);
 
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
-static bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, float limit_range);
+static bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, float limit_range, AActor *actor, int channel);
 static bool S_IsChannelUsed(AActor *actor, int channel, int *seen);
 static void S_ActivatePlayList(bool goBack);
 static void CalcPosVel(FSoundChan *chan, FVector3 *pos, FVector3 *vel);
@@ -154,6 +155,10 @@ CVAR (Bool, snd_flipstereo, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 void S_NoiseDebug (void)
 {
+	// [BB] On clients, only allow this when cheats are on.
+	if ( NETWORK_InClientMode() && ( sv_cheats == false ) )
+		return;
+
 	FSoundChan *chan;
 	FVector3 listener;
 	FVector3 origin;
@@ -274,7 +279,7 @@ void S_NoiseDebug (void)
 		}
 		chan = (FSoundChan *)((size_t)chan->PrevChan - myoffsetof(FSoundChan, NextChan));
 	}
-	BorderNeedRefresh = screen->GetPageCount ();
+	V_SetBorderNeedRefresh();
 }
 
 static FString LastLocalSndInfo;
@@ -303,6 +308,7 @@ void S_Init ()
 	if (S_SoundCurve != NULL)
 	{
 		delete[] S_SoundCurve;
+		S_SoundCurve = NULL;
 	}
 
 	if ( g_aOriginalSoundCurve )
@@ -353,9 +359,8 @@ void S_Init ()
 void S_InitData ()
 {
 	LastLocalSndInfo = LastLocalSndSeq = "";
-	S_ParseSndInfo ();
+	S_ParseSndInfo (false);
 	S_ParseSndSeq (-1);
-	S_ParseMusInfo();
 }
 
 //==========================================================================
@@ -449,7 +454,7 @@ void S_Start ()
 			}
 			
 			// Parse the global SNDINFO
-			S_ParseSndInfo();
+			S_ParseSndInfo(true);
 		
 			if (*LocalSndInfo)
 			{
@@ -487,8 +492,9 @@ void S_Start ()
 	if ( NETWORK_InClientMode() && level.Music.IsNotEmpty() )
 		return;
 
-	// [RH] This is a lot simpler now.
-	if (!savegamerestore)
+	// Don't start the music if loading a savegame, because the music is stored there.
+	// Don't start the music if revisiting a level in a hub for the same reason.
+	if (!savegamerestore && (level.info == NULL || level.info->snapshot == NULL || !level.info->isValid()))
 	{
 		if (level.cdtrack == 0 || !S_ChangeCDMusic (level.cdtrack, level.cdid))
 		{
@@ -524,14 +530,15 @@ void S_PrecacheLevel ()
 		AActor *actor;
 		TThinkerIterator<AActor> iterator;
 
-		while ( (actor = iterator.Next ()) != NULL )
+		// Precache all sounds known to be used by the currently spawned actors.
+		while ( (actor = iterator.Next()) != NULL )
 		{
-			S_sfx[actor->SeeSound].bUsed = true;
-			S_sfx[actor->AttackSound].bUsed = true;
-			S_sfx[actor->PainSound].bUsed = true;
-			S_sfx[actor->DeathSound].bUsed = true;
-			S_sfx[actor->ActiveSound].bUsed = true;
-			S_sfx[actor->UseSound].bUsed = true;
+			actor->MarkPrecacheSounds();
+		}
+		// Precache all extra sounds requested by this map.
+		for (i = 0; i < level.info->PrecacheSounds.Size(); ++i)
+		{
+			level.info->PrecacheSounds[i].MarkUsed();
 		}
 
 		for (i = 1; i < S_sfx.Size(); ++i)
@@ -888,7 +895,7 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 	if ( CLIENTDEMO_IsSkipping() == true )
 		return NULL;
 
-	if (sound_id <= 0 || volume <= 0)
+	if (sound_id <= 0 || volume <= 0 || nosfx || nosound )
 		return NULL;
 
 	int type;
@@ -934,6 +941,10 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 		}
 	}
 
+	// [TP] Spectating players shouldn't make any noise.
+	if ( actor && actor->player && actor->player->bSpectating )
+		return NULL;
+
 	sfx = &S_sfx[sound_id];
 
 	// Scale volume according to SNDINFO data.
@@ -959,6 +970,8 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 		}
 		else if (sfx->bRandomHeader)
 		{
+			// Random sounds attenuate based on the original (random) sound as well as the chosen one.
+			attenuation *= sfx->Attenuation;
 			sound_id = FSoundID(S_PickReplacement (sound_id));
 			if (near_limit < 0) 
 			{
@@ -985,6 +998,9 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 		}
 		sfx = &S_sfx[sound_id];
 	}
+
+	// Attenuate the attenuation based on the sound.
+	attenuation *= sfx->Attenuation;
 
 	// The passed rolloff overrides any sound-specific rolloff.
 	if (forcedrolloff != NULL && forcedrolloff->MinDistance != 0)
@@ -1013,7 +1029,7 @@ static FSoundChan *S_StartSound(AActor *actor, const sector_t *sec, const FPolyO
 
 	// If this sound doesn't like playing near itself, don't play it if
 	// that's what would happen.
-	if (near_limit > 0 && S_CheckSoundLimit(sfx, pos, near_limit, limit_range))
+	if (near_limit > 0 && S_CheckSoundLimit(sfx, pos, near_limit, limit_range, actor, channel))
 	{
 		chanflags |= CHAN_EVICTED;
 	}
@@ -1218,7 +1234,7 @@ void S_RestartSound(FSoundChan *chan)
 
 		// If this sound doesn't like playing near itself, don't play it if
 		// that's what would happen.
-		if (chan->NearLimit > 0 && S_CheckSoundLimit(&S_sfx[chan->SoundID], pos, chan->NearLimit, chan->LimitRange))
+		if (chan->NearLimit > 0 && S_CheckSoundLimit(&S_sfx[chan->SoundID], pos, chan->NearLimit, chan->LimitRange, NULL, 0))
 		{
 			return;
 		}
@@ -1248,9 +1264,13 @@ void S_RestartSound(FSoundChan *chan)
 //
 //==========================================================================
 
-void S_Sound (int channel, FSoundID sound_id, float volume, float attenuation)
+void S_Sound (int channel, FSoundID sound_id, float volume, float attenuation, bool bSoundOnClient) // [EP] Added bSoundOnClient.
 {
 	S_StartSound (NULL, NULL, NULL, NULL, channel, sound_id, volume, attenuation);
+
+	// [EP] If we're the server, tell the clients to make a sound.
+	if ( bSoundOnClient && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+		SERVERCOMMANDS_Sound( channel, S_GetName( sound_id ), volume, attenuation );
 }
 
 //==========================================================================
@@ -1259,11 +1279,15 @@ void S_Sound (int channel, FSoundID sound_id, float volume, float attenuation)
 //
 //==========================================================================
 
-void S_Sound (AActor *ent, int channel, FSoundID sound_id, float volume, float attenuation)
+void S_Sound (AActor *ent, int channel, FSoundID sound_id, float volume, float attenuation, bool bSoundOnClient) // [EP] Added bSoundOnClient.
 {
 	if (ent == NULL || ent->Sector->Flags & SECF_SILENT)
 		return;
 	S_StartSound (ent, NULL, NULL, NULL, channel, sound_id, volume, attenuation);
+
+	// [EP] If we're the server, tell the clients to make a sound.
+	if ( bSoundOnClient && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
+		SERVERCOMMANDS_SoundActor( ent, channel, S_GetName( sound_id ), volume, attenuation );
 }
 
 //==========================================================================
@@ -1370,10 +1394,15 @@ sfxinfo_t *S_LoadSound(sfxinfo_t *sfx)
 			wlump.Read(sfxdata, size);
 			SDWORD len = LittleLong(((SDWORD *)sfxdata)[1]);
 
+			// If the sound is voc, use the custom loader.
+			if (strncmp ((const char *)sfxstart, "Creative Voice File", 19) == 0)
+			{
+				sfx->data = GSnd->LoadSoundVoc(sfxstart, len);
+			}
 			// If the sound is raw, just load it as such.
 			// Otherwise, try the sound as DMX format.
 			// If that fails, let FMOD try and figure it out.
-			if (sfx->bLoadRAW ||
+			else if (sfx->bLoadRAW ||
 				(((BYTE *)sfxdata)[0] == 3 && ((BYTE *)sfxdata)[1] == 0 && len <= size - 8))
 			{
 				int frequency;
@@ -1445,12 +1474,19 @@ bool S_CheckSingular(int sound_id)
 //
 // Limits the number of nearby copies of a sound that can play near
 // each other. If there are NearLimit instances of this sound already
-// playing within 256 units of the new sound, the new sound will not
-// start.
+// playing within sqrt(limit_range) (typically 256 units) of the new sound, the
+// new sound will not start.
+//
+// If an actor is specified, and it is already playing the same sound on
+// the same channel, this sound will not be limited. In this case, we're
+// restarting an already playing sound, so there's no need to limit it.
+//
+// Returns true if the sound should not play.
 //
 //==========================================================================
 
-bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, float limit_range)
+bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, float limit_range,
+	AActor *actor, int channel)
 {
 	FSoundChan *chan;
 	int count;
@@ -1460,6 +1496,12 @@ bool S_CheckSoundLimit(sfxinfo_t *sfx, const FVector3 &pos, int near_limit, floa
 		if (!(chan->ChanFlags & CHAN_EVICTED) && &S_sfx[chan->SoundID] == sfx)
 		{
 			FVector3 chanorigin;
+
+			if (actor != NULL && chan->EntChannel == channel &&
+				chan->SourceType == SOURCE_Actor && chan->Actor == actor)
+			{ // We are restarting a playing sound. Always let it play.
+				return false;
+			}
 
 			CalcPosVel(chan, &chanorigin, NULL);
 			if ((chanorigin - pos).LengthSquared() <= limit_range)
@@ -1671,6 +1713,29 @@ void S_RelinkSound (AActor *from, AActor *to)
 	}
 }
 
+
+//==========================================================================
+//
+// S_ChangeSoundVolume
+//
+//==========================================================================
+
+bool S_ChangeSoundVolume(AActor *actor, int channel, float volume)
+{
+	for (FSoundChan *chan = Channels; chan != NULL; chan = chan->NextChan)
+	{
+		if (chan->SourceType == SOURCE_Actor &&
+			chan->Actor == actor &&
+			(chan->EntChannel == channel || (i_compatflags & COMPATF_MAGICSILENCE)))
+		{
+			GSnd->ChannelVolume(chan, volume);
+			chan->Volume = volume;
+			return true;
+		}
+	}
+	return false;
+}
+
 //==========================================================================
 //
 // S_GetSoundPlayingInfo
@@ -1739,7 +1804,7 @@ bool S_GetSoundPlayingInfo (const FPolyObj *poly, int sound_id)
 //
 //==========================================================================
 
-bool S_IsChannelUsed(AActor *actor, int channel, int *seen)
+static bool S_IsChannelUsed(AActor *actor, int channel, int *seen)
 {
 	if (*seen & (1 << channel))
 	{
@@ -1800,7 +1865,7 @@ void S_PauseSound (bool notmusic, bool notsfx)
 
 	if (!notmusic && mus_playing.handle && !MusicPaused)
 	{
-		I_PauseSong (mus_playing.handle);
+		mus_playing.handle->Pause();
 		MusicPaused = true;
 	}
 	if (!notsfx)
@@ -1825,7 +1890,7 @@ void S_ResumeSound (bool notsfx)
 
 	if (mus_playing.handle && MusicPaused)
 	{
-		I_ResumeSong (mus_playing.handle);
+		mus_playing.handle->Resume();
 		MusicPaused = false;
 	}
 	if (!notsfx)
@@ -1852,8 +1917,9 @@ void S_SetSoundPaused (int state)
 			S_ResumeSound(true);
 			if (GSnd != NULL)
 			{
-				GSnd->SetInactive(false);
+				GSnd->SetInactive(SoundRenderer::INACTIVE_Active);
 			}
+			// [BB] !netgame -> (NETWORK_GetState( ) == NETSTATE_SINGLE)
 			if ((NETWORK_GetState( ) == NETSTATE_SINGLE)
 #ifdef _DEBUG
 				&& !demoplayback
@@ -1871,8 +1937,11 @@ void S_SetSoundPaused (int state)
 			S_PauseSound(false, true);
 			if (GSnd !=  NULL)
 			{
-				GSnd->SetInactive(true);
+				GSnd->SetInactive(gamestate == GS_LEVEL || gamestate == GS_TITLELEVEL ?
+					SoundRenderer::INACTIVE_Complete :
+					SoundRenderer::INACTIVE_Mute);
 			}
+			// [BB] !netgame -> (NETWORK_GetState( ) == NETSTATE_SINGLE)
 			if ((NETWORK_GetState( ) == NETSTATE_SINGLE)
 #ifdef _DEBUG
 				&& !demoplayback
@@ -1988,11 +2057,11 @@ void S_UpdateSounds (AActor *listenactor)
 
 	I_UpdateMusic();
 
-	// [RH] Update music and/or playlist. I_QrySongPlaying() must be called
+	// [RH] Update music and/or playlist. IsPlaying() must be called
 	// to attempt to reconnect to broken net streams and to advance the
 	// playlist when the current song finishes.
 	if (mus_playing.handle != NULL &&
-		!I_QrySongPlaying(mus_playing.handle) &&
+		!mus_playing.handle->IsPlaying() &&
 		PlayList)
 	{
 		PlayList->Advance();
@@ -2224,7 +2293,6 @@ void S_StopChannel(FSoundChan *chan)
 		S_ReturnChannel(chan);
 	}
 }
-
 
 //==========================================================================
 //
@@ -2491,6 +2559,10 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 				mus_playing.baseorder = order;
 			}
 		}
+		else if (!mus_playing.handle->IsPlaying())
+		{
+			mus_playing.handle->Play(looping, order);
+		}
 		return true;
 	}
 
@@ -2513,8 +2585,16 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 		int offset = 0, length = 0;
 		int device = MDEV_DEFAULT;
 		MusInfo *handle = NULL;
+		FName musicasname = musicname;
 
-		int *devp = MidiDevices.CheckKey(FName(musicname));
+		FName *aliasp = MusicAliases.CheckKey(musicasname);
+		if (aliasp != NULL) 
+		{
+			musicname = (musicasname = *aliasp).GetChars();
+			if (musicasname == NAME_None) return true;
+		}
+
+		int *devp = MidiDevices.CheckKey(musicasname);
 		if (devp != NULL) device = *devp;
 
 		// Strip off any leading file:// component.
@@ -2581,7 +2661,7 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 		if (snd_musicvolume <= 0)
 		{
 			mus_playing.loop = looping;
-			mus_playing.name = "";
+			mus_playing.name = musicname;
 			mus_playing.baseorder = order;
 			LastSong = musicname;
 			return true;
@@ -2611,7 +2691,7 @@ bool S_ChangeMusic (const char *musicname, int order, bool looping, bool force)
 
 	if (mus_playing.handle != 0)
 	{ // play it
-		I_PlaySong (mus_playing.handle, looping, S_GetMusicVolume (musicname), order);
+		mus_playing.handle->Start(looping, S_GetMusicVolume (musicname), order);
 		mus_playing.baseorder = order;
 		return true;
 	}
@@ -2641,6 +2721,21 @@ void S_RestartMusic ()
 
 //==========================================================================
 //
+// S_MIDIDeviceChanged
+//
+//==========================================================================
+
+void S_MIDIDeviceChanged()
+{
+	if (mus_playing.handle != NULL && mus_playing.handle->IsMIDI())
+	{
+		mus_playing.handle->Stop();
+		mus_playing.handle->Start(mus_playing.loop, -1, mus_playing.baseorder);
+	}
+}
+
+//==========================================================================
+//
 // S_GetMusic
 //
 //==========================================================================
@@ -2649,9 +2744,12 @@ int S_GetMusic (char **name)
 {
 	int order;
 
-	// [BC] Server doesn't use music/sound.
+	// [BC] Server doesn't use music/sound, [BB] but saves the values.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		return ( 0 );
+	{
+		*name = copystring ( SERVER_GetMapMusic( ) );
+		return ( SERVER_GetMapMusicOrder( ) );
+	}
 
 	if (mus_playing.name)
 	{
@@ -2681,15 +2779,17 @@ void S_StopMusic (bool force)
 	// [RH] Don't stop if a playlist is active.
 	if ((force || PlayList == NULL) && !mus_playing.name.IsEmpty())
 	{
-		if (MusicPaused)
-			I_ResumeSong(mus_playing.handle);
+		if (mus_playing.handle != NULL)
+		{
+			if (MusicPaused)
+				mus_playing.handle->Resume();
 
-		I_StopSong(mus_playing.handle);
-		I_UnRegisterSong(mus_playing.handle);
-
+			mus_playing.handle->Stop();
+			delete mus_playing.handle;
+			mus_playing.handle = NULL;
+		}
 		LastSong = mus_playing.name;
 		mus_playing.name = "";
-		mus_playing.handle = 0;
 	}
 }
 
@@ -2707,7 +2807,45 @@ CCMD (playsound)
 
 	if (argv.argc() > 1)
 	{
-		S_Sound (CHAN_AUTO | CHAN_UI, argv[1], 1.f, ATTN_NONE);
+		FSoundID id = argv[1];
+		if (id == 0)
+		{
+			Printf("'%s' is not a sound\n", argv[1]);
+		}
+		else
+		{
+			S_Sound (CHAN_AUTO | CHAN_UI, id, 1.f, ATTN_NONE);
+		}
+	}
+}
+
+//==========================================================================
+//
+// CCMD loopsound
+//
+//==========================================================================
+
+CCMD (loopsound)
+{
+	// [BB] !netgame -> ( NETWORK_GetState( ) != NETSTATE_CLIENT )
+	if (players[consoleplayer].mo != NULL && ( NETWORK_GetState( ) != NETSTATE_CLIENT ) && argv.argc() > 1)
+	{
+		FSoundID id = argv[1];
+		if (id == 0)
+		{
+			Printf("'%s' is not a sound\n", argv[1]);
+		}
+		else
+		{
+			AActor *icon = Spawn("SpeakerIcon", players[consoleplayer].mo->x,
+				players[consoleplayer].mo->y,
+				players[consoleplayer].mo->z + 32*FRACUNIT,
+				ALLOW_REPLACE);
+			if (icon != NULL)
+			{
+				S_Sound(icon, CHAN_BODY | CHAN_LOOP, id, 1.f, ATTN_IDLE);
+			}
+		}
 	}
 }
 
@@ -2723,37 +2861,40 @@ CCMD (idmus)
 	FString map;
 	int l;
 
-	if (argv.argc() > 1)
+	if (!nomusic)
 	{
-		if (gameinfo.flags & GI_MAPxx)
+		if (argv.argc() > 1)
 		{
-			l = atoi (argv[1]);
-			if (l <= 99)
+			if (gameinfo.flags & GI_MAPxx)
 			{
-				map = CalcMapName (0, l);
+				l = atoi (argv[1]);
+			if (l <= 99)
+				{
+					map = CalcMapName (0, l);
+				}
+				else
+				{
+					Printf ("%s\n", GStrings("STSTR_NOMUS"));
+					return;
+				}
+			}
+			else
+			{
+				map = CalcMapName (argv[1][0] - '0', argv[1][1] - '0');
+			}
+
+			if ( (info = FindLevelInfo (map)) )
+			{
+				if (info->Music.IsNotEmpty())
+				{
+					S_ChangeMusic (info->Music, info->musicorder);
+					Printf ("%s\n", GStrings("STSTR_MUS"));
+				}
 			}
 			else
 			{
 				Printf ("%s\n", GStrings("STSTR_NOMUS"));
-				return;
 			}
-		}
-		else
-		{
-			map = CalcMapName (argv[1][0] - '0', argv[1][1] - '0');
-		}
-
-		if ( (info = FindLevelInfo (map)) )
-		{
-			if (info->Music.IsNotEmpty())
-			{
-				S_ChangeMusic (info->Music, info->musicorder);
-				Printf ("%s\n", GStrings("STSTR_MUS"));
-			}
-		}
-		else
-		{
-			Printf ("%s\n", GStrings("STSTR_NOMUS"));
 		}
 	}
 }
@@ -2766,13 +2907,16 @@ CCMD (idmus)
 
 CCMD (changemus)
 {
-	if (argv.argc() > 1)
+	// [BB] The server is not playing music, but can instruct the clients to do so.
+	if (!nomusic || ( NETWORK_GetState( ) == NETSTATE_SERVER ))
 	{
-		if (PlayList)
+		if (argv.argc() > 1)
 		{
-			delete PlayList;
-			PlayList = NULL;
-		}
+			if (PlayList)
+			{
+				delete PlayList;
+				PlayList = NULL;
+			}
 		S_ChangeMusic (argv[1], argv.argc() > 2 ? atoi (argv[2]) : 0);
 
 		// [BB] If we're the server, tell clients to change the music, and
@@ -2782,6 +2926,19 @@ CCMD (changemus)
 			int musicorder =  argv.argc() > 2 ? atoi (argv[2]) : 0;
 			SERVERCOMMANDS_SetMapMusic( argv[1], musicorder );
 			SERVER_SetMapMusic( argv[1], musicorder );
+		}
+		}
+		else
+		{
+			const char *currentmus = mus_playing.name.GetChars();
+			if(currentmus != NULL && *currentmus != 0)
+			{
+				Printf ("currently playing %s\n", currentmus);
+			}
+			else
+			{
+				Printf ("no music playing\n");
+			}
 		}
 	}
 }
@@ -2800,6 +2957,7 @@ CCMD (stopmus)
 		PlayList = NULL;
 	}
 	S_StopMusic (false);
+	LastSong = "";	// forget the last played song so that it won't get restarted if some volume changes occur
 }
 
 //==========================================================================

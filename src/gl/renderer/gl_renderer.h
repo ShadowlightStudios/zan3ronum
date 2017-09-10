@@ -4,26 +4,27 @@
 #include "r_defs.h"
 #include "v_video.h"
 #include "vectors.h"
+#include "r_renderer.h"
 
 struct particle_t;
 class FCanvasTexture;
-class FVertexBuffer;
+class FFlatVertexBuffer;
 class OpenGLFrameBuffer;
 struct FDrawInfo;
 struct pspdef_t;
 class FShaderManager;
 class GLPortal;
-
-extern int extralight;
+class FGLThreadManager;
 
 enum SectorRenderFlags
 {
 	// This is used to avoid creating too many drawinfos
-	SSRF_RENDERFLOOR=1,
-	SSRF_RENDERCEILING=2,
-	SSRF_RENDER3DPLANES=4,
-	SSRF_RENDERALL=7,
-	SSRF_PROCESSED=8,
+	SSRF_RENDERFLOOR = 1,
+	SSRF_RENDERCEILING = 2,
+	SSRF_RENDER3DPLANES = 4,
+	SSRF_RENDERALL = 7,
+	SSRF_PROCESSED = 8,
+	SSRF_SEEN = 16,
 };
 
 struct GL_IRECT
@@ -52,6 +53,7 @@ public:
 	float mCurrentFoV;
 	AActor *mViewActor;
 	FShaderManager *mShaderManager;
+	FGLThreadManager *mThreadManager;
 	int gl_spriteindex;
 	unsigned int mFBID;
 
@@ -66,24 +68,10 @@ public:
 	FVector2 mViewVector;
 	FVector3 mCameraPos;
 
-	FVertexBuffer *mVBO;
+	FFlatVertexBuffer *mVBO;
 
 
-	FGLRenderer(OpenGLFrameBuffer *fb) 
-	{
-		framebuffer = fb;
-		mCurrentPortal = NULL;
-		mMirrorCount = 0;
-		mPlaneMirrorCount = 0;
-		mLightCount = 0;
-		mAngles = FRotator(0,0,0);
-		mViewVector = FVector2(0,0);
-		mCameraPos = FVector3(0,0,0);
-		mVBO = NULL;
-		gl_spriteindex = 0;
-		mShaderManager = NULL;
-		glpart2 = glpart = gllight = mirrortexture = NULL;
-	}
+	FGLRenderer(OpenGLFrameBuffer *fb);
 	~FGLRenderer() ;
 
 	angle_t FrustumAngle();
@@ -103,7 +91,7 @@ public:
 	void DrawScene(bool toscreen = false);
 	void DrawBlend(sector_t * viewsector);
 
-	void DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep);
+	void DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader);
 	void DrawPlayerSprites(sector_t * viewsector, bool hudModelStep);
 	void DrawTargeterSprites();
 
@@ -119,9 +107,8 @@ public:
 	void ProcessLowerMiniseg(seg_t *seg, sector_t * frontsector, sector_t * backsector);
 	void ProcessSprite(AActor *thing, sector_t *sector);
 	void ProcessParticle(particle_t *part, sector_t *sector);
-	void ProcessSector(sector_t *fakesector, subsector_t *sub);
+	void ProcessSector(sector_t *fakesector);
 	void FlushTextures();
-	void RenderTextureView (FCanvasTexture *self, AActor *viewpoint, int fov);
 	unsigned char *GetTextureBuffer(FTexture *tex, int &w, int &h);
 	void SetupLevel();
 
@@ -136,6 +123,10 @@ public:
 
 	bool StartOffscreen();
 	void EndOffscreen();
+
+	void FillSimplePoly(FTexture *texture, FVector2 *points, int npoints,
+		double originx, double originy, double scalex, double scaley,
+		angle_t rotation, FDynamicColormap *colormap, int lightlevel);
 };
 
 // Global functions. Make them members of GLRenderer later?

@@ -28,7 +28,7 @@
 #include "s_sound.h"
 #include "doomstat.h"
 #include "sbar.h"
-#include "r_interpolate.h"
+#include "r_data/r_interpolate.h"
 #include "i_sound.h"
 #include "g_level.h"
 // [BB] New #includes.
@@ -55,6 +55,10 @@ extern gamestate_t wipegamestate;
 
 bool P_CheckTickerPaused ()
 {
+	// [BB] A paused demo always pauses the ticker.
+	if ( CLIENTDEMO_IsPaused( ) )
+		return true;
+
 	// pause if in menu or console and at least one tic has been run
 	if (( NETWORK_GetState( ) != NETSTATE_CLIENT )
 		 && gamestate != GS_TITLELEVEL
@@ -83,8 +87,7 @@ void P_Ticker (void)
 	ULONG	ulIdx;
 
 	// [BC] Don't run this if the server is lagging.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		if (( CLIENT_GetServerLagging( ) == true ) ||
 			( players[consoleplayer].mo == NULL ))
@@ -106,10 +109,20 @@ void P_Ticker (void)
 	//		GSnd->SetSfxPaused(!!playerswiping, 2);
 		}
 
+		// [BB] Allow the free spectate player to move even if the demo is paused.
+		if ( CLIENTDEMO_IsPaused() && CLIENTDEMO_IsInFreeSpectateMode() )
+			CLIENTDEMO_FreeSpectatorPlayerThink( true );
+
 		// run the tic
 		if (paused || P_CheckTickerPaused())
 			return;
+	}
 
+	P_NewPspriteTick();
+
+	// [BC] Server doesn't need any of this.
+	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+	{
 /*		// [BB] ST doesn't do this.
 		// [RH] Frozen mode is only changed every 4 tics, to make it work with A_Tracer().
 		if ((level.time & 3) == 0)
@@ -126,14 +139,16 @@ void P_Ticker (void)
 		// off the music.
 		for (i = 0; i < MAXPLAYERS; i++ )
 		{
-			if (playeringame[i] && players[i].cheats & CF_TIMEFREEZE)
+			if (playeringame[i] && players[i].timefreezer != 0)
 				break;
 		}
 
 		// [BB] If the freeze command was executed from the console, the sound needs to
 		// be resumed. In this case, the music isn't paused. The other check is only meant
 		// not to resume the music.
-		if ( ( i == MAXPLAYERS ) || ( S_IsMusicPaused () == false ) )
+		// [BB] Don't resume the sound while we are skipping. This is important when skipping
+		// while the demo is paused.
+		if ( ( ( i == MAXPLAYERS ) || ( S_IsMusicPaused () == false ) ) && ( CLIENTDEMO_IsSkipping() == false ) )
 			S_ResumeSound (false);
 		P_ResetSightCounters (false);
 
@@ -150,11 +165,10 @@ void P_Ticker (void)
 		{
 			P_ThinkParticles ();	// [RH] make the particles think
 		}
-		StatusBar->Tick ();		// [RH] moved this here
 	}
 
 	// Predict the console player's position.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		if (( CLIENT_GetServerLagging( ) == false ) && ( CLIENT_GetClientLagging( ) == false ))
 			CLIENT_PREDICT_PlayerPredict( );
@@ -300,8 +314,7 @@ void P_Ticker (void)
 	for ( ulIdx = 0; ulIdx < MAXPLAYERS; ulIdx++ )
 	{
 		// Increment individual player time.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 		{
 			if ( playeringame[ulIdx] )
 			{
@@ -333,7 +346,7 @@ void P_Ticker (void)
 
 		// Console player thinking is handled by player prediction.
 		if (( static_cast<signed> (ulIdx) == consoleplayer ) &&
-			(( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))))
+			NETWORK_InClientMode() )
 		{
 			continue;
 		}
@@ -347,6 +360,9 @@ void P_Ticker (void)
 	if ( CLIENTDEMO_IsInFreeSpectateMode() )
 		CLIENTDEMO_FreeSpectatorPlayerThink();
 
+	// [BB] The server has no status bar.
+	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
+		StatusBar->Tick ();		// [RH] moved this here
 	level.Tick ();			// [RH] let the level tick
 
 	// [BB] Some things like AMovingCamera rely on the AActor tid in the PostBeginPlay functions,
@@ -387,8 +403,7 @@ void P_Ticker (void)
 	// Tick the team module. The handles returning dropped flags/skulls.
 	if ( teamgame )
 	{
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 		{
 			TEAM_Tick( );
 		}

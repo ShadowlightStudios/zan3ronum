@@ -3,6 +3,7 @@
 
 #include "doomtype.h"
 #include "v_palette.h"
+#include "r_data/colormaps.h"
 
 extern DWORD gl_fixedcolormap;
 
@@ -18,14 +19,15 @@ enum EColorManipulation
 	CM_FIRSTSPECIALCOLORMAP,		// first special fixed colormap
 
 	// special internal values for texture creation
-	CM_GRAY = 0x1000000,		// a simple grayscale map for colorizing blood splats
-	CM_ICE	= 0x1000001,		// The bluish ice translation for frozen corpses
-	CM_SHADE= 0x1000002,		// alpha channel texture
+	CM_SHADE= 0x10000002,		// alpha channel texture
 
 	// These are not to be passed to the texture manager
-	CM_LITE	= 0x2000000,		// special values to handle these items without excessive hacking
-	CM_TORCH= 0x2000010,		// These are not real color manipulations
+	CM_LITE	= 0x20000000,		// special values to handle these items without excessive hacking
+	CM_TORCH= 0x20000010,		// These are not real color manipulations
+	CM_FOGLAYER= 0x20000020,	// Sprite shaped fog layer - this is only used as a parameter to FMaterial::BindPatch
 };
+
+#define CM_MAXCOLORMAP int(CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size())
 
   // for internal use
 struct FColormap
@@ -53,7 +55,7 @@ struct FColormap
 	void GetFixedColormap()
 	{
 		Clear();
-		colormap = gl_fixedcolormap >= CM_LITE? CM_DEFAULT : gl_fixedcolormap;
+		colormap = gl_fixedcolormap >= (int)CM_LITE? (int)CM_DEFAULT : gl_fixedcolormap;
 	}
 
 	FColormap & operator=(FDynamicColormap * from)

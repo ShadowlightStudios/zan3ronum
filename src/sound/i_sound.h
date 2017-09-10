@@ -92,7 +92,8 @@ public:
 	virtual void SetSfxVolume (float volume) = 0;
 	virtual void SetMusicVolume (float volume) = 0;
 	virtual SoundHandle LoadSound(BYTE *sfxdata, int length) = 0;
-	virtual SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart) = 0;
+	SoundHandle LoadSoundVoc(BYTE *sfxdata, int length);
+	virtual SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart, int loopend = -1) = 0;
 	virtual void UnloadSound (SoundHandle sfx) = 0;	// unloads a sound from memory
 	virtual unsigned int GetMSLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
 	virtual unsigned int GetSampleLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
@@ -108,6 +109,9 @@ public:
 
 	// Stops a sound channel.
 	virtual void StopChannel (FISoundChannel *chan) = 0;
+
+	// Changes a channel's volume.
+	virtual void ChannelVolume (FISoundChannel *chan, float volume) = 0;
 
 	// Marks a channel's start time without actually playing it.
 	virtual void MarkStartTime (FISoundChannel *chan) = 0;
@@ -125,7 +129,13 @@ public:
 	virtual void SetSfxPaused (bool paused, int slot) = 0;
 
 	// Pauses or resumes *every* channel, including environmental reverb.
-	virtual void SetInactive(bool inactive) = 0;
+	enum EInactiveState
+	{
+		INACTIVE_Active,		// sound is active
+		INACTIVE_Complete,		// sound is completely paused
+		INACTIVE_Mute			// sound is only muted
+	};
+	virtual void SetInactive(EInactiveState inactive) = 0;
 
 	// Updates the volume, separation, and pitch of a sound channel.
 	virtual void UpdateSoundParams3D (SoundListener *listener, FISoundChannel *chan, bool areasound, const FVector3 &pos, const FVector3 &vel) = 0;
@@ -143,6 +153,8 @@ public:
 };
 
 extern SoundRenderer *GSnd;
+extern bool nosfx;
+extern bool nosound;
 
 void I_InitSound ();
 void I_ShutdownSound ();

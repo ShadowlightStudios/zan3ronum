@@ -42,7 +42,6 @@
 #include "gl/system/gl_system.h"
 #include "doomtype.h"
 #include "colormatcher.h"
-#include "r_translate.h"
 #include "i_system.h"
 #include "p_local.h"
 #include "p_lnspec.h"
@@ -51,6 +50,7 @@
 #include "sc_man.h"
 #include "w_wad.h"
 #include "gi.h"
+#include "p_setup.h"
 #include "g_level.h"
 
 #include "gl/renderer/gl_renderer.h"
@@ -62,7 +62,153 @@
 #include "gl/gl_functions.h"
 
 void InitGLRMapinfoData();
-void gl_InitData();
+
+//==========================================================================
+//
+// 
+//
+//==========================================================================
+
+static void DoSetMapSection(subsector_t *sub, int num)
+{
+	sub->mapsection = num;
+
+	for(DWORD i=0;i<sub->numlines;i++)
+	{
+		seg_t * seg = sub->firstline + i;
+
+		if (seg->PartnerSeg)
+		{
+			subsector_t * sub2 = seg->PartnerSeg->Subsector;
+
+			if (sub2->mapsection != num)
+			{
+				assert(sub2->mapsection == 0);
+				DoSetMapSection(sub2, num);
+			}
+		}
+	}
+}
+
+//==========================================================================
+//
+// Merge sections. This is needed in case the map contains errors
+// like overlapping lines resulting in abnormal subsectors.
+//
+// This function ensures that any vertex position can only be in one section.
+//
+//==========================================================================
+
+struct cvertex_t
+{
+	fixed_t x, y;
+
+	operator int () const { return ((x>>16)&0xffff) | y; }
+	bool operator!= (const cvertex_t &other) const { return x != other.x || y != other.y; }
+	cvertex_t& operator =(const vertex_t *v) { x = v->x; y = v->y; return *this; }
+};
+
+typedef TMap<cvertex_t, int> FSectionVertexMap;
+
+static int MergeMapSections(int num)
+{
+	FSectionVertexMap vmap;
+	FSectionVertexMap::Pair *pair;
+	TArray<int> sectmap;
+	TArray<bool> sectvalid;
+	sectmap.Resize(num);
+	sectvalid.Resize(num);
+	for(int i=0;i<num;i++) 
+	{
+		sectmap[i] = -1;
+		sectvalid[i] = true;
+	}
+	int mergecount = 1;
+
+
+	cvertex_t vt;
+
+	// first step: Set mapsection for all vertex positions.
+	for(DWORD i=0;i<(DWORD)numsegs;i++)
+	{
+		seg_t * seg = &segs[i];
+		int section = seg->Subsector->mapsection;
+		for(int j=0;j<2;j++)
+		{
+			vt = j==0? seg->v1:seg->v2;
+			vmap[vt] = section;
+		}
+	}
+
+	// second step: Check if any seg references more than one mapsection, either by subsector or by vertex
+	for(DWORD i=0;i<(DWORD)numsegs;i++)
+	{
+		seg_t * seg = &segs[i];
+		int section = seg->Subsector->mapsection;
+		for(int j=0;j<2;j++)
+		{
+			vt = j==0? seg->v1:seg->v2;
+			int vsection = vmap[vt];
+
+			if (vsection != section)
+			{
+				// These 2 sections should be merged
+				for(int k=0;k<numsubsectors;k++)
+				{
+					if (subsectors[k].mapsection == vsection) subsectors[k].mapsection = section;
+				}
+				FSectionVertexMap::Iterator it(vmap);
+				while (it.NextPair(pair))
+				{
+					if (pair->Value == vsection) pair->Value = section;
+				}
+				sectvalid[vsection-1] = false;
+			}
+		}
+	}
+	for(int i=0;i<num;i++)
+	{
+		if (sectvalid[i]) sectmap[i] = mergecount++;
+	}
+	for(int i=0;i<numsubsectors;i++)
+	{
+		subsectors[i].mapsection = sectmap[subsectors[i].mapsection-1];
+		assert(subsectors[i].mapsection!=-1);
+	}
+	return mergecount-1;
+}
+
+//==========================================================================
+//
+// 
+//
+//==========================================================================
+
+static void SetMapSections()
+{
+	bool set;
+	int num = 0;
+	do
+	{
+		set = false;
+		for(int i=0; i<numsubsectors; i++)
+		{
+			if (subsectors[i].mapsection == 0)
+			{
+				num++;
+				DoSetMapSection(&subsectors[i], num);
+				set = true;
+				break;
+			}
+		}
+	}
+	while (set);
+	num = MergeMapSections(num);
+	currentmapsection.Resize(1 + num/8);
+#ifdef DEBUG
+	Printf("%d map sections found\n", num);
+#endif
+}
 
 //==========================================================================
 //
@@ -72,20 +218,6 @@ void gl_InitData();
 // - calculate a bounding box
 //
 //==========================================================================
-
-inline void M_ClearBox (fixed_t *box)
-{
-	box[BOXTOP] = box[BOXRIGHT] = INT_MIN;
-	box[BOXBOTTOM] = box[BOXLEFT] = INT_MAX;
-}
-
-inline void M_AddToBox(fixed_t* box,fixed_t x,fixed_t y)
-{
-	if (x<box[BOXLEFT]) box[BOXLEFT] = x;
-	if (x>box[BOXRIGHT]) box[BOXRIGHT] = x;
-	if (y<box[BOXBOTTOM]) box[BOXBOTTOM] = y;
-	if (y>box[BOXTOP]) box[BOXTOP] = y;
-}
 
 static void SpreadHackedFlag(subsector_t * sub)
 {
@@ -108,152 +240,17 @@ static void SpreadHackedFlag(subsector_t * sub)
 }
 
 
-static bool PointOnLine (int x, int y, int x1, int y1, int dx, int dy)
-{
-	const double SIDE_EPSILON = 6.5536;
-
-	// For most cases, a simple dot product is enough.
-	double d_dx = double(dx);
-	double d_dy = double(dy);
-	double d_x = double(x);
-	double d_y = double(y);
-	double d_x1 = double(x1);
-	double d_y1 = double(y1);
-
-	double s_num = (d_y1-d_y)*d_dx - (d_x1-d_x)*d_dy;
-
-	if (fabs(s_num) < 17179869184.0)	// 4<<32
-	{
-		// Either the point is very near the line, or the segment defining
-		// the line is very short: Do a more expensive test to determine
-		// just how far from the line the point is.
-		double l = sqrt(d_dx*d_dx+d_dy*d_dy);
-		double dist = fabs(s_num)/l;
-		if (dist < SIDE_EPSILON)
-		{
-			return true;
-		}
-	}
-	return false;
-}
+//==========================================================================
+//
+// 
+//
+//==========================================================================
 
 static void PrepareSectorData()
 {
 	int 				i;
-	DWORD 				j;
-	size_t				/*ii,*/ jj;
 	TArray<subsector_t *> undetermined;
 	subsector_t *		ss;
-
-	// The GL node builder produces screwed output when two-sided walls overlap with one-sides ones!
-	for(i=0;i<numsegs;i++)
-	{
-		int partner= int(segs[i].PartnerSeg-segs);
-
-		if (partner<0 || partner>=numsegs || &segs[partner]!=segs[i].PartnerSeg)
-		{
-			segs[i].PartnerSeg=NULL;
-		}
-
-		// glbsp creates such incorrect references for Strife.
-		if (segs[i].linedef && segs[i].PartnerSeg && !segs[i].PartnerSeg->linedef)
-		{
-			segs[i].PartnerSeg = segs[i].PartnerSeg->PartnerSeg = NULL;
-		}
-	}
-
-	for(i=0;i<numsegs;i++)
-	{
-		if (segs[i].PartnerSeg && segs[i].PartnerSeg->PartnerSeg!=&segs[i])
-		{
-			//Printf("Warning: seg %d (sector %d)'s partner seg is incorrect!\n", i, segs[i].frontsector-sectors);
-			segs[i].PartnerSeg=NULL;
-		}
-	}
-
-	// look up sector number for each subsector
-	for (i = 0; i < numsubsectors; i++)
-	{
-		// For rendering pick the sector from the first seg that is a sector boundary
-		// this takes care of self-referencing sectors
-		ss = &subsectors[i];
-		seg_t *seg = ss->firstline;
-
-		// Check for one-dimensional subsectors. These aren't rendered and should not be
-		// subject to filling areas with bleeding flats
-		ss->degenerate=true;
-		for(jj=2; jj<ss->numlines; jj++)
-		{
-			if (!PointOnLine(seg[jj].v1->x, seg[jj].v1->y, seg->v1->x, seg->v1->y, seg->v2->x-seg->v1->x, seg->v2->y-seg->v1->y))
-			{
-				// Not on the same line
-				ss->degenerate=false;
-				break;
-			}
-		}
-
-		seg = ss->firstline;
-		M_ClearBox(ss->bbox);
-		for(jj=0; jj<ss->numlines; jj++)
-		{
-			M_AddToBox(ss->bbox,seg->v1->x, seg->v1->y);
-			seg->Subsector = ss;
-			seg++;
-		}
-
-		seg = ss->firstline;
-		for(j=0; j<ss->numlines; j++)
-		{
-			if(seg->sidedef && (!seg->PartnerSeg || seg->sidedef->sector!=seg->PartnerSeg->sidedef->sector))
-			{
-				ss->render_sector = seg->sidedef->sector;
-				break;
-			}
-			seg++;
-		}
-		if(ss->render_sector == NULL) 
-		{
-			undetermined.Push(ss);
-		}
-	}
-
-	// assign a vaild render sector to all subsectors which haven't been processed yet.
-	while (undetermined.Size())
-	{
-		bool deleted=false;
-		for(i=undetermined.Size()-1;i>=0;i--)
-		{
-			ss=undetermined[i];
-			seg_t * seg = ss->firstline;
-			
-			for(j=0; j<ss->numlines; j++)
-			{
-				if (seg->PartnerSeg && seg->PartnerSeg->Subsector)
-				{
-					sector_t * backsec = seg->PartnerSeg->Subsector->render_sector;
-					if (backsec)
-					{
-						ss->render_sector=backsec;
-						undetermined.Delete(i);
-						deleted=1;
-						break;
-					}
-				}
-				seg++;
-			}
-		}
-		if (!deleted && undetermined.Size()) 
-		{
-			// This only happens when a subsector is off the map.
-			// Don't bother and just assign the real sector for rendering
-			for(i=undetermined.Size()-1;i>=0;i--)
-			{
-				ss=undetermined[i];
-				ss->render_sector=ss->sector;
-			}
-			break;
-		}
-	}
 
 	// now group the subsectors by sector
 	subsector_t ** subsectorbuffer = new subsector_t * [numsubsectors];
@@ -295,6 +292,7 @@ static void PrepareSectorData()
 			}
 		}
 	}
+	SetMapSections();
 }
 
 //==========================================================================
@@ -303,6 +301,7 @@ static void PrepareSectorData()
 // - This will be used to lower the floor of such sectors by one map unit
 //
 //==========================================================================
+
 static void PrepareTransparentDoors(sector_t * sector)
 {
 	bool solidwall=false;
@@ -312,13 +311,11 @@ static void PrepareTransparentDoors(sector_t * sector)
 	int i;
 	sector_t * nextsec=NULL;
 
-#ifdef _MSC_VER
 #ifdef _DEBUG
 	if (sector-sectors==2)
 	{
-		__asm nop
+		int a = 0;
 	}
-#endif
 #endif
 
 	P_Recalculate3DFloors(sector);
@@ -387,136 +384,12 @@ static void PrepareTransparentDoors(sector_t * sector)
 	}
 }
 
-
-//===========================================================================
-// 
-// collect other objects depending on sector changes
-//
-//===========================================================================
-
-static void AddDependency(sector_t *mysec, sector_t *addsec, int *checkmap)
-{
-	int mysecnum = int(mysec - sectors);
-	int addsecnum = int(addsec - sectors);
-	if (addsec != mysec) 
-	{
-		if (checkmap[addsecnum] < mysecnum)
-		{
-			checkmap[addsecnum] = mysecnum;
-			mysec->e->SectorDependencies.Push(addsec);
-		}
-	}
-
-	// This ignores vertices only used for seg splitting because those aren't needed here
-	for(int i=0; i < addsec->linecount; i++)
-	{
-		line_t *l = addsec->lines[i];
-		int vtnum1 = int(l->v1 - vertexes);
-		int vtnum2 = int(l->v2 - vertexes);
-
-		if (checkmap[numsectors + vtnum1] < mysecnum)
-		{
-			checkmap[numsectors + vtnum1] = mysecnum;
-			mysec->e->VertexDependencies.Push(&vertexes[vtnum1]);
-		}
-
-		if (checkmap[numsectors + vtnum2] < mysecnum)
-		{
-			checkmap[numsectors + vtnum2] = mysecnum;
-			mysec->e->VertexDependencies.Push(&vertexes[vtnum2]);
-		}
-	}
-}
-
-//===========================================================================
-// 
-// Sets up dependency lists for invalidating precalculated data
-//
-//===========================================================================
-
-static void SetupDependencies()
-{
-	int *checkmap = new int[numvertexes + numlines + numsectors];
-	TArray<int> *vt_linelists = new TArray<int>[numvertexes];
-
-	for(int i=0;i<numlines;i++)
-	{
-		line_t * line = &lines[i];
-		int v1i = int(line->v1 - vertexes);
-		int v2i = int(line->v2 - vertexes);
-
-		vt_linelists[v1i].Push(i);
-		vt_linelists[v2i].Push(i);
-	}
-	memset(checkmap, -1, sizeof(int) * (numvertexes + numlines + numsectors));
-
-
-	for(int i=0;i<numsectors;i++)
-	{
-		sector_t *mSector = &sectors[i];
-
-		AddDependency(mSector, mSector, checkmap);
-
-		for(unsigned j = 0; j < mSector->e->FakeFloor.Sectors.Size(); j++)
-		{
-			sector_t *sec = mSector->e->FakeFloor.Sectors[j];
-			// no need to make sectors dependent that don't make visual use of the heightsec
-			if (sec->GetHeightSec() == mSector)
-			{
-				AddDependency(mSector, sec, checkmap);
-			}
-		}
-		for(unsigned j = 0; j < mSector->e->XFloor.attached.Size(); j++)
-		{
-			sector_t *sec = mSector->e->XFloor.attached[j];
-			extsector_t::xfloor &x = sec->e->XFloor;
-
-			for(unsigned l = 0;l < x.ffloors.Size(); l++)
-			{
-				// Check if we really need to bother with this 3D floor
-				F3DFloor * rover = x.ffloors[l];
-				if (rover->model != mSector) continue;
-				if (!(rover->flags & FF_EXISTS)) continue;
-				if (rover->flags&FF_NOSHADE) continue; // FF_NOSHADE doesn't create any wall splits 
-
-				AddDependency(mSector, sec, checkmap);
-				break;
-			}
-		}
-
-		for(unsigned j = 0; j < mSector->e->VertexDependencies.Size(); j++)
-		{
-			int vtindex = int(mSector->e->VertexDependencies[j] - vertexes);
-			for(unsigned k = 0; k < vt_linelists[vtindex].Size(); k++)
-			{
-				int ln = vt_linelists[vtindex][k];
-
-				if (checkmap[numvertexes + numsectors + ln] < i)
-				{
-					checkmap[numvertexes + numsectors + ln] = i;
-					side_t *sd1 = lines[ln].sidedef[0];
-					side_t *sd2 = lines[ln].sidedef[1];
-					if (sd1 != NULL) mSector->e->SideDependencies.Push(sd1);
-					if (sd2 != NULL) mSector->e->SideDependencies.Push(sd2);
-				}
-
-			}
-		}
-		mSector->e->SectorDependencies.ShrinkToFit();
-		mSector->e->SideDependencies.ShrinkToFit();
-		mSector->e->VertexDependencies.ShrinkToFit();
-	}
-
-	delete [] checkmap;
-	delete [] vt_linelists;
-}
-
-
 //==========================================================================
 //
 // 
 //
 //==========================================================================
+
 static void AddToVertex(const sector_t * sec, TArray<int> & list)
 {
 	int secno = int(sec-sectors);
@@ -533,6 +406,7 @@ static void AddToVertex(const sector_t * sec, TArray<int> & list)
 // Attach sectors to vertices - used to generate vertex height lists
 //
 //==========================================================================
+
 static void InitVertexData()
 {
 	TArray<int> * vt_sectorlists;
@@ -602,7 +476,7 @@ static void InitVertexData()
 
 //==========================================================================
 //
-// Group segs to sidedefs
+//
 //
 //==========================================================================
 
@@ -632,6 +506,12 @@ static int STACK_ARGS segcmp(const void *a, const void *b)
 	return xs_RoundToInt(FRACUNIT*(A->sidefrac - B->sidefrac));
 }
 
+//==========================================================================
+//
+// Group segs to sidedefs
+//
+//==========================================================================
+
 static void PrepareSegs()
 {
 	int *segcount = new int[numsides];
@@ -647,9 +527,41 @@ static void PrepareSegs()
 
 	// count the segs
 	memset(segcount, 0, numsides * sizeof(int));
+	
+	// set up the extra data in case the map was loaded with regular nodes that might pass as GL nodes.
+	if (glsegextras == NULL)
+	{
+		for(int i=0;i<numsegs;i++)
+		{
+			segs[i].PartnerSeg = NULL;
+		}
+		for (int i=0; i<numsubsectors; i++)
+		{
+			int seg = int(subsectors[i].firstline-segs);
+			for(DWORD j=0;j<subsectors[i].numlines;j++)
+			{
+				segs[j+seg].Subsector = &subsectors[i];
+			}
+		}
+	}
+	else
+	{
+		for(int i=0;i<numsegs;i++)
+		{
+			seg_t *seg = &segs[i];
+
+			// Account for ZDoom space optimizations that cannot be done for GL
+			unsigned int partner= glsegextras[i].PartnerSeg;
+			if (partner < unsigned(numsegs))  seg->PartnerSeg = &segs[partner];
+			else seg->PartnerSeg = NULL;
+			seg->Subsector = glsegextras[i].Subsector;
+		}
+	}
+
 	for(int i=0;i<numsegs;i++)
 	{
 		seg_t *seg = &segs[i];
+
 		if (seg->sidedef == NULL) continue;	// miniseg
 		int sidenum = int(seg->sidedef - sides);
 
@@ -694,46 +606,15 @@ static void PrepareSegs()
 // Initialize the level data for the GL renderer
 //
 //==========================================================================
+extern int restart;
 
 void gl_PreprocessLevel()
 {
 	int i;
 
-	static bool datadone=false;
-
-
-	if (!datadone)
-	{
-		datadone=true;
-		gl_InitData();
-	}
-
-
-	// Nasty: I can't rely upon the sidedef assignments because older ZDBSPs liked to screw them up
-	// if the sidedefs are compressed and both sides are the same.
-	for(i=0;i<numsegs;i++)
-	{
-		seg_t * seg=&segs[i];
-		if (seg->backsector == seg->frontsector && seg->linedef)
-		{
-			fixed_t d1=P_AproxDistance(seg->v1->x-seg->linedef->v1->x,seg->v1->y-seg->linedef->v1->y);
-			fixed_t d2=P_AproxDistance(seg->v2->x-seg->linedef->v1->x,seg->v2->y-seg->linedef->v1->y);
-
-			if (d2<d1)	// backside
-			{
-				seg->sidedef = seg->linedef->sidedef[1];
-			}
-			else	// front side
-			{
-				seg->sidedef = seg->linedef->sidedef[0];
-			}
-		}
-	}
-	
 	PrepareSegs();
 	PrepareSectorData();
 	InitVertexData();
-	SetupDependencies();
 	for(i=0;i<numsectors;i++) 
 	{
 		sectors[i].dirty = true;
@@ -742,11 +623,6 @@ void gl_PreprocessLevel()
 	}
 
 	gl_InitPortals();
-
-	for(i=0;i<numsides;i++) 
-	{
-		sides[i].dirty = true;
-	}
 
 	if (GLRenderer != NULL) 
 	{
@@ -767,6 +643,7 @@ void gl_PreprocessLevel()
 // Cleans up all the GL data for the last level
 //
 //==========================================================================
+
 void gl_CleanLevelData()
 {
 	// Dynamic lights must be destroyed before the sector information here is deleted.
@@ -806,17 +683,42 @@ void gl_CleanLevelData()
 		delete [] sectors[0].subsectors;
 		sectors[0].subsectors = NULL;
 	}
-	if (gamenodes && gamenodes!=nodes)
+	for (int i=0;i<numsubsectors;i++)
 	{
-		delete [] gamenodes;
-		gamenodes = NULL;
-		numgamenodes = 0;
+		for(int j=0;j<2;j++)
+		{
+			if (subsectors[i].portalcoverage[j].subsectors != NULL)
+			{
+				delete [] subsectors[i].portalcoverage[j].subsectors;
+				subsectors[i].portalcoverage[j].subsectors = NULL;
+			}
+		}
 	}
-	if (gamesubsectors && gamesubsectors!=subsectors)
+	for(unsigned i=0;i<portals.Size(); i++)
 	{
-		delete [] gamesubsectors;
-		gamesubsectors = NULL;
-		numgamesubsectors = 0;
+		delete portals[i];
 	}
+	portals.Clear();
 }
 
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+CCMD(listmapsections)
+{
+	for(int i=0;i<100;i++)
+	{
+		for (int j=0;j<numsubsectors;j++)
+		{
+			if (subsectors[j].mapsection == i)
+			{
+				Printf("Mapsection %d, sector %d, line %d\n", i, subsectors[j].render_sector->sectornum, int(subsectors[j].firstline->linedef-lines));
+				break;
+			}
+		}
+	}
+}

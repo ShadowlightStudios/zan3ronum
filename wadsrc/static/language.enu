@@ -112,6 +112,7 @@ PD_YELLOWCO = "You need a yellow card to activate this object";
 PD_BLUESO = "You need a blue skull to activate this object";
 PD_REDSO = "You need a red skull to activate this object";
 PD_YELLOWSO = "You need a yellow skull to activate this object";
+NEWSAVE = "<New Save Game>";
 GGSAVED = "game saved.";
 HUSTR_MSGU = "[Message unsent]";
 PICKUP_PISTOL_DROPPED = "Picked up a pistol.";
@@ -190,6 +191,19 @@ HUSTR_29 = "level 29: the living end";
 HUSTR_30 = "level 30: icon of sin";
 HUSTR_31 = "level 31: wolfenstein";
 HUSTR_32 = "level 32: grosse";
+HUSTR_31B = "level 31: idkfa";
+HUSTR_32B = "level 32: keen";
+HUSTR_33 = "level 33: betray";
+
+NHUSTR_1 = "level 1: the earth base";
+NHUSTR_2 = "level 2: the pain labs";
+NHUSTR_3 = "level 3: canyon of the dead";
+NHUSTR_4 = "level 4: hell mountain";
+NHUSTR_5 = "level 5: vivisection";
+NHUSTR_6 = "level 6: inferno of blood";
+NHUSTR_7 = "level 7: baron's banquet";
+NHUSTR_8 = "level 8: tomb of malevolence";
+NHUSTR_9 = "level 9: march of the demons";
 
 PHUSTR_1 = "level 1: congo";
 PHUSTR_2 = "level 2: well of souls";
@@ -268,6 +282,8 @@ AMSTR_FOLLOWON = "Follow Mode ON";
 AMSTR_FOLLOWOFF = "Follow Mode OFF";
 AMSTR_GRIDON = "Grid ON";
 AMSTR_GRIDOFF = "Grid OFF";
+AMSTR_TEXON = "Texture Mode ON";
+AMSTR_TEXOFF = "Texture Mode OFF";
 AMSTR_MARKEDSPOT = "Marked Spot";
 AMSTR_MARKSCLEARED = "All Marks Cleared";
 STSTR_MUS = "Music Change";
@@ -278,12 +294,14 @@ STSTR_KFAADDED = "Very Happy Ammo Added";
 STSTR_FAADDED = "Ammo (no keys) Added";
 STSTR_NCON = "No Clipping Mode ON";
 STSTR_NCOFF = "No Clipping Mode OFF";
+STSTR_NC2ON = "No Clipping Mode 2 ON";
 STSTR_BEHOLD = "inVuln, Str, Inviso, Rad, Allmap, or Lite-amp";
 STSTR_BEHOLDX = "Power-up Toggled";
 STSTR_CHOPPERS = "... doesn't suck - GM";
 STSTR_CLEV = "Changing Level...\n";
 TXT_BUDDHAON = "Buddha mode ON";
 TXT_BUDDHAOFF = "Buddha mode OFF";
+TXT_DEFAULTPICKUPMSG = "You got a pickup";
 
 E1TEXT =
 	"Once you beat the big badasses and\n"
@@ -536,6 +554,26 @@ T6TEXT =
 	"As you step off the transport, you hear\n"
 	"the stomp of a cyberdemon's iron shoe.";
 
+NERVETEXT =
+	"TROUBLE WAS BREWING AGAIN IN YOUR FAVORITE\n"
+	"VACATION SPOT... HELL. SOME CYBERDEMON\n"
+	"PUNK THOUGHT HE COULD TURN HELL INTO A\n"
+	"PERSONAL AMUSEMENT PARK, AND MAKE EARTH\n"
+	"THE TICKET BOOTH.\n"
+	"\n"
+	"WELL THAT HALF-ROBOT FREAK SHOW DIDN'T\n"
+	"KNOW WHO WAS COMING TO THE FAIR. THERE'S\n"
+	"NOTHING LIKE A SHOOTING GALLERY FULL OF\n"
+	"HELLSPAWN TO GET THE BLOOD PUMPING...\n"
+	"\n"
+	"NOW THE WALLS OF THE DEMON'S LABYRINTH\n"
+	"ECHO WITH THE SOUND OF HIS METALLIC LIMBS\n"
+	"HITTING THE FLOOR. HIS DEATH MOAN GURGLES\n"
+	"OUT THROUGH THE MESS YOU LEFT OF HIS FACE.\n"
+	"\n"
+	"THIS RIDE IS CLOSED.\n";
+
+
 // Cast list (must appear in this order)
 CC_ZOMBIE = "ZOMBIEMAN";
 CC_SHOTGUN = "SHOTGUN GUY";
@@ -617,6 +655,7 @@ OB_R_SPLASH = "%o should have stood back.";
 OB_ROCKET = "%o should have stood back.";
 OB_KILLEDSELF = "%o killed %hself.";
 
+OB_VOODOO = "%o was killed by the power of voodoo.";
 OB_STEALTHBABY = "%o thought %g saw an arachnotron.";
 OB_STEALTHVILE = "%o thought %g saw an archvile.";
 OB_STEALTHBARON = "%o thought %g saw a Baron of Hell.";
@@ -697,7 +736,7 @@ OB_MACIL = "%o should have never rebelled against Macil.";
 OB_REBEL = "%o was gunned down by a Rebel.";
 OB_BEGGAR = "%o was beaten to death by the poor.";
 OB_PEASANT = "%o should have never picked a fight with a civilian.";
-OB_ALIENSPECTE = "%o was struck down by the Spectre.";
+OB_ALIENSPECTRE = "%o was struck down by the Spectre.";
 OB_ENTITY = "%o felt the wrath of The One God.";
 OB_LOREMASTER = "%o couldn't escape from the Lore Master's grasp.";
 OB_PROGRAMMER = "%o was deleted by the Programmer.";
@@ -734,7 +773,7 @@ OB_MPCROSSBOW = "%o was pegged by %k's ethereal crossbow.";
 OB_MPBLASTER = "%o was blasted a new one by %k's dragon claw.";
 OB_MPSKULLROD = "%o got sent down under by %k's hellstaff.";
 OB_MPPHOENIXROD = "%o was scorched to cinders by %k's phoenix rod.";
-OB_MPMACE = "%o was bounced by $k's firemace.";
+OB_MPMACE = "%o was bounced by %k's firemace.";
 
 OB_MPPSTAFF = "%o got clapped by %k's charged staff.";
 OB_MPPGAUNTLETS = "%o was bled dry by %k's gauntlets.";
@@ -768,6 +807,7 @@ OB_MPMINIMISSILELAUNCHER = "%o gulped down %k's missile.";
 OB_MPSTRIFEGRENADE = "%o was inverted by %k's H-E grenade."; 
 OB_MPPHOSPHOROUSGRENADE = "%o took a flame bath in %k's phosphorous pyre."; 
 OB_MPFLAMETHROWER = "%o was barbecued by %k."; 
+OB_MPMAULER1 = "%o was zapped by %k.";
 OB_MPMAULER = "%o was viciously vaporized by %k."; 
 OB_MPSIGIL = "%o bowed down to the sheer power of %k's Sigil.";
 
@@ -775,6 +815,7 @@ OB_MPSIGIL = "%o bowed down to the sheer power of %k's Sigil.";
 OB_MONTELEFRAG = "%o was telefragged.";
 
 OB_DEFAULT = "%o died.";
+OB_MPDEFAULT = "%o was killed by %k.";
 OB_FRIENDLY1 = "%k mows down a teammate.";
 OB_FRIENDLY2 = "%k checks %p glasses.";
 OB_FRIENDLY3 = "%k gets a frag for the other team.";
@@ -787,6 +828,16 @@ STARTUP3 = "";
 STARTUP4 = "";
 STARTUP5 = "";
 
+// Scoreboard text
+SCORE_ITEMS = "ITEMS";
+SCORE_BONUS = "BONUS";
+SCORE_COLOR = "COLOR";
+SCORE_SECRET = "SECRET";
+SCORE_NAME = "NAME";
+SCORE_KILLS = "KILLS";
+SCORE_FRAGS = "FRAGS";
+SCORE_MISSED = "MISSED";
+SCORE_TOTAL = "TOTAL";
 
 // Item tags: Doom weapons
 TAG_FIST = "Brass Knuckles";
@@ -949,7 +1000,7 @@ TAG_SECURITYKEY = "Security Key";
 TAG_COREKEY = "Core Key";	// "New_Key1" in the Teaser
 TAG_MAULERKEY = "Mauler Key";	// "New_Key2" in the Teaser
 TAG_FACTORYKEY = "Factory Key";	// "New_Key3" in the Teaser
-TAG_MINEKEY = "Mine_Key";	// "New_Key4" in the Teaser
+TAG_MINEKEY = "Mine Key";	// "New_Key4" in the Teaser
 TAG_NEWKEY5 = "New Key5";
 TAG_ORACLEPASS = "Oracle Pass";
 
@@ -1411,6 +1462,8 @@ TXT_NEED_SILVERKEY = "You need the Silver Key";
 TXT_NEED_BRASSKEY = "You need the Brass Key";
 TXT_NEED_REDCRYSTAL = "You need the Red Crystal";
 TXT_NEED_BLUECRYSTAL = "You need the Blue Crystal";
+TXT_RETAIL_ONLY = "THIS AREA IS ONLY AVAILABLE IN THE RETAIL VERSION OF STRIFE";
+TXT_DOES_NOT_WORK = "That doesn't seem to work";
 
 // Strife Quest messages
 
@@ -1562,6 +1615,8 @@ TXT_RANDOM_PGUARD_10 = "If there is any honor inside that pathetic shell of a bo
 TXT_RANDOMGOODBYE_1 = "Bye!";
 TXT_RANDOMGOODBYE_2 = "Thanks, bye!";
 TXT_RANDOMGOODBYE_3 = "See you later!";
+TXT_HAVEENOUGH		= "You seem to have enough!";
+TXT_GOAWAY			= "Go away!";
 
 // Skills:
 
@@ -1641,7 +1696,16 @@ MNU_PLAYERSETUP		= "PLAYER SETUP";
 
 MNU_DELETESG		= "Do you really want to delete the savegame\n";
 
-MNU_ONLYREGISTERED	= "ONLY AVAILABLE IN THE REGISTERED VERSION";
+$ifgame(heretic) SWSTRING = "ONLY AVAILABLE IN THE REGISTERED VERSION";
+
+MNU_EPISODE			= "Select Episode";
+
+WI_FINISHED			= "finished";
+WI_ENTERING			= "Now entering:";
+
+AM_MONSTERS			= "Monsters:";
+AM_SECRETS			= "Secrets:";
+AM_ITEMS			= "Items:";
 
 // Bloodbath announcer
 
@@ -1708,17 +1772,17 @@ CE3TEXT = "Wonderful Job!";
 CE4TEXT = "Fantastic";
 
 CLOADNET = "you can't do load while in a net quest!\n\npress a key.";
-CQSPROMPT = "quicksave over your quest named\n\n'%s'?\n\npress y or n.";
-CQLOADNET = "you can't quickload during a netquest!\n\npress a key.";
-CQLPROMPT = "do you want to quickload the quest named\n\n'%s'?\n\npress y or n.";
+$ifgame(chex) QSPROMPT = "quicksave over your quest named\n\n'%s'?\n\npress y or n.";
+$ifgame(chex) QLOADNET = "you can't quickload during a netquest!\n\npress a key.";
+$ifgame(chex) QLPROMPT = "do you want to quickload the quest named\n\n'%s'?\n\npress y or n.";
 CNEWGAME = "you can't start a new quest\nwhile in a network quest.\n\npress a key.";
 
 CNIGHTMARE = "Careful, this will be tough.\nDo you wish to continue?\n\npress y or n.";
 
 CSWSTRING = "this is Chex(R) Quest. look for\n\nfuture levels at www.chexquest.com.\n\npress a key.";
 
-CNETEND = "you can't end a netquest!\n\npress a key.";
-CENDGAME = "are you sure you want to end the quest?\n\npress y or n.";
+$ifgame(chex) NETEND = "you can't end a netquest!\n\npress a key.";
+$ifgame(chex) ENDGAME = "are you sure you want to end the quest?\n\npress y or n.";
 
 GOTCHEXARMOR = "Picked up the Chex(R) Armor.";
 GOTSUPERCHEXARMOR = "Picked up the Super Chex(R) Armor!";
@@ -1753,11 +1817,11 @@ GOTLARGEZORCHER = "You got the Large Zorcher!";
 GOTSUPERLARGEZORCHER = "You got the Mega Zorcher!";
 GOTMINIZORCHER = "Picked up a Mini Zorcher.";
 
-STSTR_CDQDON = "Invincible Mode ON";
-STSTR_CDQDOFF = "Invincible Mode OFF";
-STSTR_CFAADDED = "Zorch Added";
-STSTR_CKFAADDED = "Super Zorch Added";
-STSTR_CCHOPPERS = "... Eat Chex(R)!";
+$ifgame(chex) STSTR_DQDON = "Invincible Mode ON";
+$ifgame(chex) STSTR_DQDOFF = "Invincible Mode OFF";
+$ifgame(chex) STSTR_FAADDED = "Zorch Added";
+$ifgame(chex) STSTR_KFAADDED = "Super Zorch Added";
+$ifgame(chex) STSTR_CHOPPERS = "... Eat Chex(R)!";
 
 OB_COMMONUS = "%o was slimed by a flemoid.";
 OB_BIPEDICUS = "%o was slimed by a bipedicus.";

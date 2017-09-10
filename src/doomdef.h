@@ -83,7 +83,9 @@ typedef enum
 	GS_TITLELEVEL,		// [RH] A combination of GS_LEVEL and GS_DEMOSCREEN
 
 	GS_FORCEWIPE = -1,
-	GS_FORCEWIPEFADE = -2
+	GS_FORCEWIPEFADE = -2,
+	GS_FORCEWIPEBURN = -3,
+	GS_FORCEWIPEMELT = -4
 } gamestate_t;
 
 extern	gamestate_t 	gamestate;
@@ -135,6 +137,7 @@ enum ESkillLevels
 #define KEY_F10 				0x44	// DIK_F10
 #define KEY_F11 				0x57	// DIK_F11
 #define KEY_F12 				0x58	// DIK_F12
+#define KEY_GRAVE				0x29	// DIK_GRAVE
 
 #define KEY_BACKSPACE			0x0e	// DIK_BACK
 
@@ -257,22 +260,20 @@ enum
 	DF_ITEMS_RESPAWN		= 1 << 14,	// Items other than invuln. and invis. respawn
 	DF_FAST_MONSTERS		= 1 << 15,	// Monsters are fast (replaces -fast parm)
 	DF_NO_JUMP				= 1 << 16,	// Don't allow jumping
-	// [BB] I don't want to change the dmflag numbers compared to 97D.
-	DF_YES_JUMP				= 1 << 29,
-	DF_NO_FREELOOK			= 1 << 17,	// Don't allow freelook
-	DF_RESPAWN_SUPER		= 1 << 18,	// Respawn invulnerability and invisibility
-	DF_NO_FOV				= 1 << 19,	// Only let the arbitrator set FOV (for all players)
-	DF_NO_COOP_WEAPON_SPAWN	= 1 << 20,	// Don't spawn multiplayer weapons in coop games
-	DF_NO_CROUCH			= 1 << 21,	// Don't allow crouching
-	// [BB] I don't want to change the dmflag numbers compared to 97D.
-	DF_YES_CROUCH			= 1 << 30,	//
-	DF_COOP_LOSE_INVENTORY	= 1 << 22,	// Lose all your old inventory when respawning in coop
-	DF_COOP_LOSE_KEYS		= 1 << 23,	// Lose keys when respawning in coop
-	DF_COOP_LOSE_WEAPONS	= 1 << 24,	// Lose weapons when respawning in coop
-	DF_COOP_LOSE_ARMOR		= 1 << 25,	// Lose armor when respawning in coop
-	DF_COOP_LOSE_POWERUPS	= 1 << 26,	// Lose powerups when respawning in coop
-	DF_COOP_LOSE_AMMO		= 1 << 27,	// Lose ammo when respawning in coop
-	DF_COOP_HALVE_AMMO		= 1 << 28,	// Lose half your ammo when respawning in coop (but not less than the normal starting amount)
+	DF_YES_JUMP				= 2 << 16,
+	DF_NO_FREELOOK			= 1 << 18,	// Don't allow freelook
+	DF_RESPAWN_SUPER		= 1 << 19,	// Respawn invulnerability and invisibility
+	DF_NO_FOV				= 1 << 20,	// Only let the arbitrator set FOV (for all players)
+	DF_NO_COOP_WEAPON_SPAWN	= 1 << 21,	// Don't spawn multiplayer weapons in coop games
+	DF_NO_CROUCH			= 1 << 22,	// Don't allow crouching
+	DF_YES_CROUCH			= 2 << 22,	//
+	DF_COOP_LOSE_INVENTORY	= 1 << 24,	// Lose all your old inventory when respawning in coop
+	DF_COOP_LOSE_KEYS		= 1 << 25,	// Lose keys when respawning in coop
+	DF_COOP_LOSE_WEAPONS	= 1 << 26,	// Lose weapons when respawning in coop
+	DF_COOP_LOSE_ARMOR		= 1 << 27,	// Lose armor when respawning in coop
+	DF_COOP_LOSE_POWERUPS	= 1 << 28,	// Lose powerups when respawning in coop
+	DF_COOP_LOSE_AMMO		= 1 << 29,	// Lose ammo when respawning in coop
+	DF_COOP_HALVE_AMMO		= 1 << 30,	// Lose half your ammo when respawning in coop (but not less than the normal starting amount)
 };
 
 // [BC] More dmflags. w00p!
@@ -305,6 +306,7 @@ enum
 	DF2_NOAUTOAIM			= 1 << 23,	// Players cannot use autoaim.
 	DF2_DONTCHECKAMMO		= 1 << 24,	// Don't Check ammo when switching weapons.
 	DF2_KILLBOSSMONST		= 1 << 25,	// Kills all monsters spawned by a boss cube when the boss dies
+	DF2_NOCOUNTENDMONST		= 1 << 26,	// Do not count monsters in 'end level when dying' sectors towards kill count
 };
 
 // [BB] Zandronum dmflags.
@@ -337,7 +339,7 @@ enum
 	// [BB] Enforces some Gl rendering options to their default values.
 	ZADF_FORCE_GL_DEFAULTS		= 1 << 8,
 
-	// [BB] P_RadiusAttack doesn't give players any z-momentum if the attack was made by a player. This essentially disables rocket jumping.
+	// [BB] P_RadiusAttack doesn't give players any z-velocity if the attack was made by a player. This essentially disables rocket jumping.
 	ZADF_NO_ROCKET_JUMPING		= 1 << 9,
 
 	// [BB] Award actual damage dealt instead of kills.
@@ -355,11 +357,26 @@ enum
 
 	// [TP] Like ZADF_UNBLOCK_PLAYERS except only for teammates.
 	ZADF_UNBLOCK_ALLIES = 1 << 14,
+
+	// [TP] No dropping allowed.
+	ZADF_NODROP = 1 << 15,
+
+	// [Zalewa] Don't reset map when all players die in survival.
+	// Just respawn the players with fresh set of lives and allow
+	// the ones in queue to join.
+	ZADF_SURVIVAL_NO_MAP_RESET_ON_DEATH = 1 << 16,
+
+	// Affects game modes where sv_maxlives is honored by the game.
+	// If set, players who become dead spectators (run out of lives) will still
+	// keep inventory in accordance to DF_COOP_LOSE_* and DF_COOP_HALVE_AMMO flags.
+	// If unset, players who lose all lives will lose entire inventory
+	// regardless of the DF_COOP_* flags.
+	ZADF_DEAD_PLAYERS_CAN_KEEP_INVENTORY = 1 << 17,
 };
 
 // [RH] Compatibility flags.
 // [RC] NOTE: If adding a flag, be sure to add a stub in serverconsole_dmflags.cpp.
-enum
+enum : unsigned int
 {
 	COMPATF_SHORTTEX		= 1 << 0,	// Use Doom's shortest texture around behavior?
 	COMPATF_STAIRINDEX		= 1 << 1,	// Don't fix loop index for stair building?
@@ -392,6 +409,12 @@ enum
 	COMPATF_HITSCAN			= 1 << 28,	// Hitscans use original blockmap anf hit check code.
 	COMPATF_LIGHT			= 1 << 29,	// Find neighboring light level like Doom
 	COMPATF_POLYOBJ			= 1 << 30,	// Draw polyobjects the old fashioned way
+	COMPATF_MASKEDMIDTEX	= 1u << 31,	// Ignore compositing when drawing masked midtextures
+
+	COMPATF2_BADANGLES		= 1 << 0,	// It is impossible to face directly NSEW.
+	COMPATF2_FLOORMOVE		= 1 << 1,	// Use the same floor motion behavior as Doom.
+	// [BB] Out of order ZDoom backport.
+	COMPATF2_PUSHWINDOW		= 1 << 6,	// Disable the window check in CheckForPushSpecial()
 };
 
 // [BB] Zandronum compatibility flags.
@@ -430,6 +453,8 @@ enum
 	ZACOMPATF_AUTOAIM = 1 << 10,
 	// [CK] Vanilla doom had silent west spawns
 	ZACOMPATF_SILENT_WEST_SPAWNS = 1 << 11,
+	// [BB] Restore the jumping behavior known from Skulltag. This reverts the jumping change from ZDoom SVN revision 2970.
+	ZACOMPATF_SKULLTAG_JUMPING		= 1 << 12,
 
 	// Limited movement in the air.
 	ZACOMPATF_LIMITED_AIRMOVEMENT	= 1 << 17,
@@ -469,6 +494,10 @@ enum
 	BCOMPATF_SETSLOPEOVERFLOW	= 1 << 0,	// SetSlope things can overflow
 	BCOMPATF_RESETPLAYERSPEED	= 1 << 1,	// Set player speed to 1.0 when changing maps
 	BCOMPATF_VILEGHOSTS			= 1 << 2,	// Monsters' radius and height aren't restored properly when resurrected.
+	BCOMPATF_BADTELEPORTERS		= 1 << 3,	// Ignore tags on Teleport specials
+	BCOMPATF_BADPORTALS			= 1 << 4,	// Restores the old unstable portal behavior
+	BCOMPATF_REBUILDNODES		= 1 << 5,	// Force node rebuild
+	BCOMPATF_LINKFROZENPROPS	= 1 << 6,	// Clearing PROP_TOTALLYFROZEN or PROP_FROZEN also clears the other
 };
 
 // phares 3/20/98:

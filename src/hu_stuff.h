@@ -28,17 +28,27 @@ class player_t;
 // Globally visible constants.
 //
 #define HU_FONTSTART	BYTE('!')		// the first font characters
-#define HU_FONTEND		BYTE('ß')		// the last font characters
+#define HU_FONTEND		BYTE('\377')	// the last font characters
 
 // Calculate # of glyphs in font.
 #define HU_FONTSIZE		(HU_FONTEND - HU_FONTSTART + 1)
-/*
+/* [BB] Zandronum doesn't use any of this.
 //
 // Chat routines
 //
 
+void CT_Init (void);
+bool CT_Responder (event_t* ev);
+void CT_Drawer (void);
+
+extern int chatmodeon;
+
 // [RH] Draw deathmatch scores
 
 void HU_DrawScores (player_t *me);
+void HU_GetPlayerWidths(int &maxnamewidth, int &maxscorewidth, int &maxiconheight);
+void HU_DrawColorBar(int x, int y, int height, int playernum);
+int HU_GetRowColor(player_t *player, bool hightlight);
 */
+
 #endif

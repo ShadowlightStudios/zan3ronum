@@ -31,9 +31,6 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <time.h>
-#ifdef __APPLE__
-#include <CoreServices/CoreServices.h>
-#endif
 
 #include "doomtype.h"
 #include "version.h"
@@ -88,8 +85,6 @@ CVAR(String, screenshot_type, "png", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 CVAR(String, screenshot_dir, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 EXTERN_CVAR(Bool, longsavemessages);
 
-extern void FreeKeySections();
-
 static long ParseCommandLine (const char *args, int *argc, char **argv);
 
 //
@@ -131,7 +126,8 @@ int M_ReadFile (char const *name, BYTE **buffer)
 	handle = open (name, O_RDONLY | O_BINARY, 0666);
 	if (handle == -1)
 		I_Error ("Couldn't read file %s", name);
-	if (fstat (handle,&fileinfo) == -1)
+	// [BL] Use stat instead of fstat for v140_xp hack
+	if (stat (name,&fileinfo) == -1)
 		I_Error ("Couldn't read file %s", name);
 	length = fileinfo.st_size;
 	buf = new BYTE[length];
@@ -160,10 +156,38 @@ bool M_DoesFileExist( const char *pszFileName )
 	handle = open (pszFileName, O_RDONLY | O_BINARY, 0666);
 	if (handle == -1)
 		return ( false );
-	if (fstat (handle,&fileinfo) == -1)
+	// [BL/BB] Use stat instead of fstat for v140_xp hack
+	if (stat (pszFileName,&fileinfo) == -1)
 		return ( false );
 
 	return ( true );
+}
+
+//
+// M_ReadFile (same as above but use malloc instead of new to allocate the buffer.)
+//
+int M_ReadFileMalloc (char const *name, BYTE **buffer)
+{
+	int handle, count, length;
+	struct stat fileinfo;
+	BYTE *buf;
+
+	handle = open (name, O_RDONLY | O_BINARY, 0666);
+	if (handle == -1)
+		I_Error ("Couldn't read file %s", name);
+	// [BL] Use stat instead of fstat for v140_xp hack
+	if (stat (name,&fileinfo) == -1)
+		I_Error ("Couldn't read file %s", name);
+	length = fileinfo.st_size;
+	buf = (BYTE*)M_Malloc(length);
+	count = read (handle, buf, length);
+	close (handle);
+
+	if (count < length)
+		I_Error ("Couldn't read file %s", name);
+
+	*buffer = buf;
+	return length;
 }
 
 //---------------------------------------------------------------------------
@@ -359,33 +383,6 @@ static long ParseCommandLine (const char *args, int *argc, char **argv)
 }
 
 
-#if defined(unix)
-FString GetUserFile (const char *file)
-{
-	FString path;
-	struct stat info;
-
-	path = NicePath("~/" GAME_DIR "/");
-	if (stat (path, &info) == -1)
-	{
-		if (mkdir (path, S_IRUSR | S_IWUSR | S_IXUSR) == -1)
-		{
-			I_FatalError ("Failed to create %s directory:\n%s",
-				path.GetChars(), strerror (errno));
-		}
-	}
-	else
-	{
-		if (!S_ISDIR(info.st_mode))
-		{
-			I_FatalError ("%s must be a directory", path.GetChars());
-		}
-	}
-	path += file;
-	return path;
-}
-#endif
-
 //
 // M_SaveDefaults
 //
@@ -401,9 +398,9 @@ bool M_SaveDefaults (const char *filename)
 		GameConfig->ChangePathName (filename);
 	}
 	GameConfig->ArchiveGlobalData ();
-	if (GameNames[gameinfo.gametype] != NULL)
+	if (gameinfo.ConfigName.IsNotEmpty())
 	{
-		GameConfig->ArchiveGameData (GameNames[gameinfo.gametype]);
+		GameConfig->ArchiveGameData (gameinfo.ConfigName);
 	}
 	success = GameConfig->WriteConfigFile ();
 	if (filename != NULL)
@@ -425,6 +422,10 @@ void M_SaveDefaultsFinal ()
 
 CCMD (writeini)
 {
+	// [BB] This function may not be used by ConsoleCommand.
+	if ( ACS_IsCalledFromConsoleCommand( ))
+		return;
+
 	const char *filename = (argv.argc() == 1) ? NULL : argv[1];
 	if (!M_SaveDefaults (filename))
 	{
@@ -444,7 +445,6 @@ void M_LoadDefaults ()
 {
 	GameConfig = new FGameConfigFile;
 	GameConfig->DoGlobalSetup ();
-	atterm (FreeKeySections);
 	atterm (M_SaveDefaultsFinal);
 }
 
@@ -648,7 +648,7 @@ static bool FindFreeName (FString &fullname, const char *extension)
 
 	for (i = 0; i <= 9999; i++)
 	{
-		const char *gamename = GameNames[gameinfo.gametype];
+		const char *gamename = gameinfo.ConfigName;
 
 		time_t now;
 		tm *tm;
@@ -693,50 +693,23 @@ void M_ScreenShot (const char *filename)
 	// find a file name to save it to
 	if (filename == NULL || filename[0] == '\0')
 	{
-#if !defined(unix) && !defined(__APPLE__)
-		if (Args->CheckParm ("-cdrom"))
+		size_t dirlen;
+		autoname = Args->CheckValue("-shotdir");
+		if (autoname.IsEmpty())
 		{
-			autoname = CDROM_DIR "\\";
+			autoname = screenshot_dir;
 		}
-		else
-#endif
+		dirlen = autoname.Len();
+		if (dirlen == 0)
 		{
-			size_t dirlen;
-			autoname = Args->CheckValue("-shotdir");
-			if (autoname.IsEmpty())
-			{
-				autoname = screenshot_dir;
-			}
+			autoname = M_GetScreenshotsPath();
 			dirlen = autoname.Len();
-			if (dirlen == 0)
+		}
+		if (dirlen > 0)
+		{
+			if (autoname[dirlen-1] != '/' && autoname[dirlen-1] != '\\')
 			{
-#ifdef unix
-				// [BB] Use GAMENAMELOWERCASE here.
-				autoname = "~/." GAMENAMELOWERCASE "/screenshots/";
-#elif defined(__APPLE__)
-				char cpath[PATH_MAX];
-				FSRef folder;
-				
-				if (noErr == FSFindFolder(kUserDomain, kDocumentsFolderType, kCreateFolder, &folder) &&
-					noErr == FSRefMakePath(&folder, (UInt8*)cpath, PATH_MAX))
-				{
-					autoname << cpath << "/" GAME_DIR "/Screenshots/";
-				}
-				else
-				{
-					autoname = "~";
-				}
-#else
-				autoname = progdir;
-#endif
-			}
-			else if (dirlen > 0)
-			{
-				autoname = screenshot_dir;
-				if (autoname[dirlen-1] != '/' && autoname[dirlen-1] != '\\')
-				{
-					autoname += '/';
-				}
+				autoname += '/';
 			}
 		}
 		autoname = NicePath(autoname);
@@ -813,4 +786,34 @@ CCMD (screenshot)
 		G_ScreenShot (NULL);
 	else
 		G_ScreenShot (argv[1]);
+}
+
+//
+// M_ZlibError
+//
+FString M_ZLibError(int zerr)
+{
+	if (zerr >= 0)
+	{
+		return "OK";
+	}
+	else if (zerr < -6)
+	{
+		FString out;
+		out.Format("%d", zerr);
+		return out;
+	}
+	else
+	{
+		static const char *errs[6] =
+		{
+			"Errno",
+			"Stream Error",
+			"Data Error",
+			"Memory Error",
+			"Buffer Error",
+			"Version Error"
+		};
+		return errs[-zerr - 1];
+	}
 }

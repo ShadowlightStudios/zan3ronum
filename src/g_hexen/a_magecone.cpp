@@ -29,12 +29,12 @@ class AFrostMissile : public AActor
 {
 	DECLARE_CLASS (AFrostMissile, AActor)
 public:
-	int DoSpecialDamage (AActor *victim, int damage);
+	int DoSpecialDamage (AActor *victim, int damage, FName damagetype);
 };
 
 IMPLEMENT_CLASS (AFrostMissile)
 
-int AFrostMissile::DoSpecialDamage (AActor *victim, int damage)
+int AFrostMissile::DoSpecialDamage (AActor *victim, int damage, FName damagetype)
 {
 	if (special2 > 0)
 	{
@@ -74,8 +74,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireConePL1)
 	S_Sound (self, CHAN_WEAPON, "MageShardsFire", 1, ATTN_NORM);
 
 	// [BC] Weapons are handled by the server.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -94,7 +93,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireConePL1)
 			P_DamageMobj (linetarget, self, self, damage, NAME_Ice);
 
 			// [BC] Apply spread.
-			if ( player->cheats & CF_SPREAD )
+			if ( player->cheats2 & CF2_SPREAD )
 				P_DamageMobj (linetarget, self, self, damage * 2, NAME_Ice);
 
 			conedone = true;
@@ -116,7 +115,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FireConePL1)
 		}
 
 		// [BC] Apply spread.
-		if ( player->cheats & CF_SPREAD )
+		if ( player->cheats2 & CF2_SPREAD )
 		{
 			mo = P_SpawnPlayerMissile (self, RUNTIME_CLASS(AFrostMissile), self->angle + ( ANGLE_45 / 3 ));
 			if (mo)
@@ -154,8 +153,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_ShedShard)
 	int spermcount = self->special2;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}

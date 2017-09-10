@@ -52,10 +52,11 @@
 #include "m_random.h"
 #include "p_conversation.h"
 #include "a_strifeglobal.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "p_3dmidtex.h"
 #include "d_net.h"
 #include "d_event.h"
+#include "r_data/colormaps.h"
 // [BC] New #includes.
 #include "cooperative.h"
 #include "deathmatch.h"
@@ -77,6 +78,19 @@
 #define CRUSHTYPE(a)	((a)==1? false : (a)==2? true : gameinfo.gametype == GAME_Hexen)
 
 static FRandom pr_glass ("GlassBreak");
+
+// There are aliases for the ACS specials that take names instead of numbers.
+// This table maps them onto the real number-based specials.
+BYTE NamedACSToNormalACS[7] =
+{
+	ACS_Execute,
+	ACS_Suspend,
+	ACS_Terminate,
+	ACS_LockedExecute,
+	ACS_LockedExecuteDoor,
+	ACS_ExecuteWithResult,
+	ACS_ExecuteAlways,
+};
 
 FName MODtoDamageType (int mod)
 {
@@ -248,8 +262,9 @@ FUNC(LS_Generic_Door)
 {
 	int tag, lightTag;
 	DDoor::EVlDoor type;
+	bool boomgen = false;
 
-	switch (arg2 & 127)
+	switch (arg2 & 63)
 	{
 		case 0: type = DDoor::doorRaise;			break;
 		case 1: type = DDoor::doorOpen;				break;
@@ -257,6 +272,8 @@ FUNC(LS_Generic_Door)
 		case 3: type = DDoor::doorClose;			break;
 		default: return false;
 	}
+	// Boom doesn't allow manual generalized doors to be activated while they move
+	if (arg2 & 64) boomgen = true;
 	if (arg2 & 128)
 	{
 		// New for 2.0.58: Finally support BOOM's local door light effect
@@ -268,7 +285,7 @@ FUNC(LS_Generic_Door)
 		tag = arg0;
 		lightTag = 0;
 	}
-	return EV_DoDoor (type, ln, it, tag, SPEED(arg1), OCTICS(arg3), arg4, lightTag);
+	return EV_DoDoor (type, ln, it, tag, SPEED(arg1), OCTICS(arg3), arg4, lightTag, boomgen);
 }
 
 FUNC(LS_Floor_LowerByValue)
@@ -284,9 +301,9 @@ FUNC(LS_Floor_LowerToLowest)
 }
 
 FUNC(LS_Floor_LowerToHighest)
-// Floor_LowerToHighest (tag, speed, adjust)
+// Floor_LowerToHighest (tag, speed, adjust, hereticlower)
 {
-	return EV_DoFloor (DFloor::floorLowerToHighest, ln, arg0, SPEED(arg1), (arg2-128)*FRACUNIT, 0, 0, false);
+	return EV_DoFloor (DFloor::floorLowerToHighest, ln, arg0, SPEED(arg1), (arg2-128)*FRACUNIT, 0, 0, false, arg3==1);
 }
 
 FUNC(LS_Floor_LowerToNearest)
@@ -317,6 +334,12 @@ FUNC(LS_Floor_RaiseAndCrush)
 // Floor_RaiseAndCrush (tag, speed, crush, crushmode)
 {
 	return EV_DoFloor (DFloor::floorRaiseAndCrush, ln, arg0, SPEED(arg1), 0, arg2, 0, CRUSHTYPE(arg3));
+}
+
+FUNC(LS_Floor_RaiseAndCrushDoom)
+// Floor_RaiseAndCrushDoom (tag, speed, crush, crushmode)
+{
+	return EV_DoFloor (DFloor::floorRaiseAndCrushDoom, ln, arg0, SPEED(arg1), 0, arg2, 0, CRUSHTYPE(arg3));
 }
 
 FUNC(LS_Floor_RaiseByValueTimes8)
@@ -557,6 +580,12 @@ FUNC(LS_Ceiling_LowerAndCrush)
 	return EV_DoCeiling (DCeiling::ceilLowerAndCrush, ln, arg0, SPEED(arg1), SPEED(arg1), 0, arg2, 0, 0, CRUSHTYPE(arg3));
 }
 
+FUNC(LS_Ceiling_LowerAndCrushDist)
+// Ceiling_LowerAndCrush (tag, speed, crush, dist, crushtype)
+{
+	return EV_DoCeiling (DCeiling::ceilLowerAndCrushDist, ln, arg0, SPEED(arg1), SPEED(arg1), arg3*FRACUNIT, arg2, 0, 0, CRUSHTYPE(arg4));
+}
+
 FUNC(LS_Ceiling_CrushStop)
 // Ceiling_CrushStop (tag)
 {
@@ -617,6 +646,12 @@ FUNC(LS_Ceiling_CrushAndRaiseA)
 // Ceiling_CrushAndRaiseA (tag, dnspeed, upspeed, damage, crushtype)
 {
 	return EV_DoCeiling (DCeiling::ceilCrushAndRaise, ln, arg0, SPEED(arg1), SPEED(arg2), 0, arg3, 0, 0, CRUSHTYPE(arg4));
+}
+
+FUNC(LS_Ceiling_CrushAndRaiseDist)
+// Ceiling_CrushAndRaiseDist (tag, dist, speed, damage, crushtype)
+{
+	return EV_DoCeiling (DCeiling::ceilCrushAndRaiseDist, ln, arg0, SPEED(arg2), SPEED(arg2), arg1*FRACUNIT, arg3, 0, 0, CRUSHTYPE(arg4));
 }
 
 FUNC(LS_Ceiling_CrushAndRaiseSilentA)
@@ -858,9 +893,9 @@ FUNC( LS_Teleport_NoStop )
 }
 
 FUNC(LS_Teleport_NoFog)
-// Teleport_NoFog (tid, useang, sectortag)
+// Teleport_NoFog (tid, useang, sectortag, keepheight)
 {
-	return EV_Teleport (arg0, arg2, ln, backSide, it, false, false, !arg1);
+	return EV_Teleport (arg0, arg2, ln, backSide, it, false, false, !arg1, true, !!arg3);
 }
 
 FUNC(LS_Teleport_ZombieChanger)
@@ -904,8 +939,7 @@ FUNC(LS_Teleport_EndGame)
 {
 	if (!backSide && CheckIfExitIsGood (it, NULL))
 	{
-		G_SetForEndGame (level.nextmap);
-		G_ExitLevel (0, false);
+		G_ChangeLevel(NULL, 0, 0);
 		return true;
 	}
 	return false;
@@ -953,9 +987,9 @@ static void ThrustThingHelper (AActor *it, angle_t angle, int force, INTBOOL nol
 		it->vely = clamp<fixed_t> (it->vely, -MAXMOVE, MAXMOVE);
 	}
 
-	// [BC] If we're the server, update the thing's momentum.
-	// [Dusk] Use SERVER_UpdateThingMomentum
-	SERVER_UpdateThingMomentum( it, false );
+	// [BC] If we're the server, update the thing's velocity.
+	// [Dusk] Use SERVER_UpdateThingVelocity
+	SERVER_UpdateThingVelocity( it, false );
 }
 
 FUNC(LS_ThrustThingZ)	// [BC]
@@ -983,11 +1017,11 @@ FUNC(LS_ThrustThingZ)	// [BC]
 					victim->velz += thrust;
 			}
 
-			// [BC] If we're the server, update the thing's momentum.
+			// [BC] If we're the server, update the thing's velocity.
 			// [BB] Unfortunately there are sync issues, if we don't also update the actual position.
 			// Is there a way to fix this without sending the position?
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_MoveThingExact( victim, CM_Z|CM_MOMZ );
+				SERVERCOMMANDS_MoveThingExact( victim, CM_Z|CM_VELZ );
 		}
 		return true;
 	}
@@ -1002,9 +1036,9 @@ FUNC(LS_ThrustThingZ)	// [BC]
 				it->velz += thrust;
 		}
 
-		// [BC] If we're the server, update the thing's momentum.
+		// [BC] If we're the server, update the thing's velocity.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_UpdateThingMomentum ( it, true, false );
+			SERVER_UpdateThingVelocity ( it, true, false );
 
 		return true;
 	}
@@ -1297,22 +1331,36 @@ FUNC(LS_Thing_Remove)
 }
 
 FUNC(LS_Thing_Destroy)
-// Thing_Destroy (tid, extreme)
+// Thing_Destroy (tid, extreme, tag)
 {
-	if (arg0 == 0)
+	AActor *actor;
+
+	if (arg0 == 0 && arg2 == 0)
 	{
 		P_Massacre ();
+	}
+	else if (arg0 == 0)
+	{
+		TThinkerIterator<AActor> iterator;
+		
+		actor = iterator.Next ();
+		while (actor)
+		{
+			AActor *temp = iterator.Next ();
+			if (actor->flags & MF_SHOOTABLE && actor->Sector->tag == arg2)
+				P_DamageMobj (actor, NULL, it, arg1 ? TELEFRAG_DAMAGE : actor->health, NAME_None);
+			actor = temp;
+		}
 	}
 	else
 	{
 		FActorIterator iterator (arg0);
-		AActor *actor;
 
 		actor = iterator.Next ();
 		while (actor)
 		{
 			AActor *temp = iterator.Next ();
-			if (actor->flags & MF_SHOOTABLE)
+			if (actor->flags & MF_SHOOTABLE && (arg2 == 0 || actor->Sector->tag == arg2))
 				P_DamageMobj (actor, NULL, it, arg1 ? TELEFRAG_DAMAGE : actor->health, NAME_None);
 			actor = temp;
 		}
@@ -1579,7 +1627,7 @@ FUNC(LS_Thing_Stop)
 
 			// [Dusk] tell the clients about this
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_MoveThingExact( it, ( ( it->player == NULL ) ? (CM_X|CM_Y|CM_Z) : 0 )|CM_MOMX|CM_MOMY|CM_MOMZ );
+				SERVERCOMMANDS_MoveThingExact( it, ( ( it->player == NULL ) ? (CM_X|CM_Y|CM_Z) : 0 )|CM_VELX|CM_VELY|CM_VELZ );
 
 			ok = true;
 		}
@@ -1595,7 +1643,7 @@ FUNC(LS_Thing_Stop)
 
 			// [Dusk] tell the clients about this
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_MoveThingExact( target, ( ( target->player == NULL ) ? (CM_X|CM_Y|CM_Z) : 0 )|CM_MOMX|CM_MOMY|CM_MOMZ );
+				SERVERCOMMANDS_MoveThingExact( target, ( ( target->player == NULL ) ? (CM_X|CM_Y|CM_Z) : 0 )|CM_VELX|CM_VELY|CM_VELZ );
 
 			ok = true;
 		}
@@ -1618,9 +1666,21 @@ FUNC(LS_Thing_SetGoal)
 		ok = true;
 		if (self->flags & MF_SHOOTABLE)
 		{
+			if (self->target == self->goal)
+			{ // Targeting a goal already? -> don't target it anymore.
+			  // A_Look will set it to the goal, presuming no real targets
+			  // come into view by then.
+				self->target = NULL;
+			}
 			self->goal = goal;
-			if (arg3 == 0) self->flags5 &=~ MF5_CHASEGOAL;
-			else self->flags5 |= MF5_CHASEGOAL;
+			if (arg3 == 0)
+			{
+				self->flags5 &= ~MF5_CHASEGOAL;
+			}
+			else
+			{
+				self->flags5 |= MF5_CHASEGOAL;
+			}
 			if (self->target == NULL)
 			{
 				self->reactiontime = arg2 * TICRATE;
@@ -1692,48 +1752,62 @@ FUNC(LS_ACS_Execute)
 // ACS_Execute (script, map, s_arg1, s_arg2, s_arg3)
 {
 	level_info_t *info;
+	const char *mapname = NULL;
+	int args[3] = { arg2, arg3, arg4 };
+	int flags = (backSide ? ACS_BACKSIDE : 0);
 
 	// [BC] If this script is client side, just let clients execute it themselves.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
 		( ACS_IsScriptClientSide( arg0 )))
 	{
-		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), arg1, backSide, arg2, arg3, arg4, false );
+		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), arg1, backSide, args, 3, false );
 		return ( true );
 	}
 
 	if (arg1 == 0)
 	{
-		return P_StartScript (it, ln, arg0, level.mapname, backSide, arg2, arg3, arg4, false, false);
+		mapname = level.mapname;
 	}
-	else if ((info = FindLevelByNum (arg1)) )
+	else if ((info = FindLevelByNum(arg1)) != NULL)
 	{
-		return P_StartScript (it, ln, arg0, info->mapname, backSide, arg2, arg3, arg4, false, false);
+		mapname = info->mapname;
 	}
-	else return false;
+	else
+	{
+		return false;
+	}
+	return P_StartScript(it, ln, arg0, mapname, args, 3, flags);
 }
 
 FUNC(LS_ACS_ExecuteAlways)
 // ACS_ExecuteAlways (script, map, s_arg1, s_arg2, s_arg3)
 {
 	level_info_t *info;
+	const char *mapname = NULL;
+	int args[3] = { arg2, arg3, arg4 };
+	int flags = (backSide ? ACS_BACKSIDE : 0) | ACS_ALWAYS;
 
 	// [BC] If this script is client side, just let clients execute it themselves.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
 		( ACS_IsScriptClientSide( arg0 )))
 	{
-		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), arg1, backSide, arg2, arg3, arg4, true );
+		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), arg1, backSide, args, 3, true );
 		return ( true );
 	}
 
 	if (arg1 == 0)
 	{
-		return P_StartScript (it, ln, arg0, level.mapname, backSide, arg2, arg3, arg4, true, false);
+		mapname = level.mapname;
 	}
-	else if ((info = FindLevelByNum (arg1)) )
+	else if ((info = FindLevelByNum(arg1)) != NULL)
 	{
-		return P_StartScript (it, ln, arg0, info->mapname, backSide, arg2, arg3, arg4, true, false);
+		mapname = info->mapname;
 	}
-	else return false;
+	else
+	{
+		return false;
+	}
+	return P_StartScript(it, ln, arg0, mapname, args, 3, flags);
 }
 
 FUNC(LS_ACS_LockedExecute)
@@ -1755,20 +1829,23 @@ FUNC(LS_ACS_LockedExecuteDoor)
 }
 
 FUNC(LS_ACS_ExecuteWithResult)
-// ACS_ExecuteWithResult (script, s_arg1, s_arg2, s_arg3)
+// ACS_ExecuteWithResult (script, s_arg1, s_arg2, s_arg3, s_arg4)
 {
 	// This is like ACS_ExecuteAlways, except the script is always run on
 	// the current map, and the return value is whatever the script sets
 	// with SetResultValue.
+	int args[4] = { arg1, arg2, arg3, arg4 };
+	int flags = (backSide ? ACS_BACKSIDE : 0) | ACS_ALWAYS | ACS_WANTRESULT;
+
 	// [BC] If this script is client side, just let clients execute it themselves.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
 		( ACS_IsScriptClientSide( arg0 )))
 	{
-		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), 0, backSide, arg2, arg3, arg4, true );
+		SERVERCOMMANDS_ACSScriptExecute( arg0, it, LONG( ln - lines ), 0, backSide, args, 4, true );
 		return ( false );
 	}
 
-	return P_StartScript (it, ln, arg0, level.mapname, backSide, arg1, arg2, arg3, true, true);
+	return P_StartScript (it, ln, arg0, level.mapname, args, 4, flags);
 }
 
 FUNC(LS_ACS_Suspend)
@@ -1810,10 +1887,18 @@ FUNC(LS_FloorAndCeiling_RaiseByValue)
 }
 
 FUNC(LS_FloorAndCeiling_LowerRaise)
-// FloorAndCeiling_LowerRaise (tag, fspeed, cspeed)
+// FloorAndCeiling_LowerRaise (tag, fspeed, cspeed, boomemu)
 {
-	return EV_DoCeiling (DCeiling::ceilRaiseToHighest, ln, arg0, SPEED(arg2), 0, 0, 0, 0, 0, false) |
-		   EV_DoFloor     (DFloor::floorLowerToLowest, ln, arg0, SPEED(arg1), 0, 0, 0, false);
+	bool res = EV_DoCeiling (DCeiling::ceilRaiseToHighest, ln, arg0, SPEED(arg2), 0, 0, 0, 0, 0, false);
+	// The switch based Boom equivalents of FloorandCeiling_LowerRaise do incorrect checks
+	// which cause the floor only to move when the ceiling fails to do so.
+	// To avoid problems with maps that have incorrect args this only uses a 
+	// more or less unintuitive value for the fourth arg to trigger Boom's broken behavior
+	if (arg3 != 1998 || !res)	// (1998 for the year in which Boom was released... :P)
+	{
+		res |= EV_DoFloor (DFloor::floorLowerToLowest, ln, arg0, SPEED(arg1), 0, 0, 0, false);
+	}
+	return res;
 }
 
 FUNC(LS_Elevator_MoveToFloor)
@@ -1996,7 +2081,7 @@ FUNC( LS_Player_SetTeam )
 // Player_SetTeam( team id )
 {
 	// Don't set teams on the client end.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return ( false );
 
 	// Break if we don't have a player.
@@ -2018,7 +2103,7 @@ FUNC( LS_Team_Score )
 // Team_Score (int howmuch, bool nogrin)
 {
 	// Scoring is not client side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return ( false );
 
 	// Nothing to do if we're not in teamgame mode.
@@ -2039,7 +2124,7 @@ FUNC( LS_Team_GivePoints )
 // Team_GivePoints( int iTeam, int iHowMuch, bool bAnnounce )
 {
 	// Scoring is not client side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return ( false );
 
 	// Nothing to do if we're not in teamgame mode.
@@ -2139,13 +2224,30 @@ FUNC(LS_Sector_SetFriction)
 	return true;
 }
 
+FUNC(LS_Sector_SetTranslucent)
+// Sector_SetTranslucent (tag, plane, amount, type)
+{
+	if (arg0 != 0)
+	{
+		int secnum = -1;
+
+		while ((secnum = P_FindSectorFromTag (arg0, secnum)) >= 0)
+		{
+			sectors[secnum].SetAlpha(arg1, Scale(arg2, OPAQUE, 255));
+			sectors[secnum].ChangeFlags(arg1, ~PLANEF_ADDITIVE, arg3? PLANEF_ADDITIVE:0);
+		}
+		return true;
+	}
+	return false;
+}
+
 FUNC(LS_Sector_SetLink)
 // Sector_SetLink (controltag, linktag, floor/ceiling, movetype)
 {
 	if (arg0 != 0)	// control tag == 0 is for static initialization and must not be handled here
 	{
 		int control = P_FindSectorFromTag(arg0, -1);
-		if (control != 0)
+		if (control >= 0)
 		{
 			// [BB] Inform the clients and remember the link to inform future clients.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -2594,7 +2696,7 @@ FUNC(LS_Line_AlignCeiling)
 		I_Error ("Sector_AlignCeiling: Lineid %d is undefined", arg0);
 	do
 	{
-		ret |= R_AlignFlat (line, !!arg1, 1);
+		ret |= P_AlignFlat (line, !!arg1, 1);
 	} while ( (line = P_FindLineFromID (arg0, line)) >= 0);
 	return ret;
 }
@@ -2609,7 +2711,7 @@ FUNC(LS_Line_AlignFloor)
 		I_Error ("Sector_AlignFloor: Lineid %d is undefined", arg0);
 	do
 	{
-		ret |= R_AlignFlat (line, !!arg1, 0);
+		ret |= P_AlignFlat (line, !!arg1, 0);
 	} while ( (line = P_FindLineFromID (arg0, line)) >= 0);
 	return ret;
 }
@@ -2728,6 +2830,8 @@ FUNC(LS_Line_SetBlocking)
 		ML_BLOCKEVERYTHING,
 		ML_RAILING,
 		ML_BLOCKUSE,
+		ML_BLOCKSIGHT,
+		ML_BLOCKHITSCAN,
 		-1
 	};
 
@@ -2787,7 +2891,7 @@ FUNC(LS_ChangeCamera)
 
 				// [BC] If we're the server, tell this player to change his camera.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_SetPlayerCamera( i, camera->lNetID, ( arg2 ) ? true : false );
+					SERVERCOMMANDS_SetPlayerCamera( i, camera, ( arg2 ) ? true : false );
 			}
 			else
 			{
@@ -2796,7 +2900,7 @@ FUNC(LS_ChangeCamera)
 
 				// [BC] If we're the server, tell this player to change his camera.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_SetPlayerCamera( i, players[i].mo->lNetID, false );
+					SERVERCOMMANDS_SetPlayerCamera( i, players[i].mo, false );
 			}
 			if (oldcamera != players[i].camera)
 			{
@@ -2815,7 +2919,7 @@ FUNC(LS_ChangeCamera)
 
 			// [BC] If we're the server, tell this player to change his camera.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetPlayerCamera( ULONG( it->player - players ), camera->lNetID, ( arg2 ) ? true : false );
+				SERVERCOMMANDS_SetPlayerCamera( ULONG( it->player - players ), camera, ( arg2 ) ? true : false );
 		}
 		else
 		{
@@ -2824,7 +2928,7 @@ FUNC(LS_ChangeCamera)
 
 			// [BC] If we're the server, tell this player to change his camera.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetPlayerCamera( ULONG( it->player - players ), it->lNetID, false );
+				SERVERCOMMANDS_SetPlayerCamera( ULONG( it->player - players ), it, false );
 		}
 		if (oldcamera != it->player->camera)
 		{
@@ -2927,12 +3031,12 @@ FUNC(LS_SetPlayerProperty)
 			{ // Take power from activator
 				if (power != 4)
 				{
-					AInventory *item = it->FindInventory (powers[power]);
+					AInventory *item = it->FindInventory (powers[power], true);
 					if (item != NULL)
 					{
 						// [WS] Destroy the powerup.
 						if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-							SERVERCOMMANDS_TakeInventory( ULONG( it->player - players ), item->GetClass( )->TypeName.GetChars( ), 0 );
+							SERVERCOMMANDS_TakeInventory( ULONG( it->player - players ), item->GetClass(), 0 );
 
 						item->Destroy ();
 					}
@@ -2981,7 +3085,7 @@ FUNC(LS_SetPlayerProperty)
 						{
 							// [WS] Destroy the powerup.
 							if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-								SERVERCOMMANDS_TakeInventory( i, item->GetClass( )->TypeName.GetChars( ), 0 );
+								SERVERCOMMANDS_TakeInventory( i, item->GetClass(), 0 );
 
 							item->Destroy ();
 						}
@@ -3057,6 +3161,11 @@ FUNC(LS_SetPlayerProperty)
 	else
 	{
 		int i;
+
+		if ((ib_compatflags & BCOMPATF_LINKFROZENPROPS) && (mask & (CF_FROZEN | CF_TOTALLYFROZEN)))
+		{ // Clearing one of these properties clears both of them (if the compat flag is set.)
+			mask = CF_FROZEN | CF_TOTALLYFROZEN;
+		}
 
 		for (i = 0; i < MAXPLAYERS; i++)
 		{
@@ -3135,6 +3244,7 @@ FUNC(LS_Autosave)
 {
 	if (gameaction != ga_savegame)
 	{
+		level.flags2 &= ~LEVEL2_NOAUTOSAVEHINT;
 		Net_WriteByte (DEM_CHECKAUTOSAVE);
 	}
 	return true;
@@ -3404,6 +3514,36 @@ FUNC(LS_StartConversation)
 	return false;
 }
 
+FUNC(LS_Thing_SetConversation)
+// Thing_SetConversation (tid, dlg_id)
+{
+	int dlg_index = -1;
+	FStrifeDialogueNode *node = NULL;
+
+	if (arg1 != 0)
+	{
+		dlg_index = GetConversation(arg1);	
+		if (dlg_index == -1) return false;
+		node = StrifeDialogues[dlg_index];
+	}
+
+	if (arg0 != 0)
+	{
+		FActorIterator iterator (arg0);
+		while ((it = iterator.Next()) != NULL)
+		{
+			it->ConversationRoot = dlg_index;
+			it->Conversation = node;
+		}
+	}
+	else if (it)
+	{
+		it->ConversationRoot = dlg_index;
+		it->Conversation = node;
+	}
+	return true;
+}
+
 // [BC] From GZDoom. Now in p_lnspec.cpp where it belongs.
 // Normally this would be better placed in p_lnspec.cpp.
 // But I have accidentally overwritten that file several times
@@ -3416,8 +3556,8 @@ FUNC(LS_Sector_SetPlaneReflection)
 	while ((secnum = P_FindSectorFromTag (arg0, secnum)) >= 0)
 	{
 		sector_t * s = &sectors[secnum];
-		if (s->floorplane.a==0 && s->floorplane.b==0) s->floor_reflect = arg1/255.f;
-		if (s->ceilingplane.a==0 && s->ceilingplane.b==0) sectors[secnum].ceiling_reflect = arg2/255.f;
+		if (s->floorplane.a==0 && s->floorplane.b==0) s->reflect[sector_t::floor] = arg1/255.f;
+		if (s->ceilingplane.a==0 && s->ceilingplane.b==0) sectors[secnum].reflect[sector_t::ceiling] = arg2/255.f;
 
 		// [BC] If we're the server, tell clients that this sector's reflection is being altered.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -3426,6 +3566,7 @@ FUNC(LS_Sector_SetPlaneReflection)
 
 	return true;
 }
+
 
 lnSpecFunc LineSpecials[256] =
 {
@@ -3508,7 +3649,7 @@ lnSpecFunc LineSpecials[256] =
 	/*  76 */ LS_TeleportOther,
 	/*  77 */ LS_TeleportGroup,
 	/*  78 */ LS_TeleportInSector,
-	/*  79 */ LS_NOP,
+	/*  79 */ LS_Thing_SetConversation,
 	/*  80 */ LS_ACS_Execute,
 	/*  81 */ LS_ACS_Suspend,
 	/*  82 */ LS_ACS_Terminate,
@@ -3526,9 +3667,9 @@ lnSpecFunc LineSpecials[256] =
 	/*  94 */ LS_Pillar_BuildAndCrush,
 	/*  95 */ LS_FloorAndCeiling_LowerByValue,
 	/*  96 */ LS_FloorAndCeiling_RaiseByValue,
-	/*  97 */ LS_NOP,
-	/*  98 */ LS_NOP,
-	/*  99 */ LS_NOP,
+	/*  97 */ LS_Ceiling_LowerAndCrushDist,
+	/*  98 */ LS_Sector_SetTranslucent,
+	/*  99 */ LS_Floor_RaiseAndCrushDoom,
 	/* 100 */ LS_NOP,		// Scroll_Texture_Left
 	/* 101 */ LS_NOP,		// Scroll_Texture_Right
 	/* 102 */ LS_NOP,		// Scroll_Texture_Up
@@ -3587,17 +3728,17 @@ lnSpecFunc LineSpecials[256] =
 	/* 155 */ LS_NOP,
 	/* 156 */ LS_NOP,
 	/* 157 */ LS_NOP,		// SetGlobalFogParameter // in GZDoom
-	/* 158 */ LS_NOP,		// FS_Execute in GZDoom
+	/* 158 */ LS_NOP,		// FS_Execute
 	/* 159 */ LS_Sector_SetPlaneReflection,
-	/* 160 */ LS_NOP,		// Sector_Set3DFloor in GZDoom and Vavoom
-	/* 161 */ LS_NOP,		// Sector_SetContents in GZDoom and Vavoom
-	/* 162 */ LS_NOP,
-	/* 163 */ LS_NOP,
-	/* 164 */ LS_NOP,
-	/* 165 */ LS_NOP,
-	/* 166 */ LS_NOP,
-	/* 167 */ LS_NOP,
-	/* 168 */ LS_NOP,
+	/* 160 */ LS_NOP,		// Sector_Set3DFloor
+	/* 161 */ LS_NOP,		// Sector_SetContents
+	/* 162 */ LS_NOP,		// Reserved Doom64 branch
+	/* 163 */ LS_NOP,		// Reserved Doom64 branch
+	/* 164 */ LS_NOP,		// Reserved Doom64 branch
+	/* 165 */ LS_NOP,		// Reserved Doom64 branch
+	/* 166 */ LS_NOP,		// Reserved Doom64 branch
+	/* 167 */ LS_NOP,		// Reserved Doom64 branch
+	/* 168 */ LS_Ceiling_CrushAndRaiseDist,
 	/* 169 */ LS_Generic_Crusher2,
 	/* 170 */ LS_Sector_SetCeilingScale2,
 	/* 171 */ LS_Sector_SetFloorScale2,
@@ -3741,6 +3882,30 @@ int P_FindLineSpecial (const char *string, int *min_args, int *max_args)
 		{
 			max = mid - 1;
 		}
+	}
+	return 0;
+}
+
+
+//==========================================================================
+//
+// P_ExecuteSpecial
+//
+//==========================================================================
+
+int P_ExecuteSpecial(int			num,
+					 struct line_t	*line,
+					 class AActor	*activator,
+					 bool			backSide,
+					 int			arg1,
+					 int			arg2,
+					 int			arg3,
+					 int			arg4,
+					 int			arg5)
+{
+	if (num >= 0 && num <= 255)
+	{
+		return LineSpecials[num](line, activator, backSide, arg1, arg2, arg3, arg4, arg5);
 	}
 	return 0;
 }

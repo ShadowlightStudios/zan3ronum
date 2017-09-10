@@ -30,15 +30,15 @@
 #include "dthinker.h"
 
 
-// States are tied to finite states are
-//	tied to animation frames.
-// Needs precompiled tables/data structures.
+// States are tied to finite states are tied to animation frames.
 #include "info.h"
 
 #include "doomdef.h"
 #include "textures/textures.h"
-#include "r_blend.h"
+#include "r_data/renderstyle.h"
 #include "s_sound.h"
+#include "memarena.h"
+#include "g_level.h"
 
 struct subsector_t;
 //
@@ -236,7 +236,7 @@ enum
 	MF4_RANDOMIZE		= 0x00000010,	// Missile has random initial tic count
 	MF4_NOSKIN			= 0x00000020,	// Player cannot use skins
 	MF4_FIXMAPTHINGPOS	= 0x00000040,	// Fix this actor's position when spawned as a map thing
-	MF4_ACTLIKEBRIDGE	= 0x00000080,	// Pickups can "stand" on this actor
+	MF4_ACTLIKEBRIDGE	= 0x00000080,	// Pickups can "stand" on this actor / cannot be moved by any sector action.
 	MF4_STRIFEDAMAGE	= 0x00000100,	// Strife projectiles only do up to 4x damage, not 8x
 
 	MF4_CANUSEWALLS		= 0x00000200,	// Can activate 'use' specials
@@ -265,11 +265,11 @@ enum
 	
 // --- mobj.flags5 ---
 
-	MF5_FASTER			= 0x00000001,	// moves faster when DF_FAST_MONSTERS or nightmare is on.
-	MF5_FASTMELEE		= 0x00000002,	// has a faster melee attack when DF_FAST_MONSTERS or nightmare is on.
+	MF5_DONTDRAIN		= 0x00000001,	// cannot be drained health from.
+	/*					= 0x00000002,	   reserved for use by scripting branch */
 	MF5_NODROPOFF		= 0x00000004,	// cannot drop off under any circumstances.
-	/*					= 0x00000008,	*/
-	/*					= 0x00000010,	*/
+	MF5_NOFORWARDFALL	= 0x00000008,	// Does not make any actor fall forward by being damaged by this
+	MF5_COUNTSECRET		= 0x00000010,	// From Doom 64: actor acts like a secret
 	MF5_AVOIDINGDROPOFF = 0x00000020,	// Used to move monsters away from dropoffs
 	MF5_NODAMAGE		= 0x00000040,	// Actor can be shot and reacts to being shot but takes no damage
 	MF5_CHASEGOAL		= 0x00000080,	// Walks to goal instead of target if a valid goal is set.
@@ -284,12 +284,12 @@ enum
 	MF5_NEVERFAST		= 0x00010000,	// never uses 'fast' attacking logic
 	MF5_ALWAYSRESPAWN	= 0x00020000,	// always respawns, regardless of skill setting
 	MF5_NEVERRESPAWN	= 0x00040000,	// never respawns, regardless of skill setting
-	MF5_DONTRIP			= 0x00080000,	// Ripping projectiles explode when hittin this actor
+	MF5_DONTRIP			= 0x00080000,	// Ripping projectiles explode when hitting this actor
 	MF5_NOINFIGHTING	= 0x00100000,	// This actor doesn't switch target when it's hurt 
 	MF5_NOINTERACTION	= 0x00200000,	// Thing is completely excluded from any gameplay related checks
 	MF5_NOTIMEFREEZE	= 0x00400000,	// Actor is not affected by time freezer
 	MF5_PUFFGETSOWNER	= 0x00800000,	// [BB] Sets the owner of the puff to the player who fired it
-	MF5_SPECIALFIREDAMAGE=0x01000000,	// Special treatment of PhoenixFX1 turned into a flag to removr
+	MF5_SPECIALFIREDAMAGE=0x01000000,	// Special treatment of PhoenixFX1 turned into a flag to remove
 										// dependence of main engine code of specific actor types.
 	MF5_SUMMONEDMONSTER	= 0x02000000,	// To mark the friendly Minotaur. Hopefully to be generalized later.
 	MF5_NOVERTICALMELEERANGE=0x04000000,// Does not check vertical distance for melee range
@@ -323,8 +323,33 @@ enum
 	MF6_BLOCKEDBYSOLIDACTORS = 0x00080000, // Blocked by solid actors, even if not solid itself
 	MF6_ADDITIVEPOISONDAMAGE	= 0x00100000,
 	MF6_ADDITIVEPOISONDURATION	= 0x00200000,
-
+	MF6_NOMENU			= 0x00400000,	// Player class should not appear in the class selection menu.
+	MF6_BOSSCUBE		= 0x00800000,	// Actor spawned by A_BrainSpit, flagged for timefreeze reasons.
+	MF6_SEEINVISIBLE	= 0x01000000,	// Monsters can see invisible player.
+	MF6_DONTCORPSE		= 0x02000000,	// [RC] Don't autoset MF_CORPSE upon death and don't force Crash state change.
+	MF6_POISONALWAYS	= 0x04000000,	// Always apply poison, even when target can't take the damage.
+	MF6_DOHARMSPECIES	= 0x08000000,	// Do hurt one's own species with projectiles.
 	MF6_INTRYMOVE		= 0x10000000,	// Executing P_TryMove
+	MF6_NOTAUTOAIMED	= 0x20000000,	// Do not subject actor to player autoaim.
+	MF6_NOTONAUTOMAP	= 0x40000000,	// will not be shown on automap with the 'scanner' powerup.
+	MF6_RELATIVETOFLOOR	= 0x80000000,	// [RC] Make flying actors be affected by lifts.
+
+// --- mobj.flags7 ---
+
+	MF7_NEVERTARGET		= 0x00000001,	// can not be targetted at all, even if monster friendliness is considered.
+	MF7_NOTELESTOMP		= 0x00000002,	// cannot telefrag under any circumstances (even when set by MAPINFO)
+	MF7_ALWAYSTELEFRAG	= 0x00000004,	// will unconditionally be telefragged when in the way. Overrides all other settings.
+	MF7_HANDLENODELAY	= 0x00000008,	// respect NoDelay state flag
+
+	MF7_HITTARGET		= 0x00004000,	// The actor the projectile dies on is set to target, provided it's targetable anyway.
+	MF7_HITMASTER		= 0x00008000,	// Same as HITTARGET, except it's master instead of target.
+	MF7_HITTRACER		= 0x00010000,	// Same as HITTARGET, but for tracer.
+	MF7_NODECAL			= 0x00020000,	// [ZK] Forces puff to have no impact decal
+	MF7_FORCEDECAL		= 0x00040000,	// [ZK] Forces P_LineAttack to use the puff's decal, even if the player's weapon has a decal defined
+
+	// [BB] Out of order ZDoom backport.
+	MF7_USEKILLSCRIPTS	= 0x00800000,	// [JM] Use "KILL" Script on death if not forced by GameInfo.
+	MF7_NOKILLSCRIPTS	= 0x01000000,	// [JM] No "KILL" Script on death whatsoever, even if forced by GameInfo.
 
 	// [BC] More object flags for Skulltag.
 
@@ -338,7 +363,7 @@ enum
 	//STFL_PULLABLE		= 0x00000004,
 
 	// Execute this object's special when player hits the use key in front of it.
-	STFL_USESPECIAL		= 0x00000008,
+	//STFL_USESPECIAL		= 0x00000008,
 
 	// Object impales players that fall on it.
 	//STFL_IMPALE			= 0x00000010,
@@ -510,7 +535,7 @@ enum EBounceFlags
 	BOUNCE_Ceilings = 1<<2,		// bounces off of ceilings
 	BOUNCE_Actors = 1<<3,		// bounces off of some actors
 	BOUNCE_AllActors = 1<<4,	// bounces off of all actors (requires BOUNCE_Actors to be set, too)
-	BOUNCE_AutoOff = 1<<5,		// when bouncing off a floor, if the new Z velocity is below 3.0, disable further bouncing
+	BOUNCE_AutoOff = 1<<5,		// when bouncing off a sector plane, if the new Z velocity is below 3.0, disable further bouncing
 	BOUNCE_HereticType = 1<<6,	// goes into Death state when bouncing on floors or ceilings
 
 	BOUNCE_UseSeeSound = 1<<7,	// compatibility fallback. This will only be set by
@@ -522,6 +547,8 @@ enum EBounceFlags
 	// MBF bouncing is a bit different from other modes as Killough coded many special behavioral cases
 	// for them that are not present in ZDoom, so it is necessary to identify it properly.
 	BOUNCE_MBF = 1<<12,			// This in itself is not a valid mode, but replaces MBF's MF_BOUNCE flag.
+	BOUNCE_AutoOffFloorOnly = 1<<13,		// like BOUNCE_AutoOff, but only on floors
+	BOUNCE_UseBounceState = 1<<14,	// Use Bounce[.*] states
 
 	BOUNCE_TypeMask = BOUNCE_Walls | BOUNCE_Floors | BOUNCE_Ceilings | BOUNCE_Actors | BOUNCE_AutoOff | BOUNCE_HereticType | BOUNCE_MBF,
 
@@ -650,7 +677,12 @@ struct FDropItem
 class FDropItemPtrArray : public TArray<FDropItem *>
 {
 public:
-	~FDropItemPtrArray();
+	~FDropItemPtrArray()
+	{
+		Clear();
+	}
+
+	void Clear();
 };
 
 extern FDropItemPtrArray DropItemList;
@@ -691,15 +723,14 @@ public:
 	bool AdjustReflectionAngle (AActor *thing, angle_t &angle);
 
 	// Returns true if this actor is within melee range of its target
-	bool CheckMeleeRange ();
+	bool CheckMeleeRange();
 
-	// BeginPlay: Called just after the actor is created
-	virtual void BeginPlay ();
-	virtual void PostBeginPlay ();
-	// LevelSpawned: Called after BeginPlay if this actor was spawned by the world
-	virtual void LevelSpawned ();
-	// Translates SpawnFlags into in-game flags.
-	virtual void HandleSpawnFlags ();
+	virtual void BeginPlay();			// Called immediately after the actor is created
+	virtual void PostBeginPlay();		// Called immediately before the actor's first tick
+	virtual void LevelSpawned();		// Called after BeginPlay if this actor was spawned by the world
+	virtual void HandleSpawnFlags();	// Translates SpawnFlags into in-game flags.
+
+	virtual void MarkPrecacheSounds() const;	// Marks sounds used by this actor for precaching.
 
 	virtual void Activate (AActor *activator);
 	virtual void Deactivate (AActor *activator);
@@ -709,11 +740,11 @@ public:
 	virtual void Tick ();
 
 	// Called when actor dies
-	virtual void Die (AActor *source, AActor *inflictor);
+	virtual void Die (AActor *source, AActor *inflictor, int dmgflags = 0);
 
 	// Perform some special damage action. Returns the amount of damage to do.
 	// Returning -1 signals the damage routine to exit immediately
-	virtual int DoSpecialDamage (AActor *target, int damage);
+	virtual int DoSpecialDamage (AActor *target, int damage, FName damagetype);
 
 	// Like DoSpecialDamage, but called on the actor receiving the damage.
 	virtual int TakeSpecialDamage (AActor *inflictor, AActor *source, int damage, FName damagetype);
@@ -768,6 +799,9 @@ public:
 	// Tosses an item out of the inventory.
 	virtual AInventory *DropInventory (AInventory *item);
 
+	// Removes all items from the inventory.
+	void ClearInventory();
+
 	// Returns true if this view is considered "local" for the player.
 	bool CheckLocalView (int playernum) const;
 
@@ -811,7 +845,7 @@ public:
 	virtual bool Massacre ();
 
 	// Transforms the actor into a finely-ground paste
-	bool Grind(bool items);
+	virtual bool Grind(bool items);
 
 	// Is the other actor on my team?
 	bool IsTeammate (AActor *other);
@@ -822,14 +856,26 @@ public:
 	// Do I hate the other actor?
 	bool IsHostile (AActor *other);
 
+	inline bool IsNoClip2() const;
+
 	// What species am I?
 	virtual FName GetSpecies();
-	
+
+	fixed_t GetBobOffset(fixed_t ticfrac=0) const
+	{
+		 if (!(flags2 & MF2_FLOATBOB))
+		 {
+			 return 0;
+		 }
+		 return finesine[MulScale22(((FloatBobPhase + level.maptime) << FRACBITS) + ticfrac, FINEANGLES) & FINEMASK] * 8;
+	}
+
 	// Enter the crash state
 	void Crash();
 
 	// Return starting health adjusted by skill level
 	int SpawnHealth();
+	int GibHealth();
 
 	inline bool isMissile(bool precise=true)
 	{
@@ -853,22 +899,37 @@ public:
 		return (PalEntry)GetClass()->Meta.GetMetaInt(AMETA_BloodColor);
 	}
 
+	// These also set CF_INTERPVIEW for players.
+	void SetPitch(int p, bool interpolate);
+	void SetAngle(angle_t ang, bool interpolate);
+
 	const PClass *GetBloodType(int type = 0) const
 	{
+		const PClass *bloodcls;
 		if (type == 0)
 		{
-			return PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType, NAME_Blood));
+			bloodcls = PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType, NAME_Blood));
 		}
 		else if (type == 1)
 		{
-			return PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType2, NAME_BloodSplatter));
+			bloodcls = PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType2, NAME_BloodSplatter));
 		}
 		else if (type == 2)
 		{
-			return  PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType3, NAME_AxeBlood));
+			bloodcls = PClass::FindClass((ENamedName)GetClass()->Meta.GetMetaInt(AMETA_BloodType3, NAME_AxeBlood));
 		}
 		else return NULL;
+
+		if (bloodcls != NULL)
+		{
+			bloodcls = bloodcls->GetReplacement();
+		}
+		return bloodcls;
 	}
+
+	inline void SetFriendPlayer(player_t *player);
+
+	bool IsVisibleToPlayer() const;
 
 	// Calculate amount of missile damage
 	virtual int GetMissileDamage(int mask, int add);
@@ -878,6 +939,7 @@ public:
 	fixed_t GetGravity() const;
 	bool IsSentient() const;
 	const char *GetTag(const char *def = NULL) const;
+	void SetTag(const char *def);
 
 	// Triggers SECSPAC_Exit/SECSPAC_Enter and related events if oldsec != current sector
 	void CheckSectorTransition(sector_t *oldsec);
@@ -898,9 +960,11 @@ public:
 	DWORD			fillcolor;			// Color to draw when STYLE_Shaded
 
 // interaction info
-	fixed_t			pitch, roll;
+	fixed_t			pitch;
+	angle_t			roll;	// This was fixed_t before, which is probably wrong
 	FBlockNode		*BlockNode;			// links in blocks (if needed)
 	struct sector_t	*Sector;
+	subsector_t *		subsector;
 	fixed_t			floorz, ceilingz;	// closest together of contacted secs
 	fixed_t			dropoffz;		// killough 11/98: the lowest floor over all contacted Sectors.
 
@@ -914,23 +978,21 @@ public:
 	SDWORD			tics;				// state tic counter
 	FState			*state;
 	SDWORD			Damage;			// For missiles and monster railgun
+	int				projectileKickback;
 	DWORD			flags;
 	DWORD			flags2;			// Heretic flags
 	DWORD			flags3;			// [RH] Hexen/Heretic actor-dependant behavior made flaggable
 	DWORD			flags4;			// [RH] Even more flags!
 	DWORD			flags5;			// OMG! We need another one.
 	DWORD			flags6;			// Shit! Where did all the flags go?
+	DWORD			flags7;			// 
+
+	// [BB] If 0, everybody can see the actor, if > 0, only members of team (VisibleToTeam-1) can see it.
+	DWORD			VisibleToTeam;
 
 	// [BB] If 0, not limited to any team, if > 0, limited to the team with number (ulLimitedToTeam-1).
 	// [EP] TODO: remove the 'ul' prefix from this variable, it isn't ULONG anymore
 	unsigned int	ulLimitedToTeam;
-
-	// [BB] If 0, everybody can see the actor, if > 0, only members of team (ulVisibleToTeam-1) can see it.
-	// [EP] TODO: remove the 'ul' prefix from this variable, it isn't ULONG anymore
-	unsigned int	ulVisibleToTeam;
-
-	// [BB] If NAME_None, all players can see the actor, else only players whose playerclass name is VisibleToPlayerClass can see it.
-	FNameNoInit		VisibleToPlayerClass;
 
 	// [BC] A new set of flags that ST uses.
 	// [EP] TODO: remove the 'ul' prefix from this variable, it isn't ULONG anymore
@@ -959,6 +1021,7 @@ public:
 	TObjPtr<AActor>	LastLookActor;	// Actor last looked for (if TIDtoHate != 0)
 	fixed_t			SpawnPoint[3]; 	// For nightmare respawn
 	WORD			SpawnAngle;
+	int				StartHealth;
 	BYTE			WeaveIndexXY;	// Separated from special2 because it's used by globally accessible functions.
 	BYTE			WeaveIndexZ;
 	int				skillrespawncount;
@@ -974,6 +1037,8 @@ public:
 	int				SavedArgs[5];	// [Dusk] More map reset stuff
 	int				SavedTID;		// [Dusk]
 
+	int		accuracy, stamina;		// [RH] Strife stats -- [XA] moved here for DECORATE/ACS access.
+
 	AActor			*inext, **iprev;// Links to other mobjs in same bucket
 	TObjPtr<AActor> goal;			// Monster's goal if not chasing anything
 	int				waterlevel;		// 0=none, 1=feet, 2=waist, 3=eyes
@@ -981,7 +1046,7 @@ public:
 	BYTE			MinMissileChance;// [RH] If a random # is > than this, then missile attack.
 	SBYTE			LastLookPlayerNumber;// Player number last looked for (if TIDtoHate == 0)
 	WORD			BounceFlags;	// which bouncing type?
-	WORD			SpawnFlags;
+	DWORD			SpawnFlags;		// Increased to DWORD because of Doom 64
 	fixed_t			meleerange;		// specifies how far a melee attack reaches.
 	fixed_t			meleethreshold;	// Distance below which a monster doesn't try to shoot missiles anynore
 									// but instead tries to come closer for a melee attack.
@@ -994,20 +1059,22 @@ public:
 	int 			FastChaseStrafeCount;
 	fixed_t			pushfactor;
 	int				lastpush;
-	int				DesignatedTeam;	// Allow for friendly fire cacluations to be done on non-players.
 	int				activationtype;	// How the thing behaves when activated with USESPECIAL or BUMPSPECIAL
 	int				lastbump;		// Last time the actor was bumped, used to control BUMPSPECIAL
 	int				Score;			// manipulated by score items, ACS or DECORATE. The engine doesn't use this itself for anything.
-	FNameNoInit		Tag;			// Strife's tag name. FIXME: should be case sensitive!
+	FString *		Tag;			// Strife's tag name.
+	int				DesignatedTeam;	// Allow for friendly fire cacluations to be done on non-players.
 
 	AActor			*BlockingMobj;	// Actor that blocked the last move
 	line_t			*BlockingLine;	// Line that blocked the last move
 
 	int PoisonDamage; // Damage received per tic from poison.
+	FNameNoInit PoisonDamageType; // Damage type dealt by poison.
 	int PoisonDuration; // Duration left for receiving poison damage.
 	int PoisonPeriod; // How often poison damage is applied. (Every X tics.)
 
 	int PoisonDamageReceived; // Damage received per tic from poison.
+	FNameNoInit PoisonDamageTypeReceived; // Damage type received by poison.
 	int PoisonDurationReceived; // Duration left for receiving poison damage.
 	int PoisonPeriodReceived; // How often poison damage is applied. (Every X tics.)
 	TObjPtr<AActor> Poisoner; // Last source of received poison damage.
@@ -1044,7 +1111,11 @@ public:
 	SWORD PainChance;
 	int PainThreshold;
 	FNameNoInit DamageType;
+	FNameNoInit DamageTypeReceived;
 	fixed_t DamageFactor;
+
+	FNameNoInit PainType;
+	FNameNoInit DeathType;
 
 	FState *SpawnState;
 	FState *SeeState;
@@ -1055,8 +1126,10 @@ public:
 	// isn't necessarily the spawn state).
 	FState	*InitialState;
 
-	// [RH] The dialogue to show when this actor is "used."
-	FStrifeDialogueNode *Conversation;
+	
+	int ConversationRoot;				// THe root of the current dialogue
+	FStrifeDialogueNode *Conversation;	// [RH] The dialogue to show when this actor is "used."
+
 
 	// [RH] Decal(s) this weapon/projectile generates on impact.
 	FDecalBase *DecalGenerator;
@@ -1078,6 +1151,9 @@ public:
 	// [EP] TODO: remove the 'ul' prefix from this variable, it isn't ULONG anymore
 	unsigned int ulInvasionWave;
 
+	// [TP] Rune that is currently in effect
+	TObjPtr<class APowerup> Rune;
+
 	// [BC] End of ST stuff.
 
 	// [RH] Used to interpolate the view to get >35 FPS
@@ -1085,13 +1161,13 @@ public:
 	angle_t PrevAngle;
 
 	// [BB] Last tic in which the server sent a xyz-position / movedir update about this actor to the clients.
-	int	lastNetXUpdateTic, lastNetYUpdateTic, lastNetZUpdateTic, lastNetMomXUpdateTic, lastNetMomYUpdateTic, lastNetMomZUpdateTic, lastNetMovedirUpdateTic;
+	int	lastNetXUpdateTic, lastNetYUpdateTic, lastNetZUpdateTic, lastNetVelXUpdateTic, lastNetVelYUpdateTic, lastNetVelZUpdateTic, lastNetMovedirUpdateTic;
 
 	// [BB] Last xyz-position that was sent to the client.
 	fixed_t lastX, lastY, lastZ;
 
-	// [BB] Last xyz-momentum that was sent to the client.
-	fixed_t lastMomx, lastMomy, lastMomz;
+	// [BB] Last xyz-velocity that was sent to the client.
+	fixed_t lastVelx, lastVely, lastVelz;
 
 	// [BB] Last movedir that was sent to the client.
 	BYTE lastMovedir;
@@ -1104,6 +1180,7 @@ public:
 private:
 	static AActor *TIDHash[128];
 	static inline int TIDHASH (int key) { return key & 127; }
+	static FSharedStringArena mStringPropertyData;
 
 	friend class FActorIterator;
 	friend bool P_IsTIDUsed(int tid);
@@ -1134,7 +1211,11 @@ public:
 
 	virtual bool UpdateWaterLevel (fixed_t oldz, bool splash=true);
 	bool isFast();
+	bool isSlow();
 	void SetIdle();
+	void ClearCounters();
+	FState *GetRaiseState();
+	void Revive();
 
 	FState *FindState (FName label) const
 	{
@@ -1147,14 +1228,18 @@ public:
 		return GetClass()->ActorInfo->FindState(2, names, exact);
 	}
 
+	FState *FindState(int numnames, FName *names, bool exact = false) const
+	{
+		return GetClass()->ActorInfo->FindState(numnames, names, exact);
+	}
 
 	bool HasSpecialDeathStates () const;
 
-	// [GZDoom]
+	// begin of GZDoom specific additions
 	TArray<TObjPtr<AActor> >		dynamiclights;
 	void *				lightassociations;
 	bool				hasmodel;
-	subsector_t *		subsector;
+	// end of GZDoom specific additions
 
 	size_t PropagateMark();
 };
@@ -1244,24 +1329,78 @@ void PrintMiscActorInfo(AActor * query);
 
 #define S_FREETARGMOBJ	1
 
+//==========================================================================
+//
+// IDList
+//
+// Manages IDs to reference a certain type of objects over the network.
+// Since it still mimics the old Actor ID mechanism, 0 is never assigned as
+// ID.
+//
+// @author Benjamin Berkels
+//
+//==========================================================================
 
-// [BC] Network identification stuff for multiplayer.
-void	ACTOR_ClearNetIDList( );
-// [BB] Rebuild the global list of used / free NetIDs from scratch.
-void	ACTOR_RebuildNetIDList( void );
-
-#define	MAX_NETID				32768
-
-// List of all possible network ID's for an actor. Slot is true if it available for use.
-typedef struct
+template <typename T>
+class IDList
 {
-	// Is this node occupied, or free to be used by a new actor?
-	bool	bFree;
+public:
+	const static int MAX_NETID = 32768;
 
-	// If this node is occupied, this is the actor occupying it.
-	AActor	*pActor;
+private:
+	// List of all possible network ID's for an actor. Slot is true if it available for use.
+	typedef struct
+	{
+		// Is this node occupied, or free to be used by a new actor?
+		bool	bFree;
 
-} NETIDNODE_t;
+		// If this node is occupied, this is the actor occupying it.
+		T	*pActor;
 
-extern	NETIDNODE_t		g_NetIDList[MAX_NETID];
+	} IDNODE_t;
+
+	IDNODE_t _entries[MAX_NETID];
+	ULONG _firstFreeID;
+
+	inline bool isIndexValid ( const LONG lNetID ) const
+	{
+		return ( lNetID >= 0 ) && ( lNetID < MAX_NETID );
+	}
+public:
+	void clear ( );
+
+	// [BB] Rebuild the global list of used / free NetIDs from scratch.
+	void rebuild ( );
+
+	IDList ( )
+	{
+		clear ( );
+	}
+
+	void useID ( const LONG lNetID, T *pActor );
+
+	void freeID ( const LONG lNetID )
+	{
+		if ( isIndexValid ( lNetID ) )
+		{
+			_entries[lNetID].bFree = true;
+			_entries[lNetID].pActor = NULL;
+		}
+	}
+
+	ULONG getNewID ( );
+
+	T* findPointerByID ( const LONG lNetID ) const
+	{
+		if ( isIndexValid ( lNetID ) == false )
+			return ( NULL );
+
+		if (( _entries[lNetID].bFree == false ) && ( _entries[lNetID].pActor ))
+			return ( _entries[lNetID].pActor );
+
+		return ( NULL );
+	}
+};
+
+extern	IDList<AActor> g_NetIDList;
 #endif // __P_MOBJ_H__

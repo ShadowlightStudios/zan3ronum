@@ -92,8 +92,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxChase)
 	AActor *spot;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		if (pr_koraxchase()<30)
 		{
@@ -111,7 +110,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxChase)
 			P_Teleport (self, spot->x, spot->y, ONFLOORZ, spot->angle, true, true, false);
 		}
 
-		P_StartScript (self, NULL, 249, NULL, 0, 0, 0, 0, 0, false);
+		P_StartScript (self, NULL, 249, NULL, NULL, 0, 0);
 		self->special2 = 1;	// Don't run again
 
 		return;
@@ -169,8 +168,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxBonePop)
 	int i;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -178,18 +176,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxBonePop)
 	// Spawn 6 spirits equalangularly
 	for (i = 0; i < 6; ++i)
 	{
-		mo = P_SpawnMissileAngle (self, PClass::FindClass("KoraxSpirit"), ANGLE_60*i, 5*FRACUNIT);
-		if (mo)
-		{
-			KSpiritInit (mo, self);
-
-			// [BC] Spawn the thing to clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SpawnMissile( mo );
-		}
+		mo = P_SpawnMissileAngle (self, PClass::FindClass("KoraxSpirit"), ANGLE_60*i, 5*FRACUNIT, true); // [BB] Inform clients
+		if (mo) KSpiritInit (mo, self);
 	}
 
-	P_StartScript (self, NULL, 255, NULL, 0, 0, 0, 0, false, false);		// Death script
+	P_StartScript (self, NULL, 255, NULL, NULL, 0, 0);		// Death script
 }
 
 //============================================================================
@@ -201,8 +192,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxBonePop)
 void KSpiritInit (AActor *spirit, AActor *korax)
 {
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -210,7 +200,7 @@ void KSpiritInit (AActor *spirit, AActor *korax)
 	spirit->health = KORAX_SPIRIT_LIFETIME;
 
 	spirit->tracer = korax;						// Swarm around korax
-	spirit->special2 = 32+(pr_kspiritinit()&7);	// Float bob index
+	spirit->special2 = FINEANGLES/2 + pr_kspiritinit(8 << BOBTOFINESHIFT);	// Float bob index
 	spirit->args[0] = 10; 						// initial turn value
 	spirit->args[1] = 0; 						// initial look angle
 
@@ -227,8 +217,7 @@ void KSpiritInit (AActor *spirit, AActor *korax)
 DEFINE_ACTION_FUNCTION(AActor, A_KoraxDecide)
 {
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -276,8 +265,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxMissile)
 	S_Sound (self, CHAN_VOICE, "KoraxAttack", 1, ATTN_NORM);
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		S_Sound (self, CHAN_WEAPON, choices[type].sound, 1, ATTN_NONE);
 		return;
@@ -316,8 +304,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxCommand)
 	S_Sound (self, CHAN_VOICE, "KoraxCommand", 1, ATTN_NORM);
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -345,8 +332,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KoraxCommand)
 		numcommands = 4;
 	}
 
-	P_StartScript (self, NULL, 250+(pr_koraxcommand()%numcommands),
-		NULL, 0, 0, 0, 0, false, false);
+	P_StartScript (self, NULL, 250+(pr_koraxcommand()%numcommands), NULL, NULL, 0, 0);
 }
 
 //============================================================================
@@ -389,8 +375,7 @@ void KoraxFire (AActor *actor, const PClass *type, int arm)
 	fixed_t x,y,z;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -406,33 +391,11 @@ void KoraxFire (AActor *actor, const PClass *type, int arm)
 //============================================================================
 //
 // A_KSpiritWeave
+// [BL] Was identical to CHolyWeave so lets just use that
 //
 //============================================================================
 
-DEFINE_ACTION_FUNCTION(AActor, A_KSpiritWeave)
-{
-	fixed_t newX, newY;
-	int weaveXY, weaveZ;
-	int angle;
-
-	weaveXY = self->special2>>16;
-	weaveZ = self->special2&0xFFFF;
-	angle = (self->angle+ANG90)>>ANGLETOFINESHIFT;
-	newX = self->x-FixedMul(finecosine[angle], 
-		FloatBobOffsets[weaveXY]<<2);
-	newY = self->y-FixedMul(finesine[angle],
-		FloatBobOffsets[weaveXY]<<2);
-	weaveXY = (weaveXY+(pr_kspiritweave()%5))&63;
-	newX += FixedMul(finecosine[angle], 
-		FloatBobOffsets[weaveXY]<<2);
-	newY += FixedMul(finesine[angle], 
-		FloatBobOffsets[weaveXY]<<2);
-	P_TryMove(self, newX, newY, true);
-	self->z -= FloatBobOffsets[weaveZ]<<1;
-	weaveZ = (weaveZ+(pr_kspiritweave()%5))&63;
-	self->z += FloatBobOffsets[weaveZ]<<1;	
-	self->special2 = weaveZ+(weaveXY<<16);
-}
+void CHolyWeave (AActor *actor, FRandom &pr_random);
 
 //============================================================================
 //
@@ -451,8 +414,7 @@ void A_KSpiritSeeker (AActor *actor, angle_t thresh, angle_t turnMax)
 	fixed_t deltaZ;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -511,7 +473,7 @@ void A_KSpiritSeeker (AActor *actor, angle_t thresh, angle_t turnMax)
 
 	// [BC] Move the thing.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_VELX|CM_VELY|CM_VELZ );
 
 	return;
 }
@@ -525,8 +487,7 @@ void A_KSpiritSeeker (AActor *actor, angle_t thresh, angle_t turnMax)
 DEFINE_ACTION_FUNCTION(AActor, A_KSpiritRoam)
 {
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		if (pr_kspiritroam()<50)
 		{
@@ -538,14 +499,14 @@ DEFINE_ACTION_FUNCTION(AActor, A_KSpiritRoam)
 
 	if (self->health-- <= 0)
 	{
-		// [BC] Play the sound and set the thing's state.
+		S_Sound (self, CHAN_VOICE, "SpiritDie", 1, ATTN_NORM, true);	// [BC] Inform the clients.
+
+		// [BC] Set the thing's state.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		{
-			SERVERCOMMANDS_SoundActor( self, CHAN_VOICE, "SpiritDie", 1, ATTN_NORM );
 			SERVERCOMMANDS_SetThingFrame( self, self->FindState("Death") );
 		}
 
-		S_Sound (self, CHAN_VOICE, "SpiritDie", 1, ATTN_NORM);
 		self->SetState (self->FindState("Death"));
 	}
 	else
@@ -555,7 +516,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KSpiritRoam)
 			A_KSpiritSeeker (self, self->args[0]*ANGLE_1,
 							 self->args[0]*ANGLE_1*2);
 		}
-		CALL_ACTION(A_KSpiritWeave, self);
+		CHolyWeave(self, pr_kspiritweave);
 		if (pr_kspiritroam()<50)
 		{
 			S_Sound (self, CHAN_VOICE, "SpiritActive", 1, ATTN_NONE);
@@ -572,8 +533,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KSpiritRoam)
 DEFINE_ACTION_FUNCTION(AActor, A_KBolt)
 {
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -601,8 +561,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_KBoltRaise)
 	fixed_t z;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -642,8 +601,7 @@ AActor *P_SpawnKoraxMissile (fixed_t x, fixed_t y, fixed_t z,
 	int dist;
 
 	// [BC] Let the server do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( NULL );
 	}
@@ -672,5 +630,5 @@ AActor *P_SpawnKoraxMissile (fixed_t x, fixed_t y, fixed_t z,
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		SERVERCOMMANDS_SpawnMissile( th );
 
-	return (P_CheckMissileSpawn(th) ? th : NULL);
+	return (P_CheckMissileSpawn(th, source->radius) ? th : NULL);
 }

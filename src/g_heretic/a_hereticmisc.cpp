@@ -9,13 +9,14 @@
 #include "thingdef/thingdef.h"
 #include "p_enemy.h"
 #include "a_specialspot.h"
-// [BB] New #includes.
-#include "cl_demo.h"
 #include "g_level.h"
 #include "a_sharedglobal.h"
 #include "templates.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "doomstat.h"
+#include "farchive.h"
+// [BB] New #includes.
+#include "cl_demo.h"
 #include "sv_commands.h"
 
 // Include all the other Heretic stuff here to reduce compile time
@@ -78,8 +79,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_RemovePod)
 	AActor *mo;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -112,8 +112,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_MakePod)
 	fixed_t z;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -133,16 +132,15 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_MakePod)
 	}
 	mo->SetState (mo->FindState("Grow"));
 	P_ThrustMobj (mo, pr_makepod()<<24, (fixed_t)(4.5*FRACUNIT));
-	S_Sound (mo, CHAN_BODY, self->AttackSound, 1, ATTN_IDLE);
 
-	// [BC] If we're the server, spawn the pod and play the sound.
+	// [BC] If we're the server, spawn the pod.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
 		SERVERCOMMANDS_SpawnMissile( mo );
 		SERVERCOMMANDS_SetThingFrame( mo, mo->state );
-		SERVERCOMMANDS_SoundActor( mo, CHAN_BODY, "world/podgrow", 1, ATTN_IDLE );
 	}
 
+	S_Sound (mo, CHAN_BODY, self->AttackSound, 1, ATTN_IDLE, true);	// [BC] Inform the clients.
 	self->special1++; // Increment generated pod count
 	mo->master = self; // Link the generator to the pod
 	return;
@@ -200,7 +198,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_VolcanoBlast)
 		blast->vely = FixedMul (1*FRACUNIT, finesine[angle]);
 		blast->velz = (FRACUNIT*5/2) + (pr_blast() << 10);
 		S_Sound (blast, CHAN_BODY, "world/volcano/shoot", 1, ATTN_NORM);
-		P_CheckMissileSpawn (blast);
+		P_CheckMissileSpawn (blast, self->radius);
 	}
 }
 
@@ -212,7 +210,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_VolcanoBlast)
 
 DEFINE_ACTION_FUNCTION(AActor, A_VolcBallImpact)
 {
-	int i;
+	unsigned int i;
 	AActor *tiny;
 	angle_t angle;
 
@@ -223,7 +221,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_VolcBallImpact)
 		self->z += 28*FRACUNIT;
 		//self->velz = 3*FRACUNIT;
 	}
-	P_RadiusAttack (self, self->target, 25, 25, NAME_Fire, true);
+	P_RadiusAttack (self, self->target, 25, 25, NAME_Fire, RADF_HURTSOURCE);
 	for (i = 0; i < 4; i++)
 	{
 		tiny = Spawn("VolcanoTBlast", self->x, self->y, self->z, ALLOW_REPLACE);
@@ -234,7 +232,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_VolcBallImpact)
 		tiny->velx = FixedMul (FRACUNIT*7/10, finecosine[angle]);
 		tiny->vely = FixedMul (FRACUNIT*7/10, finesine[angle]);
 		tiny->velz = FRACUNIT + (pr_volcimpact() << 9);
-		P_CheckMissileSpawn (tiny);
+		P_CheckMissileSpawn (tiny, self->radius);
 	}
 }
 

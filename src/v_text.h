@@ -67,6 +67,7 @@ struct FBrokenLines
 #define TEXTCOLOR_DARKBROWN		"\034S"
 #define TEXTCOLOR_PURPLE		"\034T"
 #define TEXTCOLOR_DARKGRAY		"\034U"
+#define TEXTCOLOR_CYAN			"\034V"
 
 #define TEXTCOLOR_NORMAL		"\034-"
 #define TEXTCOLOR_BOLD			"\034+"
@@ -78,7 +79,6 @@ struct FBrokenLines
 void	V_ApplyCharArrayFunctionToFString ( FString &String, void (*CharArrayFunction) ( char *pszString ) );
 void	V_ColorizeString( char *pszString );
 void	V_ColorizeString( FString &String );
-void	V_UnColorizeString( char *pszString, ULONG ulMaxStringLength );
 void	V_UnColorizeString( FString &String );
 void	V_RemoveColorCodes( FString &String );
 void	V_RemoveColorCodes( char *pszString );

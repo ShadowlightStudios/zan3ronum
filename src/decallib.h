@@ -37,7 +37,7 @@
 #include <string.h>
 
 #include "doomtype.h"
-#include "r_blend.h"
+#include "r_data/renderstyle.h"
 #include "textures/textures.h"
 
 class FScanner;
@@ -54,6 +54,9 @@ public:
 	virtual const FDecalTemplate *GetDecal () const;
 	virtual void ReplaceDecalRef (FDecalBase *from, FDecalBase *to) = 0;
 	
+	// [TP]
+	FName GetName() const { return Name; }
+
 protected:
 	FDecalBase ();
 	virtual ~FDecalBase ();

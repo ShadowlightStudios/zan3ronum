@@ -60,12 +60,15 @@
 #include "gl/textures/gl_skyboxtexture.h"
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_convert.h"
+// [BB] New #includes.
+#include "network.h"
 
 EXTERN_CVAR (Float, gl_lights_intensity);
 EXTERN_CVAR (Float, gl_lights_size);
 int ScriptDepth;
 void gl_InitGlow(FScanner &sc);
 void gl_ParseBrightmap(FScanner &sc, int);
+void gl_DestroyUserShaders();
 void gl_ParseHardwareShader(FScanner &sc, int deflump);
 void gl_ParseSkybox(FScanner &sc);
 void gl_ParseDetailTexture(FScanner &sc);
@@ -101,7 +104,7 @@ public:
 	FLightAssociation(FName actorName, const char *frameName, FName lightName)
 		: m_ActorName(actorName), m_AssocLight(lightName)
 	{
-		mysnprintf(m_FrameName, 8, "%s", frameName);
+		strncpy(m_FrameName, frameName, 8);
 	}
 
 	FName ActorName() { return m_ActorName; }
@@ -1103,6 +1106,10 @@ void gl_AttachLight(AActor *actor, unsigned int count, const FLightDefaults *lig
 
 void gl_SetActorLights(AActor *actor)
 {
+	// [BB] The server never displays dynamic lights.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		return;
+
 	TArray<FInternalLightAssociation *> * l = gl_GetActorLights(actor);
 	unsigned int count = 0;
 
@@ -1317,6 +1324,8 @@ void gl_ParseDefs()
 	const char *defsLump = NULL;
 
 	atterm( gl_ReleaseLights ); 
+	gl_ReleaseLights();
+	gl_DestroyUserShaders();
 	switch (gameinfo.gametype)
 	{
 	case GAME_Heretic:
@@ -1333,6 +1342,8 @@ void gl_ParseDefs()
 		break;
 	case GAME_Chex:
 		defsLump = "CHEXDEFS";
+		break;
+	default: // silence GCC
 		break;
 	}
 	gl_ParseVavoomSkybox();

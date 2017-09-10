@@ -103,8 +103,7 @@ void DUEL_Tick( void )
 	{
 	case DS_WAITINGFORPLAYERS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -129,8 +128,7 @@ void DUEL_Tick( void )
 
 			// FIGHT!
 			if (( g_ulDuelCountdownTicks == 0 ) &&
-				( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+				( NETWORK_InClientMode() == false ))
 			{
 				DUEL_DoFight( );
 			}
@@ -171,8 +169,7 @@ void DUEL_StartCountdown( ULONG ulTicks )
 {
 	ULONG	ulIdx;
 
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		// First, reset everyone's fragcount.
 		PLAYER_ResetAllPlayersFragcount( );
@@ -219,8 +216,7 @@ void DUEL_DoFight( void )
 	DHUDMessageFadeOut	*pMsg;
 
 	// No longer waiting to duel.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		DUEL_SetState( DS_INDUEL );
 	}
@@ -240,6 +236,9 @@ void DUEL_DoFight( void )
 	{
 		// Play fight sound.
 		ANNOUNCER_PlayEntry( cl_announcer, "Fight" );
+
+		// [EP] Clear all the HUD messages.
+		StatusBar->DetachAllMessages();
 
 		// Display "FIGHT!" HUD message.
 		pMsg = new DHUDMessageFadeOut( BigFont, "FIGHT!",
@@ -271,8 +270,7 @@ void DUEL_DoWinSequence( ULONG ulPlayer )
 	ULONG	ulIdx;
 
 	// Put the duel state in the win sequence state.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		DUEL_SetState( DS_WINSEQUENCE );
 	}
@@ -286,7 +284,7 @@ void DUEL_DoWinSequence( ULONG ulPlayer )
 		char				szString[64];
 		DHUDMessageFadeOut	*pMsg;
 
-		sprintf( szString, "%s \\c-WINS!", players[ulPlayer].userinfo.netname );
+		sprintf( szString, "%s \\c-WINS!", players[ulPlayer].userinfo.GetName() );
 		V_ColorizeString( szString );
 
 		// Display "%s WINS!" HUD message.
@@ -303,8 +301,7 @@ void DUEL_DoWinSequence( ULONG ulPlayer )
 	}
 
 	// Award a victory or perfect medal to the winner.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		LONG	lMedal;
 
@@ -383,11 +380,7 @@ void DUEL_TimeExpired( void )
 	// If for some reason we don't have two duelers, just end the map like normal.
 	if (( lDueler1 == -1 ) || ( lDueler2 == -1 ))
 	{
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-		else
-			Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+		NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 		GAME_SetEndLevelDelay( 5 * TICRATE );
 		return;
 	}
@@ -442,12 +435,7 @@ void DUEL_TimeExpired( void )
 
 	// Give the winner a win.
 	PLAYER_SetWins( &players[lWinner], players[lWinner].ulWins + 1 );
-
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVER_Printf( PRINT_HIGH, "%s\n", GStrings( "TXT_TIMELIMIT" ));
-	else
-		Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
-
+	NETWORK_Printf( "%s\n", GStrings( "TXT_TIMELIMIT" ));
 	GAME_SetEndLevelDelay( 5 * TICRATE );
 }
 
@@ -505,8 +493,7 @@ void DUEL_SetState( DUELSTATE_e State )
 	case DS_WINSEQUENCE:
 
 		// If we've gotten to a win sequence, we've completed a duel.
-		if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-			( CLIENTDEMO_IsPlaying( ) == false ))
+		if ( NETWORK_InClientMode() == false )
 		{
 			DUEL_SetNumDuels( g_ulNumDuels + 1 );
 		}
@@ -566,7 +553,7 @@ CUSTOM_CVAR( Int, duellimit, 0, CVAR_CAMPAIGNLOCK )
 
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 
 		// Update the scoreboard.

@@ -100,8 +100,8 @@ static	LONG							server_rcon_FindCandidate( NETADDRESS_s Address );
 //
 void SERVER_RCON_Construct( )
 {
-	NETWORK_InitBuffer( &g_MessageBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	g_MessageBuffer.Clear();
 	
 	// Call SERVER_RCON_Destruct() when Skulltag closes.
 	atterm( SERVER_RCON_Destruct );
@@ -112,7 +112,7 @@ void SERVER_RCON_Construct( )
 void SERVER_RCON_Destruct( )
 {
 	// Free our local buffer.
-	NETWORK_FreeBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Free();
 }
 
 //*****************************************************************************
@@ -133,7 +133,7 @@ void SERVER_RCON_Tick( )
 	{
 		if (( gametic - g_AuthedClients[i].iLastMessageTic ) >= ( RCON_CLIENT_TIMEOUT_TIME * TICRATE ))
 		{
-			Printf( "RCON client at %s timed out.\n", NETWORK_AddressToString( g_AuthedClients[i].Address ));
+			Printf( "RCON client at %s timed out.\n", g_AuthedClients[i].Address.ToString() );
 			g_AuthedClients.Delete( i );
 			SERVER_RCON_UpdateInfo( SVRCU_ADMINCOUNT );
 		}
@@ -181,7 +181,7 @@ void SERVER_RCON_ParseMessage( NETADDRESS_s Address, LONG lMessage, BYTESTREAM_s
 			const char *szCommand = NETWORK_ReadString( pByteStream );
 			// [BB] Log the command before adding it. If we don't have a server GUI, the command
 			// is executed immediately and may cause Skulltag to exit before the command is logged.
-			Printf( "-> %s (RCON by %s)\n", szCommand, NETWORK_AddressToString( Address ) );
+			Printf( "-> %s (RCON by %s)\n", szCommand, Address.ToString() );
 			SERVER_AddCommand( szCommand );
 			g_AuthedClients[iIndex].iLastMessageTic = gametic;
 		}
@@ -193,7 +193,7 @@ void SERVER_RCON_ParseMessage( NETADDRESS_s Address, LONG lMessage, BYTESTREAM_s
 		{
 			g_AuthedClients.Delete( iIndex );
 			SERVER_RCON_UpdateInfo( SVRCU_ADMINCOUNT );
-			Printf( "RCON client at %s disconnected.\n", NETWORK_AddressToString( Address ));
+			Printf( "RCON client at %s disconnected.\n", Address.ToString() );
 		}
 		break;
 	case CLRC_TABCOMPLETE:
@@ -204,7 +204,7 @@ void SERVER_RCON_ParseMessage( NETADDRESS_s Address, LONG lMessage, BYTESTREAM_s
 		{
 			const char* part = NETWORK_ReadString( pByteStream );
 			TArray<FString> list = C_GetTabCompletes( part );
-			NETWORK_ClearBuffer( &g_MessageBuffer );
+			g_MessageBuffer.Clear();
 
 			// [TP] Let's not send too many of these though
 			if ( list.Size() < 50 )
@@ -239,7 +239,7 @@ void SERVER_RCON_Print( const char *pszString )
 {
 	for ( unsigned int i = 0; i < g_AuthedClients.Size( ); i++ )
 	{
-		NETWORK_ClearBuffer( &g_MessageBuffer );
+		g_MessageBuffer.Clear();
 		NETWORK_WriteByte( &g_MessageBuffer.ByteStream, SVRC_MESSAGE );
 		NETWORK_WriteString( &g_MessageBuffer.ByteStream, pszString );
 		NETWORK_LaunchPacket( &g_MessageBuffer, g_AuthedClients[i].Address );
@@ -278,7 +278,7 @@ void SERVER_RCON_UpdateInfo( int iUpdateType )
 
 	for ( unsigned int i = 0; i < g_AuthedClients.Size( ); i++ )
 	{	
-		NETWORK_ClearBuffer( &g_MessageBuffer );
+		g_MessageBuffer.Clear();
 		NETWORK_WriteByte( &g_MessageBuffer.ByteStream, SVRC_UPDATE );		
 		server_WriteUpdateInfo( &g_MessageBuffer.ByteStream, iUpdateType );
 		NETWORK_LaunchPacket( &g_MessageBuffer, g_AuthedClients[i].Address );
@@ -309,7 +309,7 @@ static void server_WriteUpdateInfo( BYTESTREAM_s *pByteStream, int iUpdateType )
 			{
 				FString		fsName;
 
-				fsName.Format( "%s", players[i].userinfo.netname );
+				fsName.Format( "%s", players[i].userinfo.GetName() );
 				V_RemoveColorCodes( fsName );
 				NETWORK_WriteString( pByteStream, fsName );
 			}
@@ -374,7 +374,7 @@ static void server_rcon_HandleNewConnection( NETADDRESS_s Address,  int iProtoco
 	server_rcon_CreateSalt( Candidate.szSalt );
 	g_Candidates.Push( Candidate );
 
-	NETWORK_ClearBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Clear();
 	NETWORK_WriteByte( &g_MessageBuffer.ByteStream, SVRC_SALT );
 	NETWORK_WriteString( &g_MessageBuffer.ByteStream, Candidate.szSalt );
 	NETWORK_LaunchPacket( &g_MessageBuffer, Address );
@@ -401,7 +401,7 @@ static void server_rcon_HandleLogin( int iCandidateIndex, const char *pszHash )
 
 	// Compare that to what he sent us.
 	// Printf("Mine: %s\nTheirs: %s\n", fsCorrectHash, pszHash );
-	NETWORK_ClearBuffer( &g_MessageBuffer );
+	g_MessageBuffer.Clear();
 	// [BB] Do not allow the server to let anybody use RCON in case sv_rconpassword is empty.
 	if ( fsCorrectHash.Compare( pszHash ) || ( strlen( sv_rconpassword.GetGenericRep(CVAR_String).String ) == 0 ) )
 	{
@@ -412,14 +412,14 @@ static void server_rcon_HandleLogin( int iCandidateIndex, const char *pszHash )
 		// To prevent mass password flooding, ignore the IP for a few seconds.
 		g_BadRequestFloodQueue.addAddress( g_Candidates[iCandidateIndex].Address, gametic / 1000 );
 
-		Printf( "Failed RCON login from %s. Ignoring IP for 10 seconds...\n", NETWORK_AddressToString( g_Candidates[iCandidateIndex].Address ));
+		Printf( "Failed RCON login from %s. Ignoring IP for 10 seconds...\n", g_Candidates[iCandidateIndex].Address.ToString() );
 	}
 	else
 	{		
 		// [BB] Since we log when RCON clients disconnect, we should also log when they connect.
 		// Do this before we do anything else so that this message is sent to the new RCON client
 		// with the console history.
-		Printf( "RCON client at %s connected.\n", NETWORK_AddressToString( g_Candidates[iCandidateIndex].Address ));
+		Printf( "RCON client at %s connected.\n", g_Candidates[iCandidateIndex].Address.ToString() );
 
 		// Correct password. Promote him to an authed client.
 		RCONCLIENT_s Client;
@@ -427,7 +427,7 @@ static void server_rcon_HandleLogin( int iCandidateIndex, const char *pszHash )
 		Client.iLastMessageTic = gametic;
 		g_AuthedClients.Push( Client );
 
-		NETWORK_ClearBuffer( &g_MessageBuffer );
+		g_MessageBuffer.Clear();
 		NETWORK_WriteByte( &g_MessageBuffer.ByteStream, SVRC_LOGGEDIN );
 
 		// Tell him some info about the server.
@@ -485,7 +485,7 @@ static void server_rcon_CreateSalt( char *pszBuffer )
 static LONG server_rcon_FindCandidate( NETADDRESS_s Address )
 {
 	for ( unsigned int i = 0; i < g_Candidates.Size( ); i++ )
-		if ( NETWORK_CompareAddress( g_Candidates[i].Address, Address, false ))
+		if ( g_Candidates[i].Address.Compare( Address ))
 			return i;
 
 	return -1;
@@ -503,7 +503,7 @@ static LONG server_rcon_FindCandidate( NETADDRESS_s Address )
 static LONG server_rcon_FindClient( NETADDRESS_s Address )
 {
 	for ( unsigned int i = 0; i < g_AuthedClients.Size( ); i++ )
-		if ( NETWORK_CompareAddress( g_AuthedClients[i].Address, Address, false ))
+		if ( g_AuthedClients[i].Address.Compare( Address ))
 			return i;
 
 	return -1;

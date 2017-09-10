@@ -73,9 +73,6 @@ enum
 #define TEAM_MESSAGE_Y_AXIS		0.135f
 #define TEAM_MESSAGE_Y_AXIS_SUB 0.195f
 
-// [CW] The number of bot slots defined in the bot team setup menu.
-#define MAX_BOTTEAMSLOTS MAX_TEAMS * 5
-
 //*****************************************************************************
 //	PROTOTYPES
 
@@ -191,6 +188,7 @@ ULONG		TEAM_CountSkulls( void );
 ULONG		TEAM_GetTeamFromItem( AActor *pActor );
 ULONG		TEAM_GetNextTeam( ULONG ulTeamIdx );
 
+bool		TEAM_ShouldJoinTeam();
 bool		TEAM_IsActorAllowedForPlayer( AActor *pActor, player_t *pPlayer );
 bool		TEAM_IsClassAllowedForPlayer( ULONG ulClass, player_t *pPlayer );
 bool		TEAM_CheckTeamRestriction( ULONG ulTeam, ULONG ulTeamRestriction );

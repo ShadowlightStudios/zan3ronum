@@ -62,6 +62,9 @@
 #include "i_system.h"
 #include "c_dispatch.h"
 #include "templates.h"
+#include "v_palette.h"
+#include "textures.h"
+#include "bitmap.h"
 
 #include "stats.h"
 #include "hardware.h"
@@ -73,6 +76,13 @@
 #include "cl_demo.h"
 #include "cl_main.h"
 #include "v_text.h"
+
+#ifdef USE_XCURSOR
+// Xlib has its own GC, so don't let it interfere.
+#define GC XGC
+#include <X11/Xcursor/Xcursor.h>
+#undef GC
+#endif
 
 EXTERN_CVAR (String, language)
 
@@ -86,6 +96,11 @@ extern "C"
 extern bool GtkAvailable;
 #elif defined(__APPLE__)
 int I_PickIWad_Cocoa (WadStuff *wads, int numwads, bool showwin, int defaultiwad);
+#endif
+#ifdef USE_XCURSOR
+bool UseXCursor;
+SDL_Cursor *X11Cursor;
+SDL_Cursor *FirstCursor;
 #endif
 
 DWORD LanguageIDs[4] =
@@ -127,10 +142,7 @@ static DWORD BaseTime;
 static int TicFrozen;
 
 // Signal based timer.
-static struct timespec SignalTimeOut = { 0, 1000000/TICRATE };
-#ifdef HAVE_SIGTIMEDWAIT
-static sigset_t SignalWaitSet;
-#endif
+static Semaphore timerWait;
 static int tics;
 static DWORD sig_start, sig_next;
 
@@ -178,11 +190,6 @@ int I_GetTimePolled (bool saveMS)
 
 int I_GetTimeSignaled (bool saveMS)
 {
-	if (TicFrozen != 0)
-	{
-		return TicFrozen;
-	}
-
 	if (saveMS)
 	{
 		TicStart = sig_start;
@@ -206,15 +213,12 @@ int I_WaitForTicSignaled (int prevtic)
 {
 	assert (TicFrozen == 0);
 
-#ifdef HAVE_SIGTIMEDWAIT
-	while(sigtimedwait(&SignalWaitSet, NULL, &SignalTimeOut) == -1 && errno == EINTR)
-		;
-#else
-	while(nanosleep(&SignalTimeOut, NULL) == -1 && errno == EINTR)
-		;
-#endif
+	while(tics <= prevtic)
+	{
+		SEMAPHORE_WAIT(timerWait)
+	}
 
-	return I_GetTimePolled(false);
+	return tics;
 }
 
 void I_FreezeTimeSelect (bool frozen)
@@ -261,6 +265,7 @@ void I_HandleAlarm (int sig)
 		tics++;
 	sig_start = SDL_GetTicks();
 	sig_next = Scale((Scale (sig_start, TICRATE, 1000) + 1), 1000, TICRATE);
+	SEMAPHORE_SIGNAL(timerWait)
 }
 
 //
@@ -270,42 +275,31 @@ void I_HandleAlarm (int sig)
 //
 void I_SelectTimer()
 {
-	struct sigaction act;
+	SEMAPHORE_INIT(timerWait, 0, 0)
+#ifndef __sun
+	signal(SIGALRM, I_HandleAlarm);
+#else
+	struct sigaction alrmaction;
+	sigaction(SIGALRM, NULL, &alrmaction);
+	alrmaction.sa_handler = I_HandleAlarm;
+	sigaction(SIGALRM, &alrmaction, NULL);
+#endif
+
 	struct itimerval itv;
-
-	sigfillset (&act.sa_mask);
-	act.sa_flags = 0;
-	// [BL] This doesn't seem to be executed consistantly, I'm guessing the
-	//      sleep functions are taking over the signal. So for now, lets just
-	//      attach WaitForTic to signals in order to reduce CPU usage.
-	//act.sa_handler = I_HandleAlarm;
-	act.sa_handler = SIG_IGN;
-
-	sigaction (SIGALRM, &act, NULL);
-
 	itv.it_interval.tv_sec = itv.it_value.tv_sec = 0;
 	itv.it_interval.tv_usec = itv.it_value.tv_usec = 1000000/TICRATE;
-
-	// [BL] See above.
-	I_GetTime = I_GetTimePolled;
-	I_FreezeTime = I_FreezeTimePolled;
 
 	// [BB] For now I_WaitForTicSignaled doesn't work on the client.
 	if ( NETWORK_InClientMode() || ( setitimer(ITIMER_REAL, &itv, NULL) != 0 ) )
 	{
-		//I_GetTime = I_GetTimePolled;
-		//I_FreezeTime = I_FreezeTimePolled;
+		I_GetTime = I_GetTimePolled;
+		I_FreezeTime = I_FreezeTimePolled;
 		I_WaitForTic = I_WaitForTicPolled;
 	}
 	else
 	{
-#ifdef HAVE_SIGTIMEDWAIT
-		sigemptyset(&SignalWaitSet);
-		sigaddset(&SignalWaitSet, SIGALRM);
-#endif
-
-		//I_GetTime = I_GetTimeSignaled;
-		//I_FreezeTime = I_FreezeTimeSignaled;
+		I_GetTime = I_GetTimeSignaled;
+		I_FreezeTime = I_FreezeTimeSignaled;
 		I_WaitForTic = I_WaitForTicSignaled;
 	}
 }
@@ -379,6 +373,10 @@ void I_Quit (void)
 extern FILE *Logfile;
 bool gameisdead;
 
+#ifdef __APPLE__
+void Mac_I_FatalError(const char* errortext);
+#endif
+
 void STACK_ARGS I_FatalError (const char *error, ...)
 {
     static bool alreadyThrown = false;
@@ -391,9 +389,13 @@ void STACK_ARGS I_FatalError (const char *error, ...)
 		int index;
 		va_list argptr;
 		va_start (argptr, error);
-		index = vsprintf (errortext, error, argptr);
+		index = vsnprintf (errortext, MAX_ERRORTEXT, error, argptr);
 		va_end (argptr);
 
+#ifdef __APPLE__
+		Mac_I_FatalError(errortext);
+#endif // __APPLE__		
+		
 		// Record error to log (if logging)
 		if (Logfile)
 		{
@@ -429,16 +431,33 @@ void STACK_ARGS I_Error (const char *error, ...)
 	throw CRecoverableError (errortext);
 }
 
-void I_SetIWADInfo (const IWADInfo *info)
+void I_SetIWADInfo ()
 {
 }
 
 void I_PrintStr (const char *cp)
 {
-	// [BB] The color codes don't seem to be compatible with stdout under Linux, so just remove them.
-	FString copy = cp;
-	V_RemoveColorCodes ( copy );
-	fputs (copy.GetChars(), stdout);
+	// Strip out any color escape sequences before writing to the log file
+	char * copy = new char[strlen(cp)+1];
+	const char * srcp = cp;
+	char * dstp = copy;
+
+	while (*srcp != 0)
+	{
+		if (*srcp!=0x1c && *srcp!=0x1d && *srcp!=0x1e && *srcp!=0x1f)
+		{
+			*dstp++=*srcp++;
+		}
+		else
+		{
+			if (srcp[1]!=0) srcp+=2;
+			else break;
+		}
+	}
+	*dstp=0;
+
+	fputs (copy, stdout);
+	delete [] copy;
 	fflush (stdout);
 }
 
@@ -531,7 +550,7 @@ int I_PickIWad_Gtk (WadStuff *wads, int numwads, bool showwin, int defaultiwad)
 		gtk_list_store_append (store, &iter);
 		gtk_list_store_set (store, &iter,
 			0, filepart,
-			1, IWADInfos[wads[i].Type].Name,
+			1, wads[i].Name.GetChars(),
 			2, i,
 			-1);
 		if (i == defaultiwad)
@@ -592,7 +611,7 @@ int I_PickIWad_Gtk (WadStuff *wads, int numwads, bool showwin, int defaultiwad)
 	if (close_style == 1)
 	{
 		GtkTreeModel *model;
-		GValue value = { 0, };
+		GValue value = { 0, { {0} } };
 		
 		// Find out which IWAD was selected.
 		gtk_tree_selection_get_selected (selection, &model, &iter);
@@ -628,6 +647,58 @@ int I_PickIWad (WadStuff *wads, int numwads, bool showwin, int defaultiwad)
 		return defaultiwad;
 	}
 
+#if !defined(__APPLE__)
+	const char *str;
+	if((str=getenv("KDE_FULL_SESSION")) && strcmp(str, "true") == 0)
+	{
+		FString cmd("kdialog --title \"" GAMESIG " ");
+		cmd << GetVersionString() << ": Select an IWAD to use\""
+		            " --menu \"ZDoom found more than one IWAD\n"
+		            "Select from the list below to determine which one to use:\"";
+
+		for(i = 0; i < numwads; ++i)
+		{
+			const char *filepart = strrchr(wads[i].Path, '/');
+			if(filepart == NULL)
+				filepart = wads[i].Path;
+			else
+				filepart++;
+			// Menu entries are specified in "tag" "item" pairs, where when a
+			// particular item is selected (and the Okay button clicked), its
+			// corresponding tag is printed to stdout for identification.
+			cmd.AppendFormat(" \"%d\" \"%s (%s)\"", i, wads[i].Name.GetChars(), filepart);
+		}
+
+		if(defaultiwad >= 0 && defaultiwad < numwads)
+		{
+			const char *filepart = strrchr(wads[defaultiwad].Path, '/');
+			if(filepart == NULL)
+				filepart = wads[defaultiwad].Path;
+			else
+				filepart++;
+			cmd.AppendFormat(" --default \"%s (%s)\"", wads[defaultiwad].Name.GetChars(), filepart);
+		}
+
+		FILE *f = popen(cmd, "r");
+		if(f != NULL)
+		{
+			char gotstr[16];
+
+			if(fgets(gotstr, sizeof(gotstr), f) == NULL ||
+			   sscanf(gotstr, "%d", &i) != 1)
+				i = -1;
+
+			// Exit status = 1 means the selection was canceled (either by
+			// Cancel/Esc or the X button), not that there was an error running
+			// the program. In that case, nothing was printed so fgets will
+			// have failed. Other values can indicate an error running the app,
+			// so fall back to whatever else can be used.
+			int status = pclose(f);
+			if(WIFEXITED(status) && (WEXITSTATUS(status) == 0 || WEXITSTATUS(status) == 1))
+				return i;
+		}
+	}
+#endif
 #ifndef NO_GTK
 	if (GtkAvailable)
 	{
@@ -645,11 +716,10 @@ int I_PickIWad (WadStuff *wads, int numwads, bool showwin, int defaultiwad)
 			filepart = wads[i].Path;
 		else
 			filepart++;
-		printf ("%d. %s (%s)\n", i+1, IWADInfos[wads[i].Type].Name, filepart);
+		printf ("%d. %s (%s)\n", i+1, wads[i].Name.GetChars(), filepart);
 	}
 	printf ("Which one? ");
-	scanf ("%d", &i);
-	if (i > numwads)
+	if (scanf ("%d", &i) != 1 || i > numwads)
 		return -1;
 	return i-1;
 }
@@ -663,7 +733,8 @@ bool I_WriteIniFailed ()
 
 static const char *pattern;
 
-#if defined ( __APPLE__ ) || ( defined ( __FreeBSD__ ) && ( __FreeBSD__ < 8 ) )
+// [BB] Added FreeBSD checks
+#if ( defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED < 1080 ) || ( defined ( __FreeBSD__ ) && ( __FreeBSD__ < 8 ) )
 static int matchfile (struct dirent *ent)
 #else
 static int matchfile (const struct dirent *ent)
@@ -713,6 +784,8 @@ int I_FindClose (void *handle)
 	findstate_t *state = (findstate_t *)handle;
 	if (handle != (void*)-1 && state->count > 0)
 	{
+		for(int i = 0;i < state->count;++i)
+			free (state->namelist[i]);
 		state->count = 0;
 		free (state->namelist);
 		state->namelist = NULL;
@@ -797,4 +870,105 @@ unsigned int I_MakeRNGSeed()
 		close(file);
 	}
 	return seed;
+}
+
+#ifdef USE_XCURSOR
+// Hack! Hack! SDL does not provide a clean way to get the XDisplay.
+// On the other hand, there are no more planned updates for SDL 1.2,
+// so we should be fine making assumptions.
+struct SDL_PrivateVideoData
+{
+	int local_X11;
+	Display *X11_Display;
+};
+
+struct SDL_VideoDevice
+{
+	const char *name;
+	int (*functions[9])();
+	SDL_VideoInfo info;
+	SDL_PixelFormat *displayformatalphapixel;
+	int (*morefuncs[9])();
+	Uint16 *gamma;
+	int (*somefuncs[9])();
+	unsigned int texture;				// Only here if SDL was compiled with OpenGL support. Ack!
+	int is_32bit;
+	int (*itsafuncs[13])();
+	SDL_Surface *surfaces[3];
+	SDL_Palette *physpal;
+	SDL_Color *gammacols;
+	char *wm_strings[2];
+	int offsets[2];
+	SDL_GrabMode input_grab;
+	int handles_any_size;
+	SDL_PrivateVideoData *hidden;	// Why did they have to bury this so far in?
+};
+
+extern SDL_VideoDevice *current_video;
+#define SDL_Display (current_video->hidden->X11_Display)
+
+SDL_Cursor *CreateColorCursor(FTexture *cursorpic)
+{
+	return NULL;
+}
+#endif
+
+SDL_Surface *cursorSurface = NULL;
+SDL_Rect cursorBlit = {0, 0, 32, 32};
+bool I_SetCursor(FTexture *cursorpic)
+{
+	if (cursorpic != NULL && cursorpic->UseType != FTexture::TEX_Null)
+	{
+		// Must be no larger than 32x32.
+		if (cursorpic->GetWidth() > 32 || cursorpic->GetHeight() > 32)
+		{
+			return false;
+		}
+
+#ifdef USE_XCURSOR
+		if (UseXCursor)
+		{
+			if (FirstCursor == NULL)
+			{
+				FirstCursor = SDL_GetCursor();
+			}
+			X11Cursor = CreateColorCursor(cursorpic);
+			if (X11Cursor != NULL)
+			{
+				SDL_SetCursor(X11Cursor);
+				return true;
+			}
+		}
+#endif
+		if (cursorSurface == NULL)
+			cursorSurface = SDL_CreateRGBSurface (0, 32, 32, 32, MAKEARGB(0,255,0,0), MAKEARGB(0,0,255,0), MAKEARGB(0,0,0,255), MAKEARGB(255,0,0,0));
+
+		SDL_ShowCursor(0);
+		SDL_LockSurface(cursorSurface);
+		BYTE buffer[32*32*4];
+		memset(buffer, 0, 32*32*4);
+		FBitmap bmp(buffer, 32*4, 32, 32);
+		cursorpic->CopyTrueColorPixels(&bmp, 0, 0);
+		memcpy(cursorSurface->pixels, bmp.GetPixels(), 32*32*4);
+		SDL_UnlockSurface(cursorSurface);
+	}
+	else
+	{
+		SDL_ShowCursor(1);
+
+		if (cursorSurface != NULL)
+		{
+			SDL_FreeSurface(cursorSurface);
+			cursorSurface = NULL;
+		}
+#ifdef USE_XCURSOR
+		if (X11Cursor != NULL)
+		{
+			SDL_SetCursor(FirstCursor);
+			SDL_FreeCursor(X11Cursor);
+			X11Cursor = NULL;
+		}
+#endif
+	}
+	return true;
 }

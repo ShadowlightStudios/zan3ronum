@@ -49,6 +49,8 @@
 #include "doomstat.h"
 #include "g_level.h"
 
+#include <time.h>
+
 // [BB] New #includes.
 #include <algorithm>
 #include "deathmatch.h"
@@ -76,6 +78,8 @@ CVAR (Bool,  hud_showmonsters,	true,CVAR_ARCHIVE);		// Show monster stats on HUD
 CVAR (Bool,  hud_showitems,		false,CVAR_ARCHIVE);	// Show item stats on HUD
 CVAR (Bool,  hud_showstats,		false,	CVAR_ARCHIVE);	// for stamina and accuracy. 
 CVAR (Bool,  hud_showscore,		false,	CVAR_ARCHIVE);	// for user maintained score
+CVAR (Int ,  hud_showtime,		0,	    CVAR_ARCHIVE);	// Show time on HUD
+CVAR (Int ,  hud_timecolor,		CR_GOLD,CVAR_ARCHIVE);	// Color of in-game time on HUD
 CVAR ( Bool, hud_showdmstats,	true,	CVAR_ARCHIVE );	// [TP] Draw the rank of the player
 
 CVAR (Int, hud_ammo_red, 25, CVAR_ARCHIVE)					// ammo percent less than which status is red    
@@ -87,13 +91,15 @@ CVAR (Int, hud_armor_red, 25, CVAR_ARCHIVE)					// armor amount less than which 
 CVAR (Int, hud_armor_yellow, 50, CVAR_ARCHIVE)				// armor amount less than which status is yellow 
 CVAR (Int, hud_armor_green, 100, CVAR_ARCHIVE)				// armor amount above is blue, below is green    
 
+CVAR (Bool, hud_berserk_health, true, CVAR_ARCHIVE);		// when found berserk pack instead of health box
+
 CVAR (Int, hudcolor_titl, CR_YELLOW, CVAR_ARCHIVE)			// color of automap title
 CVAR (Int, hudcolor_time, CR_RED, CVAR_ARCHIVE)				// color of level/hub time
 CVAR (Int, hudcolor_ltim, CR_ORANGE, CVAR_ARCHIVE)			// color of single level time
 CVAR (Int, hudcolor_ttim, CR_GOLD, CVAR_ARCHIVE)			// color of total time
 CVAR (Int, hudcolor_xyco, CR_GREEN, CVAR_ARCHIVE)			// color of coordinates
 
-CVAR (Int, hudcolor_statnames, CR_RED, CVAR_ARCHIVE)		// For the letters befóre the stats
+CVAR (Int, hudcolor_statnames, CR_RED, CVAR_ARCHIVE)		// For the letters before the stats
 CVAR (Int, hudcolor_stats, CR_GREEN, CVAR_ARCHIVE)			// For the stats values themselves
 
 
@@ -104,6 +110,7 @@ static FFont * IndexFont;					// The font for the inventory indices
 
 // Icons
 static FTexture * healthpic;				// Health icon
+static FTexture * berserkpic;				// Berserk icon (Doom only)
 static FTexture * fragpic;					// Frags icon
 static FTexture * invgems[4];				// Inventory arrows
 
@@ -133,16 +140,16 @@ void SetHUDIcon(PClass *cls, FTextureID tex)
 //---------------------------------------------------------------------------
 static void DrawImageToBox(FTexture * tex, int x, int y, int w, int h, int trans=0xc000)
 {
-	float scale1, scale2;
+	double scale1, scale2;
 
 	if (tex)
 	{
-		int texwidth=tex->GetWidth();
-		int texheight=tex->GetHeight();
+		double texwidth=tex->GetScaledWidthDouble();
+		double texheight=tex->GetScaledHeightDouble();
 
-		if (w<texwidth) scale1=(float)w/texwidth;
+		if (w<texwidth) scale1=w/texwidth;
 		else scale1=1.0f;
-		if (h<texheight) scale2=(float)h/texheight;
+		if (h<texheight) scale2=h/texheight;
 		else scale2=1.0f;
 		if (scale2<scale1) scale1=scale2;
 
@@ -179,11 +186,14 @@ static void DrawHudText(FFont *font, int color, char * text, int x, int y, int t
 		FTexture *texc = font->GetChar(text[i], &width);
 		if (texc != NULL)
 		{
-			int offset = texc->TopOffset - tex_zero->TopOffset + tex_zero->GetHeight();
+			double offset = texc->GetScaledTopOffsetDouble() 
+				- tex_zero->GetScaledTopOffsetDouble() 
+				+ tex_zero->GetScaledHeightDouble();
+
 			screen->DrawChar(font, color, x, y, text[i],
 				DTA_KeepRatio, true,
 				DTA_VirtualWidth, hudwidth, DTA_VirtualHeight, hudheight, DTA_Alpha, trans, 
-				DTA_LeftOffset, width/2, DTA_TopOffset, offset,
+				DTA_LeftOffset, width/2, DTA_TopOffsetF, offset,
 				/*DTA_CenterBottomOffset, 1,*/ TAG_DONE);
 		}
 		x += zerowidth;
@@ -236,9 +246,9 @@ static void DrawStatus(player_t * CPlayer, int x, int y)
 	
 	if (hud_showstats)
 	{
-		mysnprintf(tempstr, countof(tempstr), "%i ", CPlayer->accuracy);
+		mysnprintf(tempstr, countof(tempstr), "%i ", CPlayer->mo->accuracy);
 		DrawStatLine(x, y, "Ac:", tempstr);
-		mysnprintf(tempstr, countof(tempstr), "%i ", CPlayer->stamina);
+		mysnprintf(tempstr, countof(tempstr), "%i ", CPlayer->mo->stamina);
 		DrawStatLine(x, y, "St:", tempstr);
 	}
 	
@@ -250,7 +260,11 @@ static void DrawStatus(player_t * CPlayer, int x, int y)
 		// work in cooperative hub games
 		if (hud_showsecrets)
 		{
-			mysnprintf(tempstr, countof(tempstr), "%i/%i ", (NETWORK_GetState( ) != NETSTATE_SINGLE) ? CPlayer->secretcount : level.found_secrets, level.total_secrets);
+			// [Zandronum]
+			// instead of ZDoom's
+			//   mysnprintf(tempstr, countof(tempstr), "%i/%i ", multiplayer? CPlayer->secretcount : level.found_secrets, level.total_secrets);
+			// display the total amount of discovered secrets by everyone
+			mysnprintf(tempstr, countof(tempstr), "%i/%i ", level.found_secrets, level.total_secrets);
 			DrawStatLine(x, y, "S:", tempstr);
 		}
 		
@@ -300,32 +314,64 @@ static void DrawStatus(player_t * CPlayer, int x, int y)
 //
 //===========================================================================
 
-static void DrawHealth(int health, int x, int y)
+static void DrawHealth(player_t *CPlayer, int x, int y)
 {
+	int health = CPlayer->health;
+
 	// decide on the color first
 	int fontcolor =
 		health < hud_health_red ? CR_RED :
 		health < hud_health_yellow ? CR_GOLD :
 		health <= hud_health_green ? CR_GREEN :
 		CR_BLUE;
-	
-	DrawImageToBox(healthpic, x, y, 31, 17);
+
+	const bool haveBerserk = hud_berserk_health
+		&& NULL != berserkpic
+		&& NULL != CPlayer->mo->FindInventory< APowerStrength >();
+
+	DrawImageToBox(haveBerserk ? berserkpic : healthpic, x, y, 31, 17);
 	DrawHudNumber(HudFont, fontcolor, health, x + 33, y + 17);
 }
 
 //===========================================================================
 //
 // Draw Armor.
-// very similar to drawhealth.
+// very similar to drawhealth, but adapted to handle Hexen armor too
 //
 //===========================================================================
 
-static void DrawArmor(AInventory * armor, int x, int y)
+static void DrawArmor(ABasicArmor * barmor, AHexenArmor * harmor, int x, int y)
 {
-	if (armor)
-	{
-		int ap=armor->Amount;
+	int ap = 0;
+	int bestslot = 4;
 
+	if (harmor)
+	{
+		int ac = (harmor->Slots[0] + harmor->Slots[1] + harmor->Slots[2] + harmor->Slots[3] + harmor->Slots[4]);
+		ac >>= FRACBITS;
+		ap += ac;
+		
+		if (ac)
+		{
+			// Find the part of armor that protects the most
+			bestslot = 0;
+			for (int i = 1; i < 4; ++i)
+			{
+				if (harmor->Slots[i] > harmor->Slots[bestslot])
+				{
+					bestslot = i;
+				}
+			}
+		}
+	}
+
+	if (barmor)
+	{
+		ap += barmor->Amount;
+	}
+
+	if (ap)
+	{
 		// decide on color
 		int fontcolor =
 			ap < hud_armor_red ? CR_RED :
@@ -334,11 +380,23 @@ static void DrawArmor(AInventory * armor, int x, int y)
 			CR_BLUE;
 
 
-		if (ap)
+		// Use the sprite of one of the predefined Hexen armor bonuses.
+		// This is not a very generic approach, but it is not possible
+		// to truly create new types of Hexen armor bonus items anyway.
+		if (harmor && bestslot < 4)
 		{
-			DrawImageToBox(TexMan[armor->Icon], x, y, 31, 17);
-			DrawHudNumber(HudFont, fontcolor, ap, x + 33, y + 17);
+			char icon[] = "AR_1A0";
+			switch (bestslot)
+			{
+			case 1: icon[3] = '2'; break;
+			case 2: icon[3] = '3'; break;
+			case 3: icon[3] = '4'; break;
+			default: break;
+			}
+			DrawImageToBox(TexMan.FindTexture(icon, FTexture::TEX_Sprite), x, y, 31, 17);
 		}
+		else if (barmor) DrawImageToBox(TexMan[barmor->Icon], x, y, 31, 17);
+		DrawHudNumber(HudFont, fontcolor, ap, x + 33, y + 17);
 	}
 }
 
@@ -591,11 +649,58 @@ static int DrawAmmo(player_t *CPlayer, int x, int y)
 // Weapons List
 //
 //---------------------------------------------------------------------------
+FTextureID GetInventoryIcon(AInventory *item, DWORD flags, bool *applyscale=NULL)	// This function is also used by SBARINFO
+{
+	FTextureID picnum, AltIcon = GetHUDIcon(item->GetClass());
+	FState * state=NULL, *ReadyState;
+	
+	picnum.SetNull();
+	if (flags & DI_ALTICONFIRST)
+	{
+		if (!(flags & DI_SKIPALTICON) && AltIcon.isValid())
+			picnum = AltIcon;
+		else if (!(flags & DI_SKIPICON))
+			picnum = item->Icon;
+	}
+	else
+	{
+		if (!(flags & DI_SKIPICON) && item->Icon.isValid())
+			picnum = item->Icon;
+		else if (!(flags & DI_SKIPALTICON))
+			picnum = AltIcon;
+	}
+	
+	if (!picnum.isValid()) //isNull() is bad for checking, because picnum could be also invalid (-1)
+	{
+		if (!(flags & DI_SKIPSPAWN) && item->SpawnState && item->SpawnState->sprite!=0)
+		{
+			state = item->SpawnState;
+			
+			if (applyscale != NULL && !(flags & DI_FORCESCALE))
+			{
+				*applyscale = true;
+			}
+		}
+		// no spawn state - now try the ready state if it's weapon
+		else if (!(flags & DI_SKIPREADY) && item->GetClass()->IsDescendantOf(RUNTIME_CLASS(AWeapon)) && (ReadyState = item->FindState(NAME_Ready)) && ReadyState->sprite!=0)
+		{
+			state = ReadyState;
+		}
+		if (state && (unsigned)state->sprite < (unsigned)sprites.Size ())
+		{
+			spritedef_t * sprdef = &sprites[state->sprite];
+			spriteframe_t * sprframe = &SpriteFrames[sprdef->spriteframes + state->GetFrame()];
+
+			picnum = sprframe->Texture[0];
+		}
+	}
+	return picnum;
+}
+
 
 static void DrawOneWeapon(player_t * CPlayer, int x, int & y, AWeapon * weapon)
 {
 	int trans;
-	FTextureID picnum;
 
 	// Powered up weapons and inherited sister weapons are not displayed.
 	if (weapon->WeaponFlags & WIF_POWERED_UP) return;
@@ -607,30 +712,7 @@ static void DrawOneWeapon(player_t * CPlayer, int x, int & y, AWeapon * weapon)
 		if (weapon==CPlayer->ReadyWeapon || weapon==CPlayer->ReadyWeapon->SisterWeapon) trans=0xd999;
 	}
 
-	FState * state=NULL, *ReadyState;
-	
-	FTextureID AltIcon = GetHUDIcon(weapon->GetClass());
-	picnum = !AltIcon.isNull()? AltIcon : weapon->Icon;
-
-	if (picnum.isNull())
-	{
-		if (weapon->SpawnState && weapon->SpawnState->sprite!=0)
-		{
-			state = weapon->SpawnState;
-		}
-		// no spawn state - now try the ready state
-		else if ((ReadyState = weapon->FindState(NAME_Ready)) && ReadyState->sprite!=0)
-		{
-			state = ReadyState;
-		}
-		if (state &&  (unsigned)state->sprite < (unsigned)sprites.Size ())
-		{
-			spritedef_t * sprdef = &sprites[state->sprite];
-			spriteframe_t * sprframe = &SpriteFrames[sprdef->spriteframes + state->GetFrame()];
-
-			picnum = sprframe->Texture[0];
-		}
-	}
+	FTextureID picnum = GetInventoryIcon(weapon, DI_ALTICONFIRST);
 
 	if (picnum.isValid())
 	{
@@ -769,9 +851,9 @@ static void DrawFrags(player_t * CPlayer, int x, int y)
 
 static int GetScoreForTeam( int t )
 {
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNFRAGS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 		return TEAM_GetFragCount( t );
-	else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode() ) & GMF_PLAYERSEARNWINS )
+	else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 		return TEAM_GetWinCount( t );
 
 	return TEAM_GetScore( t );
@@ -883,7 +965,7 @@ static bool ShouldDrawHealth( player_t* CPlayer )
 	if ( CPlayer->bSpectating )
 		return false;
 
-	if (( NETWORK_InClientMode() )
+	if ( NETWORK_InClientMode()
 		&& ( SERVER_IsPlayerAllowedToKnowHealth( consoleplayer, CPlayer - players )) == false )
 	{
 		return false;
@@ -894,10 +976,88 @@ static bool ShouldDrawHealth( player_t* CPlayer )
 
 //---------------------------------------------------------------------------
 //
+// Draw in-game time
+//
+// Check AltHUDTime option value in wadsrc/static/menudef.txt
+// for meaning of all display modes
+//
+//---------------------------------------------------------------------------
+
+static void DrawTime()
+{
+	if (hud_showtime <= 0 || hud_showtime > 9)
+	{
+		return;
+	}
+
+	int hours   = 0;
+	int minutes = 0;
+	int seconds = 0;
+
+	if (hud_showtime < 8)
+	{
+		const int timeTicks =
+			hud_showtime < 4
+				? level.maptime
+				: (hud_showtime < 6
+					? level.time
+					: level.totaltime);
+		const int timeSeconds = timeTicks / TICRATE;
+
+		hours   =  timeSeconds / 3600;
+		minutes = (timeSeconds % 3600) / 60;
+		seconds =  timeSeconds % 60;
+	}
+	else
+	{
+		time_t now;
+		time(&now);
+
+		struct tm* timeinfo = localtime(&now);
+
+		if (NULL != timeinfo)
+		{
+			hours   = timeinfo->tm_hour;
+			minutes = timeinfo->tm_min;
+			seconds = timeinfo->tm_sec;
+		}
+	}
+
+	const bool showMillis  = 1 == hud_showtime;
+	const bool showSeconds = showMillis || (0 == hud_showtime % 2);
+
+	char timeString[sizeof "HH:MM:SS.MMM"];
+
+	if (showMillis)
+	{
+		const int millis  = (level.time % TICRATE) * (1000 / TICRATE);
+
+		mysnprintf(timeString, sizeof(timeString), "%02i:%02i:%02i.%03i", hours, minutes, seconds, millis);
+	}
+	else if (showSeconds)
+	{
+		mysnprintf(timeString, sizeof(timeString), "%02i:%02i:%02i", hours, minutes, seconds);
+	}
+	else
+	{
+		mysnprintf(timeString, sizeof(timeString), "%02i:%02i", hours, minutes);
+	}
+
+	const int characterCount = static_cast<int>( sizeof "HH:MM" - 1
+		+ (showSeconds ? sizeof ":SS"  - 1 : 0)
+		+ (showMillis  ? sizeof ".MMM" - 1 : 0) );
+	const int width  = SmallFont->GetCharWidth('0') * characterCount + 2; // small offset from screen's border
+	const int height = SmallFont->GetHeight();
+
+	DrawHudText(SmallFont, hud_timecolor, timeString, hudwidth - width, height, FRACUNIT);
+}
+
+
+//---------------------------------------------------------------------------
+//
 // draw the overlay
 //
 //---------------------------------------------------------------------------
-void HUD_InitHud();
 
 void DrawHUD()
 {
@@ -906,8 +1066,6 @@ void DrawHUD()
 	// [BB] The player may not have a body while connecting.
 	if ( CPlayer->mo == NULL )
 		return;
-
-	if (HudFont==NULL) HUD_InitHud();
 
 	players[consoleplayer].inventorytics = 0;
 	if (hud_althudscale && SCREENWIDTH>640) 
@@ -957,10 +1115,9 @@ void DrawHUD()
 		// draw spectator's health/armor stats.
 		if ( ShouldDrawHealth( CPlayer ))
 		{
-			DrawHealth(CPlayer->health, 5, hudheight-45);
-			// Yes, that doesn't work properly for Hexen but frankly, I have no
-			// idea how to make a meaningful value out of Hexen's armor system!
-			DrawArmor(CPlayer->mo->FindInventory(RUNTIME_CLASS(ABasicArmor)), 5, hudheight-20);
+			DrawHealth(CPlayer, 5, hudheight-45);
+			DrawArmor(CPlayer->mo->FindInventory<ABasicArmor>(), 
+				CPlayer->mo->FindInventory<AHexenArmor>(),	5, hudheight-20);
 		}
 
 		// [TP] Draw team stuff.
@@ -975,13 +1132,14 @@ void DrawHUD()
 			StatusBar->DrawCrosshair();
 		}
 		if (idmypos) DrawCoordinates(CPlayer);
+
+		DrawTime();
 	}
 	else
 	{
+		FString mapname;
 		char printstr[256];
 		int seconds;
-		cluster_info_t *thiscluster = FindClusterInfo (level.cluster);
-		bool hub = !!(thiscluster->flags&CLUSTER_HUB);
 		int length=8*SmallFont->GetCharWidth('0');
 		int fonth=SmallFont->GetHeight()+1;
 		int bottom=hudheight-1;
@@ -996,22 +1154,22 @@ void DrawHUD()
 
 		if (am_showtime)
 		{
-			seconds = level.time /TICRATE;
-			mysnprintf(printstr, countof(printstr), "%02i:%02i:%02i", seconds/3600, (seconds%3600)/60, seconds%60);
-			DrawHudText(SmallFont, hudcolor_time, printstr, hudwidth-length, bottom, FRACUNIT);
-			bottom -= fonth;
-
-			// Single level time for hubs
 			if (level.clusterflags&CLUSTER_HUB)
 			{
-				seconds= level.maptime /TICRATE;
+				seconds = level.time /TICRATE;
 				mysnprintf(printstr, countof(printstr), "%02i:%02i:%02i", seconds/3600, (seconds%3600)/60, seconds%60);
-				DrawHudText(SmallFont, hudcolor_ltim, printstr, hudwidth-length, bottom, FRACUNIT);
+				DrawHudText(SmallFont, hudcolor_time, printstr, hudwidth-length, bottom, FRACUNIT);
+				bottom -= fonth;
 			}
+
+			// Single level time for hubs
+			seconds= level.maptime /TICRATE;
+			mysnprintf(printstr, countof(printstr), "%02i:%02i:%02i", seconds/3600, (seconds%3600)/60, seconds%60);
+			DrawHudText(SmallFont, hudcolor_ltim, printstr, hudwidth-length, bottom, FRACUNIT);
 		}
 
-		mysnprintf(printstr, countof(printstr), "%s: %s", level.mapname, level.LevelName.GetChars());
-		screen->DrawText(SmallFont, hudcolor_titl, 1, hudheight-fonth-1, printstr,
+		ST_FormatMapName(mapname);
+		screen->DrawText(SmallFont, hudcolor_titl, 1, hudheight-fonth-1, mapname,
 			DTA_KeepRatio, true,
 			DTA_VirtualWidth, hudwidth, DTA_VirtualHeight, hudheight, TAG_DONE);
 
@@ -1042,6 +1200,7 @@ void HUD_InitHud()
 
 	default:
 		healthpic = TexMan.FindTexture("MEDIA0");
+		berserkpic = TexMan.FindTexture("PSTRA0");
 		HudFont=FFont::FindFont("HUDFONT_DOOM");
 		break;
 	}
@@ -1078,6 +1237,12 @@ void HUD_InitHud()
 				sc.MustGetString();
 				FTextureID tex = TexMan.CheckForTexture(sc.String, FTexture::TEX_MiscPatch);
 				if (tex.isValid()) healthpic = TexMan[tex];
+			}
+			else if (sc.Compare("Berserk"))
+			{
+				sc.MustGetString();
+				FTextureID tex = TexMan.CheckForTexture(sc.String, FTexture::TEX_MiscPatch);
+				if (tex.isValid()) berserkpic = TexMan[tex];
 			}
 			else
 			{

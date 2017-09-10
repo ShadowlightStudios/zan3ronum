@@ -29,6 +29,7 @@
 #include "actors/shared/sectoraction.txt"
 #include "actors/shared/action.txt"
 #include "actors/shared/dog.txt"
+#include "actors/shared/damagetypes.txt"
 
 #include "actors/doom/doomplayer.txt"
 #include "actors/doom/possessed.txt"
@@ -146,7 +147,6 @@
 #include "actors/skulltag/skulltagartifacts.txt"
 #include "actors/skulltag/skulltaghealth.txt"
 #include "actors/skulltag/skulltagmisc.txt"
-#include "actors/skulltag/skulltagrunes.txt"
 #include "actors/skulltag/skulltagscorepillars.txt"
 #include "actors/skulltag/skulltagteamitems.txt"
 

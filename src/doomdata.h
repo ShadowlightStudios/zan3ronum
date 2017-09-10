@@ -152,6 +152,9 @@ enum ELineFlags
 	ML_FIRSTSIDEONLY			= 0x00800000,	// activated only when crossed from front side
 	ML_BLOCKPROJECTILE			= 0x01000000,
 	ML_BLOCKUSE					= 0x02000000,	// blocks all use actions through this line
+	ML_BLOCKSIGHT				= 0x04000000,	// blocks monster line of sight
+	ML_BLOCKHITSCAN				= 0x08000000,	// blocks hitscan attacks
+	ML_3DMIDTEX_IMPASS			= 0x10000000,	// [TP] if 3D midtex, behaves like a height-restricted ML_BLOCKING
 };
 
 
@@ -190,9 +193,10 @@ enum EMapLineFlags	// These are flags that use different values internally
 	ML_RESERVED_ETERNITY		= 0x0800,
 
 	// [RH] Extra flags for Strife
-	ML_TRANSLUCENT_STRIFE		= 0x1000,
 	ML_RAILING_STRIFE			= 0x0200,
 	ML_BLOCK_FLOATERS_STRIFE	= 0x0400,
+	ML_TRANSPARENT_STRIFE		= 0x0800,
+	ML_TRANSLUCENT_STRIFE		= 0x1000,
 };
 
 
@@ -340,6 +344,17 @@ struct FMapThing
 	DWORD		flags;
 	int			special;
 	int			args[5];
+	int			Conversation;
+	fixed_t		gravity;
+	fixed_t		alpha;
+	DWORD		fillcolor;
+	fixed_t		scaleX;
+	fixed_t		scaleY;
+	int			health;
+	int			score;
+	short		pitch;
+	short		roll;
+	DWORD		RenderStyle;
 
 	void Serialize (FArchive &);
 };
@@ -379,6 +394,9 @@ enum EMapThingFlags
 	MTF_STANDSTILL		= 0x4000,
 	MTF_STRIFESOMETHING	= 0x8000,
 
+	MTF_SECRET			= 0x080000,	// Secret pickup
+	MTF_NOINFIGHTING	= 0x100000,
+
 	// BOOM and DOOM compatible versions of some of the above
 
 	BTF_NOTSINGLE		= 0x0010,	// (TF_COOPERATIVE|TF_DEATHMATCH)
@@ -396,26 +414,40 @@ enum EMapThingFlags
 	STF_ALTSHADOW		= 0x0200,
 };
 
+// A simplified mapthing for player starts
+struct FPlayerStart
+{
+	fixed_t x, y, z;
+	short angle, type;
+
+	FPlayerStart() { }
+	FPlayerStart(const FMapThing *mthing)
+	: x(mthing->x), y(mthing->y), z(mthing->z),
+	  angle(mthing->angle),
+	  type(mthing->type)
+	{ }
+};
 // Player spawn spots for deathmatch.
-extern TArray<FMapThing> deathmatchstarts;
+extern TArray<FPlayerStart> deathmatchstarts;
 
 // [BC] Temporary team spawn spots.
-extern	TArray<FMapThing>	TemporaryTeamStarts;
+extern	TArray<FPlayerStart>	TemporaryTeamStarts;
 
 // [RC] Possession starts
-extern	TArray<FMapThing>	PossessionStarts;
+extern	TArray<FPlayerStart>	PossessionStarts;
 
 // [RC] Terminator starts
-extern	TArray<FMapThing>	TerminatorStarts;
+extern	TArray<FPlayerStart>	TerminatorStarts;
 
 // [BC] Generic invasion spawn spots.
-extern	TArray<FMapThing>	GenericInvasionStarts;
+extern	TArray<FPlayerStart>	GenericInvasionStarts;
 
 // [BB] All player starts, including those for voodoo dolls.
-extern	TArray<FMapThing>	AllPlayerStarts[MAXPLAYERS];
+extern	TArray<FPlayerStart>	AllStartsOfPlayer[MAXPLAYERS];
 
 // Player spawn spots.
-extern	FMapThing		playerstarts[MAXPLAYERS];
+extern FPlayerStart playerstarts[MAXPLAYERS];
+extern TArray<FPlayerStart> AllPlayerStarts;
 
 
 #endif					// __DOOMDATA__

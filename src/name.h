@@ -86,6 +86,9 @@ public:
 	bool operator >  (ENamedName index) const { return Index >  index; }
 	bool operator >= (ENamedName index) const { return Index >= index; }
 
+	// [TP]
+	bool IsPredefined() const;
+
 protected:
 	int Index;
 
@@ -116,7 +119,7 @@ protected:
 		int AddName (const char *text, unsigned int hash, unsigned int bucket);
 		NameBlock *AddBlock (size_t len);
 		void InitBuckets ();
-		bool Inited;
+		static bool Inited;
 	};
 
 	static NameManager NameData;

@@ -1,4 +1,5 @@
 // Emacs style mode select	 -*- C++ -*- 
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
 // $Id:$
@@ -42,6 +43,8 @@
 #include "v_video.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
+// [BB] Zandronum uses different bot code.
+//#include "b_bot.h"	//Added by MC:
 #include "stats.h"
 #include "a_hexenglobal.h"
 #include "a_sharedglobal.h"
@@ -57,7 +60,7 @@
 #include "thingdef/thingdef.h"
 #include "g_game.h"
 #include "teaminfo.h"
-#include "r_translate.h"
+#include "r_data/r_translate.h"
 #include "r_sky.h"
 #include "g_level.h"
 #include "d_event.h"
@@ -65,6 +68,9 @@
 #include "v_palette.h"
 #include "p_enemy.h"
 #include "gstrings.h"
+#include "farchive.h"
+#include "r_data/colormaps.h"
+#include "r_renderer.h"
 // [BB] New #includes.
 #include "deathmatch.h"
 #include "duel.h"
@@ -81,6 +87,7 @@
 #include "unlagged.h"
 #include "d_netinf.h"
 #include "domination.h"
+#include "network_enums.h"
 #include <set>
 
 // MACROS ------------------------------------------------------------------
@@ -101,7 +108,10 @@ static void PlayerLandedOnThing (AActor *mo, AActor *onmobj);
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
 
-EXTERN_CVAR (Bool, r_drawfuzz);
+/* [BB] Zandronum uses different bot code.
+extern cycle_t BotSupportCycles;
+extern int BotWTG;
+*/
 EXTERN_CVAR (Int,  cl_rockettrails)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
@@ -122,12 +132,11 @@ static FRandom pr_chunk ("Chunk");
 static FRandom pr_checkmissilespawn ("CheckMissileSpawn");
 static FRandom pr_spawnmissile ("SpawnMissile");
 static FRandom pr_missiledamage ("MissileDamage");
- FRandom pr_slam ("SkullSlam");
 static FRandom pr_multiclasschoice ("MultiClassChoice");
 static FRandom pr_rockettrail("RocketTrail");
 static FRandom pr_uniquetid("UniqueTID");
 
-/*static*/	NETIDNODE_t	g_NetIDList[MAX_NETID];
+/*static*/	IDList<AActor> g_NetIDList;
 static	ULONG		g_ulFirstFreeNetID = 1;
 
 static	LONG	g_lSpawnCount = 0;
@@ -146,7 +155,7 @@ CUSTOM_CVAR (Float, sv_gravity, 800.f, CVAR_SERVERINFO|CVAR_NOSAVE)
 	// [BB] Notify the clients about the change.
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %f\n", self.GetName( ), self.GetGenericRep( CVAR_Float ).Float );
+		SERVER_Printf( "%s changed to: %f\n", self.GetName( ), self.GetGenericRep( CVAR_Float ).Float );
 		SERVERCOMMANDS_SetGameModeLimits( );
 	}
 }
@@ -154,49 +163,11 @@ CUSTOM_CVAR (Float, sv_gravity, 800.f, CVAR_SERVERINFO|CVAR_NOSAVE)
 
 CVAR (Bool, cl_missiledecals, true, CVAR_ARCHIVE)
 CVAR (Bool, addrocketexplosion, false, CVAR_ARCHIVE)
-
-fixed_t FloatBobOffsets[64] =
-{
-	0, 51389, 102283, 152192,
-	200636, 247147, 291278, 332604,
-	370727, 405280, 435929, 462380,
-	484378, 501712, 514213, 521763,
-	524287, 521763, 514213, 501712,
-	484378, 462380, 435929, 405280,
-	370727, 332604, 291278, 247147,
-	200636, 152192, 102283, 51389,
-	-1, -51390, -102284, -152193,
-	-200637, -247148, -291279, -332605,
-	-370728, -405281, -435930, -462381,
-	-484380, -501713, -514215, -521764,
-	-524288, -521764, -514214, -501713,
-	-484379, -462381, -435930, -405280,
-	-370728, -332605, -291279, -247148,
-	-200637, -152193, -102284, -51389
-};
-
-fixed_t FloatBobDiffs[64] =
-{
-	51389, 51389, 50894, 49909, 48444,
-	46511, 44131, 41326, 38123,
-	34553, 30649, 26451, 21998,
-	17334, 12501, 7550, 2524,
-	-2524, -7550, -12501, -17334,
-	-21998, -26451, -30649, -34553,
-	-38123, -41326, -44131, -46511,
-	-48444, -49909, -50894, -51390,
-	-51389, -50894, -49909, -48444,
-	-46511, -44131, -41326, -38123,
-	-34553, -30649, -26451, -21999,
-	-17333, -12502, -7549, -2524,
-	2524, 7550, 12501, 17334,
-	21998, 26451, 30650, 34552,
-	38123, 41326, 44131, 46511,
-	48444, 49909, 50895
-};
-
 CVAR (Int, cl_pufftype, 0, CVAR_ARCHIVE);
 CVAR (Int, cl_bloodtype, 0, CVAR_ARCHIVE);
+
+// [BB]
+CVAR (Bool, sv_showspawnnames, false, CVAR_DEBUGONLY)
 
 // CODE --------------------------------------------------------------------
 
@@ -213,6 +184,7 @@ IMPLEMENT_POINTY_CLASS (AActor)
  // [BC] Declare these so refrences to them get fixed if they're removed.
  DECLARE_POINTER (pMonsterSpot)
  DECLARE_POINTER (pPickupSpot)
+ DECLARE_POINTER (Rune) // [TP]
 END_POINTERS
 
 AActor::~AActor ()
@@ -268,14 +240,22 @@ void AActor::Serialize (FArchive &arc)
 		<< velz
 		<< tics
 		<< state
-		<< Damage
-		<< flags
+		<< Damage;
+	if (SaveVersion >= 3227)
+	{
+		arc << projectileKickback;
+	}
+	arc	<< flags
 		<< flags2
 		<< flags3
 		<< flags4
 		<< flags5
-		<< flags6
-		<< special1
+		<< flags6;
+	if (SaveVersion >= 4504)
+	{
+		arc << flags7;
+	}
+	arc	<< special1
 		<< special2
 		<< health
 		<< movedir
@@ -289,14 +269,30 @@ void AActor::Serialize (FArchive &arc)
 		<< threshold
 		<< player
 		<< SpawnPoint[0] << SpawnPoint[1] << SpawnPoint[2]
-		<< SpawnAngle
-		<< skillrespawncount
+		<< SpawnAngle;
+	if (SaveVersion >= 4506)
+	{
+		arc << StartHealth;
+	}
+	arc << skillrespawncount
 		<< tracer
 		<< floorclip
 		<< tid
-		<< special
-		<< args[0] << args[1] << args[2] << args[3] << args[4]
-		<< goal
+		<< special;
+	if (P_IsACSSpecial(special))
+	{
+		P_SerializeACSScriptNumber(arc, args[0], false);
+	}
+	else
+	{
+		arc << args[0];
+	}
+	arc << args[1] << args[2] << args[3] << args[4];
+	if (SaveVersion >= 3427)
+	{
+		arc << accuracy << stamina;
+	}
+	arc << goal
 		<< waterlevel
 		<< MinMissileChance
 		<< SpawnFlags
@@ -312,12 +308,9 @@ void AActor::Serialize (FArchive &arc)
 		<< ActiveSound
 		<< UseSound
 		<< BounceSound
-		<< WallBounceSound;
-	if (SaveVersion >= 2234)
-	{
-		arc << CrushPainSound;
-	}
-	arc	<< Speed
+		<< WallBounceSound
+		<< CrushPainSound
+		<< Speed
 		<< FloatSpeed
 		<< Mass
 		<< PainChance
@@ -334,147 +327,75 @@ void AActor::Serialize (FArchive &arc)
 		<< maxtargetrange
 		<< meleethreshold
 		<< meleerange
-		<< DamageType
-		<< gravity
+		<< DamageType;
+	if (SaveVersion >= 4501)
+	{
+		arc << DamageTypeReceived;
+	}
+	if (SaveVersion >= 3237) 
+	{
+		arc
+		<< PainType
+		<< DeathType;
+	}
+	arc	<< gravity
 		<< FastChaseStrafeCount
 		<< master
 		<< smokecounter
 		<< BlockingMobj
 		<< BlockingLine
+		<< VisibleToTeam // [BB]
 		<< pushfactor
 		<< Species
-		<< Score
-		<< Tag
-		<< DesignatedTeam
-		<< ulLimitedToTeam // [BB]
-		<< ulVisibleToTeam // [BB]
+		<< Score;
+	if (SaveVersion >= 3113)
+	{
+		arc << DesignatedTeam;
+	}
+	arc << lastpush << lastbump
+		<< PainThreshold
+		<< DamageFactor
+		<< WeaveIndexXY << WeaveIndexZ
+		<< PoisonDamageReceived << PoisonDurationReceived << PoisonPeriodReceived << Poisoner
+		<< PoisonDamage << PoisonDuration << PoisonPeriod;
+	if (SaveVersion >= 3235)
+	{
+		arc << PoisonDamageType << PoisonDamageTypeReceived;
+	}
+	arc << ConversationRoot << Conversation;
+	
+	// [BB] Zandronum additions.
+	arc << ulLimitedToTeam // [BB]
 		<< lFixedColormap // [BB]
-		<< lNetID // [BC] We need to archive this so that it's restored properly when going between maps in a hub.
+		// [BB] Before the snapshot is loaded, player bodies are spawned, which invalidates the old netIDs.
+		//<< lNetID // [BC] We need to archive this so that it's restored properly when going between maps in a hub.
 		<< ulSTFlags
 		<< ulNetworkFlags
 		<< ulInvasionWave
 		<< pMonsterSpot
-		<< pPickupSpot;
-	if (SaveVersion >= 1904)
-	{
-		arc << lastpush << lastbump;
-	}
+		<< pPickupSpot
+		<< Rune;
 
-	if (SaveVersion >= 1900)
 	{
-		arc << PainThreshold;
-	}
-	if (SaveVersion >= 1914)
-	{
-		arc << DamageFactor;
-	}
-	if (SaveVersion > 2036)
-	{
-		arc << WeaveIndexXY << WeaveIndexZ;
-	}
-	else
-	{
-		int index;
-
-		if (SaveVersion < 2036)
+		FString tagstr;
+		if (arc.IsStoring() && Tag != NULL && Tag->Len() > 0) tagstr = *Tag;
+		arc << tagstr;
+		if (arc.IsLoading())
 		{
-			index = special2;
-		}
-		else
-		{
-			arc << index;
-		}
-		// A_BishopMissileWeave and A_CStaffMissileSlither stored the weaveXY
-		// value in different parts of the index.
-		if (this->IsKindOf(PClass::FindClass("BishopFX")))
-		{
-			WeaveIndexXY = index >> 16;
-			WeaveIndexZ = index;
-		}
-		else
-		{
-			WeaveIndexXY = index;
-			WeaveIndexZ = 0;
-		}
-	}
-	if (SaveVersion >= 2450)
-	{
-		arc << PoisonDamageReceived << PoisonDurationReceived << PoisonPeriodReceived << Poisoner;
-		arc << PoisonDamage << PoisonDuration << PoisonPeriod;
-	}
-
-	// Skip past uservar array in old savegames
-	if (SaveVersion < 1933)
-	{
-		int foo;
-		for (int i = 0; i < 10; ++i)
-			arc << foo;
-	}
-
-	if (arc.IsStoring ())
-	{
-		int convnum = 0;
-		unsigned int i;
-
-		if (Conversation != NULL)
-		{
-			for (i = 0; i < StrifeDialogues.Size(); ++i)
-			{
-				if (StrifeDialogues[i] == GetDefault()->Conversation)
-				{
-					break;
-				}
-			}
-			for (; i + convnum < StrifeDialogues.Size(); ++convnum)
-			{
-				if (StrifeDialogues[i + convnum] == Conversation)
-				{
-					break;
-				}
-			}
-			if (i + convnum < StrifeDialogues.Size())
-			{
-				convnum++;
-			}
-			else
-			{
-				convnum = 0;
-			}
-		}
-		arc.WriteCount (convnum);
-	}
-	else
-	{
-		int convnum;
-		unsigned int i;
-
-		convnum = arc.ReadCount();
-		if (convnum == 0 || GetDefault()->Conversation == NULL)
-		{
-			Conversation = NULL;
-		}
-		else
-		{
-			for (i = 0; i < StrifeDialogues.Size(); ++i)
-			{
-				if (StrifeDialogues[i] == GetDefault()->Conversation)
-				{
-					break;
-				}
-			}
-			if (i + convnum <= StrifeDialogues.Size())
-			{
-				Conversation = StrifeDialogues[i + convnum - 1];
-			}
-			else
-			{
-				Conversation = GetDefault()->Conversation;
-			}
+			if (tagstr.Len() == 0) Tag = NULL;
+			else Tag = mStringPropertyData.Alloc(tagstr);
 		}
 	}
 
 	if (arc.IsLoading ())
 	{
+		// [BB] If the the actor needs one, generate a new netID.
+		if ( !( ulNetworkFlags & NETFL_NONETID ) && !( ulNetworkFlags & NETFL_SERVERSIDEONLY ) )
+		{
+			lNetID = g_NetIDList.getNewID( );
+			g_NetIDList.useID ( lNetID, this );
+		}
+
 		touching_sectorlist = NULL;
 		LinkToWorld (Sector);
 		AddToHash ();
@@ -483,12 +404,10 @@ void AActor::Serialize (FArchive &arc)
 		{
 			if (playeringame[player - players] && 
 				player->cls != NULL &&
-				state->sprite == 
-				GetDefaultByType (player->cls)->SpawnState->sprite)
+				!(flags4 & MF4_NOSKIN) &&
+				state->sprite == GetDefaultByType (player->cls)->SpawnState->sprite)
 			{ // Give player back the skin
-				sprite = skins[player->userinfo.skin].sprite;
-				scaleX = skins[player->userinfo.skin].ScaleX;
-				scaleY = skins[player->userinfo.skin].ScaleY;
+				sprite = skins[player->userinfo.GetSkin()].sprite;
 			}
 			if (Speed == 0)
 			{
@@ -514,6 +433,7 @@ AActor::AActor () throw()
 }
 
 AActor::AActor (const AActor &other) throw()
+	: DThinker()
 {
 	memcpy (&x, &other.x, (BYTE *)&this[1] - (BYTE *)&x);
 }
@@ -553,26 +473,21 @@ bool AActor::InStateSequence(FState * newstate, FState * basestate)
 // AActor::GetTics
 //
 // Get the actual duration of the next state
-// This is a more generalized attempt to make the Demon faster in
-// nightmare mode. Actually changing the states' durations has to
-// be considered highly problematic.
+// We are using a state flag now to indicate a state that should be
+// accelerated in Fast mode or slowed in Slow mode.
 //
 //==========================================================================
 
 int AActor::GetTics(FState * newstate)
 {
 	int tics = newstate->GetTics();
-	
-	if (isFast())
+	if (isFast() && newstate->Fast)
 	{
-		if (flags5 & MF5_FASTER)
-		{
-			if (InStateSequence(newstate, SeeState)) return tics - (tics>>1);
-		}
-		if (flags5 & MF5_FASTMELEE)
-		{
-			if (InStateSequence(newstate, MeleeState)) return tics - (tics>>1);
-		}
+		return tics - (tics>>1);
+	}
+	else if (isSlow() && newstate->Slow)
+	{
+		return tics<<1;
 	}
 	return tics;
 }
@@ -648,9 +563,9 @@ bool AActor::SetState (FState *newstate, bool nofunction)
 				// for Dehacked, I would move sprite changing out of the states
 				// altogether, since actors rarely change their sprites after
 				// spawning.
-					if (player != NULL)
+					if (player != NULL && ( skins.Size() > static_cast<unsigned int> ( player->userinfo.GetSkin() ) ) ) // [BB] Adapted the skins check
 					{
-						sprite = skins[player->userinfo.skin].sprite;
+						sprite = skins[player->userinfo.GetSkin()].sprite;
 					}
 					else if (newsprite != prevsprite)
 					{
@@ -684,9 +599,9 @@ bool AActor::SetState (FState *newstate, bool nofunction)
 		}
 	} while (tics == 0);
 
-	if (screen != NULL)
+	if (Renderer != NULL)
 	{
-		screen->StateChanged(this);
+		Renderer->StateChanged(this);
 	}
 	return true;
 }
@@ -702,10 +617,9 @@ void AActor::HideOrDestroyIfSafe ()
 	// [BB] If we're playing a game mode in which the map resets, and this is something
 	// that is level spawned, don't destroy it. Instead, put it in a temporary invisibile
 	// state.
-	if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS ) &&
+	if (( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS ) &&
 		( ulSTFlags & STFL_LEVELSPAWNED ) &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
 		// [BB] Do any actor specific things that are necessary to properly hide this thing.
 		PrepareForHiding();
@@ -887,19 +801,22 @@ void AActor::AddInventory (AInventory *item)
 //
 //============================================================================
 
-void AActor::RemoveInventory (AInventory *item)
+void AActor::RemoveInventory(AInventory *item)
 {
 	AInventory *inv, **invp;
 
-	invp = &item->Owner->Inventory;
-	for (inv = *invp; inv != NULL; invp = &inv->Inventory, inv = *invp)
+	if (item != NULL && item->Owner != NULL)	// can happen if the owner was destroyed by some action from an item's use state.
 	{
-		if (inv == item)
+		invp = &item->Owner->Inventory;
+		for (inv = *invp; inv != NULL; invp = &inv->Inventory, inv = *invp)
 		{
-			*invp = item->Inventory;
-			item->DetachFromOwner ();
-			item->Owner = NULL;
-			break;
+			if (inv == item)
+			{
+				*invp = item->Inventory;
+				item->DetachFromOwner();
+				item->Owner = NULL;
+				break;
+			}
 		}
 	}
 }
@@ -917,7 +834,7 @@ void AActor::DestroyAllInventory ()
 		AInventory *item = Inventory;
 		// [BC] In certain modes, we may need to keep this item around.
 		if (( item->ulSTFlags & STFL_LEVELSPAWNED ) &&
-			( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_MAPRESETS ))
+			( GAMEMODE_GetCurrentFlags() & GMF_MAPRESETS ))
 		{
 			item->HideIndefinitely( );
 
@@ -1006,8 +923,7 @@ AInventory *AActor::DropInventory (AInventory *item)
 	AInventory *drop = item->CreateTossable ();
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( NULL );
 	}
@@ -1023,6 +939,7 @@ AInventory *AActor::DropInventory (AInventory *item)
 	drop->vely = vely + 5 * finesine[an];
 	drop->velz = velz + FRACUNIT;
 	drop->flags &= ~MF_NOGRAVITY;	// Don't float
+	drop->ClearCounters();	// do not count for statistics again
 
 	// [BC] Create the drop for clients.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -1134,21 +1051,104 @@ bool AActor::GiveAmmo (const PClass *type, int amount)
 	if (type != NULL)
 	{
 		AInventory *item = static_cast<AInventory *>(Spawn (type, 0, 0, 0, NO_REPLACE));
-		item->Amount = amount;
-		item->flags |= MF_DROPPED;
-		if (!item->CallTryPickup (this))
+		if (item)
 		{
-			item->Destroy ();
-			return false;
+			item->Amount = amount;
+			item->flags |= MF_DROPPED;
+			if (!item->CallTryPickup (this))
+			{
+				item->Destroy ();
+				return false;
+			}
+
+			// [BB] The server tells the client how much ammo it gets.
+			if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( player ))
+				SERVERCOMMANDS_GiveInventory( ULONG(player - players), item );
+
+			return true;
 		}
-
-		// [BB] The server tells the client how much ammo it gets.
-		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( player ))
-			SERVERCOMMANDS_GiveInventory( ULONG(player - players), item );
-
-		return true;
 	}
 	return false;
+}
+
+//============================================================================
+//
+// AActor :: ClearInventory
+//
+// Clears the inventory of a single actor.
+//
+//============================================================================
+
+void AActor::ClearInventory()
+{
+	// In case destroying an inventory item causes another to be destroyed
+	// (e.g. Weapons destroy their sisters), keep track of the pointer to
+	// the next inventory item rather than the next inventory item itself.
+	// For example, if a weapon is immediately followed by its sister, the
+	// next weapon we had tracked would be to the sister, so it is now
+	// invalid and we won't be able to find the complete inventory by
+	// following it.
+	//
+	// When we destroy an item, we leave invp alone, since the destruction
+	// process will leave it pointing to the next item we want to check. If
+	// we don't destroy an item, then we move invp to point to its Inventory
+	// pointer.
+	//
+	// It should be safe to assume that an item being destroyed will only
+	// destroy items further down in the chain, because if it was going to
+	// destroy something we already processed, we've already destroyed it,
+	// so it won't have anything to destroy.
+
+	AInventory **invp = &Inventory;
+
+	while (*invp != NULL)
+	{
+		AInventory *inv = *invp;
+		if (!(inv->ItemFlags & IF_UNDROPPABLE))
+		{
+			// For the sake of undroppable weapons, never remove ammo once
+			// it has been acquired; just set its amount to 0.
+			if (inv->IsKindOf(RUNTIME_CLASS(AAmmo)))
+			{
+				AAmmo *ammo = static_cast<AAmmo*>(inv);
+				ammo->Amount = 0;
+				invp = &inv->Inventory;
+			}
+			// [BB] Don't delete BasicArmor, just clear it. Probably ZDoom should do it like this
+			// as well, but to be on the safe side only do this on the client for now.
+			else if ( NETWORK_InClientMode() && ( inv->GetClass() == RUNTIME_CLASS(ABasicArmor) ) )
+			{
+				ABasicArmor *barmor = static_cast<ABasicArmor *> (inv);
+				barmor->SavePercent = 0;
+				barmor->Amount = 0;
+				invp = &inv->Inventory;
+			}
+			else
+			{
+				inv->Destroy ();
+			}
+		}
+		else if (inv->GetClass() == RUNTIME_CLASS(AHexenArmor))
+		{
+			AHexenArmor *harmor = static_cast<AHexenArmor *> (inv);
+			harmor->Slots[3] = harmor->Slots[2] = harmor->Slots[1] = harmor->Slots[0] = 0;
+			invp = &inv->Inventory;
+		}
+		else
+		{
+			invp = &inv->Inventory;
+		}
+	}
+	if (player != NULL)
+	{
+		player->ReadyWeapon = NULL;
+		player->PendingWeapon = WP_NOCHANGE;
+		player->psprites[ps_weapon].state = NULL;
+		player->psprites[ps_flash].state = NULL;
+		// [BB] If we're the server, tell the client he lost his inventory.
+		if (( NETWORK_GetState( ) == NETSTATE_SERVER ))
+			SERVERCOMMANDS_DestroyAllInventory( player - players );
+	}
 }
 
 //============================================================================
@@ -1172,10 +1172,10 @@ void AActor::CopyFriendliness (AActor *other, bool changeTarget, bool resetHealt
 	LastLookPlayerNumber = other->LastLookPlayerNumber;
 	flags  = (flags & ~MF_FRIENDLY) | (other->flags & MF_FRIENDLY);
 	flags3 = (flags3 & ~(MF3_NOSIGHTCHECK | MF3_HUNTPLAYERS)) | (other->flags3 & (MF3_NOSIGHTCHECK | MF3_HUNTPLAYERS));
-	flags4 = (flags4 & ~MF4_NOHATEPLAYERS) | (other->flags4 & MF4_NOHATEPLAYERS);
+	flags4 = (flags4 & ~(MF4_NOHATEPLAYERS | MF4_BOSSSPAWNED)) | (other->flags4 & (MF4_NOHATEPLAYERS | MF4_BOSSSPAWNED));
 	FriendPlayer = other->FriendPlayer;
 	DesignatedTeam = other->DesignatedTeam;
-	if (changeTarget && other->target != NULL && !(other->target->flags3 & MF3_NOTARGET))
+	if (changeTarget && other->target != NULL && !(other->target->flags3 & MF3_NOTARGET) && !(other->target->flags7 & MF7_NEVERTARGET))
 	{
 		// LastHeard must be set as well so that A_Look can react to the new target if called
 		LastHeard = target = other->target;
@@ -1259,6 +1259,48 @@ bool AActor::CheckLocalView (int playernum) const
 
 //============================================================================
 //
+// AActor :: IsVisibleToPlayer
+//
+// Returns true if this actor should be seen by the console player.
+//
+//============================================================================
+
+bool AActor::IsVisibleToPlayer() const
+{
+	// [BB] Safety check. This should never be NULL. Nevertheless, we return true to leave the default ZDoom behavior unaltered.
+	if ( players[consoleplayer].camera == NULL )
+		return true;
+ 
+	// [BB] We continue to use our old team visibility check.
+	//if (VisibleToTeam != 0 && teamplay &&
+	//	(signed)(VisibleToTeam-1) != players[consoleplayer].userinfo.GetTeam())
+	if ( TEAM_IsActorVisibleToPlayer( this, players[consoleplayer].camera->player ) == false )
+		return false;
+
+	const player_t* pPlayer = players[consoleplayer].camera->player;
+
+	if(pPlayer && pPlayer->mo && GetClass()->ActorInfo->VisibleToPlayerClass.Size() > 0)
+	{
+		bool visible = false;
+		for(unsigned int i = 0;i < GetClass()->ActorInfo->VisibleToPlayerClass.Size();++i)
+		{
+			const PClass *cls = GetClass()->ActorInfo->VisibleToPlayerClass[i];
+			if(cls && pPlayer->mo->GetClass()->IsDescendantOf(cls))
+			{
+				visible = true;
+				break;
+			}
+		}
+		if(!visible)
+			return false;
+	}
+
+	// [BB] Passed all checks.
+	return true;
+}
+
+//============================================================================
+//
 // AActor :: ConversationAnimation
 //
 // Plays a conversation-related animation:
@@ -1319,7 +1361,7 @@ bool AActor::Grind(bool items)
 		// ZDoom behavior differs from standard as crushed corpses cannot be raised.
 		// The reason for the change was originally because of a problem with players,
 		// see rh_log entry for February 21, 1999. Don't know if it is still relevant.
-		if (state == NULL 												// Only use the default crushed state if:
+		if (state == NULL 									// Only use the default crushed state if:
 			&& !(flags & MF_NOBLOOD)						// 1. the monster bleeeds,
 			&& (i_compatflags & COMPATF_CORPSEGIBS)			// 2. the compat setting is on,
 			&& player == NULL)								// 3. and the thing isn't a player.
@@ -1358,7 +1400,7 @@ bool AActor::Grind(bool items)
 
 			if (i != NULL)
 			{
-				i = i->ActorInfo->GetReplacement()->Class;
+				i = i->GetReplacement();
 
 				const AActor *defaults = GetDefaultByType (i);
 				if (defaults->SpawnState == NULL ||
@@ -1387,13 +1429,14 @@ bool AActor::Grind(bool items)
 				// [BB] Apparently Skulltag always has let the clients spawn the gibs.
 				// Whether or not this is intentional, if the clients spawn the gibs on
 				// their own, they have to mark them as CLIENTSIDEONLY.
-				if( NETWORK_InClientMode( ) )
+				if( NETWORK_InClientMode() )
 					gib->ulNetworkFlags |= NETFL_CLIENTSIDEONLY;
+
+				PalEntry bloodcolor = GetBloodColor();
+				if (bloodcolor != 0)
+					gib->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 			}
 			S_Sound (this, CHAN_BODY, "misc/fallingsplat", 1, ATTN_IDLE);
-
-			PalEntry bloodcolor = GetBloodColor();
-			if (bloodcolor!=0) gib->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
 		if (flags & MF_ICECORPSE)
 		{
@@ -1401,11 +1444,11 @@ bool AActor::Grind(bool items)
 			velx = vely = velz = 0;
 
 			// [BC] If we're the server, tell clients to update this thing's tics and
-			// momentum.
+			// velocity.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 			{
 				SERVERCOMMANDS_SetThingTics( this );
-				SERVERCOMMANDS_MoveThing( this, CM_MOMX|CM_MOMY|CM_MOMZ );
+				SERVERCOMMANDS_MoveThing( this, CM_VELX|CM_VELY|CM_VELZ );
 			}
 		}
 		else if (player)
@@ -1418,25 +1461,6 @@ bool AActor::Grind(bool items)
 		{
 			// [BB] Only destroy the actor if it's not needed for a map reset. Otherwise just hide it.
 			HideOrDestroyIfSafe ();
-		}
-		return false;		// keep checking
-	}
-
-	// crunch dropped items
-	if (flags & MF_DROPPED)
-	{
-		if (items) // Destroy (); // Only destroy dropped items if wanted
-		{
-			// [BC] If we're the server, tell clients to destroy this item.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_DestroyThing( this );
-
-			// [BC] Don't destroy items in client mode; the server will tell us to.
-			if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
-			{
-				// [BB] Only destroy the actor if it's not needed for a map reset. Otherwise just hide it.
-				this->HideOrDestroyIfSafe ();
-			}
 		}
 		return false;		// keep checking
 	}
@@ -1505,6 +1529,7 @@ void P_ExplodeMissile (AActor *mo, line_t *line, AActor *target)
 	}
 	mo->velx = mo->vely = mo->velz = 0;
 	mo->effects = 0;		// [RH]
+	mo->flags &= ~MF_SHOOTABLE;
 	
 	FState *nextstate=NULL;
 	
@@ -1513,6 +1538,9 @@ void P_ExplodeMissile (AActor *mo, line_t *line, AActor *target)
 	// As workaround we check if the target is a player.
 	if (target != NULL && ((target->flags & (MF_SHOOTABLE|MF_CORPSE)) || (target->flags6 & MF6_KILLED) || target->player ) )
 	{
+		if (mo->flags7 & MF7_HITTARGET)	mo->target = target;
+		if (mo->flags7 & MF7_HITMASTER)	mo->master = target;
+		if (mo->flags7 & MF7_HITTRACER)	mo->tracer = target;
 		if (target->flags & MF_NOBLOOD) nextstate = mo->FindState(NAME_Crash);
 		if (nextstate == NULL) nextstate = mo->FindState(NAME_Death, NAME_Extreme);
 	}
@@ -1532,21 +1560,7 @@ void P_ExplodeMissile (AActor *mo, line_t *line, AActor *target)
 				SERVERCOMMANDS_SetThingFrame( mo, nextstate );
 		}
 	}
-
-	// [BB] We need to keep track if the state change changes the flags.
-	const DWORD dwSavedMoFlags = mo->flags;
-	// [BB] If nextstate is still equal to NULL, mo->SetState (nextstate)
-	// returns false and we have to break out here.
-	if (!(mo->SetState (nextstate)))
-		return;
-	// [BB] If the flags were just changed, we'll have to take special care later.
-	const bool bFlagsChanged = ( mo->flags != dwSavedMoFlags );
 	
-	if (mo->ObjectFlags & OF_EuthanizeMe)
-	{
-		return;
-	}
-
 	if (line != NULL && line->special == Line_Horizon && !(mo->flags3 & MF3_SKYEXPLODE))
 	{
 		// [RH] Don't explode missiles on horizon lines.
@@ -1625,8 +1639,24 @@ void P_ExplodeMissile (AActor *mo, line_t *line, AActor *target)
 		}
 	}
 
-	if (nextstate != NULL)
+	// play the sound before changing the state, so that AActor::Destroy can call S_RelinkSounds on it and the death state can override it.
+	if (mo->DeathSound)
 	{
+		S_Sound (mo, CHAN_VOICE, mo->DeathSound, 1,
+			(mo->flags3 & MF3_FULLVOLDEATH) ? ATTN_NONE : ATTN_NORM);
+	}
+
+	// [BB] We need to keep track if the state change changes the flags.
+	const DWORD dwSavedMoFlags = mo->flags;
+	// [BB] If nextstate is still equal to NULL, mo->SetState (nextstate)
+	// returns false and we have to break out here.
+	if (!(mo->SetState (nextstate)))
+		return;
+	// [BB] If the flags were just changed, we'll have to take special care later.
+	const bool bFlagsChanged = ( mo->flags != dwSavedMoFlags );
+	if (!(mo->ObjectFlags & OF_EuthanizeMe))
+	{
+		// The rest only applies if the missile actor still exists.
 		// [RH] Change render style of exploding rockets
 		if (mo->flags5 & MF5_DEHEXPLOSION)
 		{
@@ -1667,11 +1697,6 @@ void P_ExplodeMissile (AActor *mo, line_t *line, AActor *target)
 		if ( bFlagsChanged && ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
 			SERVERCOMMANDS_SetThingFlags( mo, FLAGSET_FLAGS );
 
-		if (mo->DeathSound)
-		{
-			S_Sound (mo, CHAN_VOICE, mo->DeathSound, 1,
-				(mo->flags3 & MF3_FULLVOLDEATH) ? ATTN_NONE : ATTN_NORM);
-		}
 	}
 }
 
@@ -1787,15 +1812,35 @@ bool AActor::FloorBounceMissile (secplane_t &plane)
 	}
 
 	PlayBounceSound(true);
+
+	// Set bounce state
+	if (BounceFlags & BOUNCE_UseBounceState)
+	{
+		FName names[2];
+		FState *bouncestate;
+
+		names[0] = NAME_Bounce;
+		names[1] = plane.c < 0 ? NAME_Ceiling : NAME_Floor;
+		bouncestate = FindState(2, names);
+		if (bouncestate != NULL)
+		{
+			SetState(bouncestate);
+		}
+	}
+
 	if (BounceFlags & BOUNCE_MBF) // Bring it to rest below a certain speed
 	{
 		if (abs(velz) < (fixed_t)(Mass * GetGravity() / 64))
 			velz = 0;
 	}
-	else if (BounceFlags & BOUNCE_AutoOff)
+	else if (BounceFlags & (BOUNCE_AutoOff|BOUNCE_AutoOffFloorOnly))
 	{
-		if (!(flags & MF_NOGRAVITY) && (velz < 3*FRACUNIT))
-			BounceFlags &= ~BOUNCE_TypeMask;
+		if (plane.c > 0 || (BounceFlags & BOUNCE_AutoOff))
+		{
+			// AutoOff only works when bouncing off a floor, not a ceiling (or in compatibility mode.)
+			if (!(flags & MF_NOGRAVITY) && (velz < 3*FRACUNIT))
+				BounceFlags &= ~BOUNCE_TypeMask;
+		}
 	}
 	return false;
 }
@@ -1890,23 +1935,24 @@ bool AActor::CanSeek(AActor *target) const
 //
 //----------------------------------------------------------------------------
 
-bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool precise)
+bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool precise, bool usecurspeed)
 {
 	int dir;
 	int dist;
 	angle_t delta;
 	angle_t angle;
 	AActor *target;
+	fixed_t speed;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( false );
 	}
 
+	speed = !usecurspeed ? actor->Speed : xs_CRoundToInt(TVector3<double>(actor->velx, actor->vely, actor->velz).Length());
 	target = actor->tracer;
-	if (target == NULL || actor->Speed == 0 || !actor->CanSeek(target))
+	if (target == NULL || !actor->CanSeek(target))
 	{
 		return false;
 	}
@@ -1914,6 +1960,10 @@ bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool preci
 	{ // Target died
 		actor->tracer = NULL;
 		return false;
+	}
+	if (speed == 0)
+	{ // Technically, we're not seeking since our speed is 0, but the target *is* seekable.
+		return true;
 	}
 	dir = P_FaceMobj (actor, target, &delta);
 	if (delta > thresh)
@@ -1936,8 +1986,8 @@ bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool preci
 	
 	if (!precise)
 	{
-		actor->velx = FixedMul (actor->Speed, finecosine[angle]);
-		actor->vely = FixedMul (actor->Speed, finesine[angle]);
+		actor->velx = FixedMul (speed, finecosine[angle]);
+		actor->vely = FixedMul (speed, finesine[angle]);
 
 		if (!(actor->flags3 & (MF3_FLOORHUGGER|MF3_CEILINGHUGGER)))
 		{
@@ -1945,7 +1995,7 @@ bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool preci
 				target->z + target->height < actor->z)
 			{ // Need to seek vertically
 				dist = P_AproxDistance (target->x - actor->x, target->y - actor->y);
-				dist = dist / actor->Speed;
+				dist = dist / speed;
 				if (dist < 1)
 				{
 					dist = 1;
@@ -1970,17 +2020,16 @@ bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool preci
 			pitch >>= ANGLETOFINESHIFT;
 		}
 
-		fixed_t xyscale = FixedMul(actor->Speed, finecosine[pitch]);
-		actor->velz = FixedMul(actor->Speed, finesine[pitch]);
+		fixed_t xyscale = FixedMul(speed, finecosine[pitch]);
+		actor->velz = FixedMul(speed, finesine[pitch]);
 		actor->velx = FixedMul(xyscale, finecosine[angle]);
 		actor->vely = FixedMul(xyscale, finesine[angle]);
 	}
 
 
-
-	// [BC] Update the thing's angle and momentum.
+	// [BC] Update the thing's angle and velocity.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_VELX|CM_VELY|CM_VELZ );
 
 	return true;
 }
@@ -1992,7 +2041,6 @@ bool P_SeekerMissile (AActor *actor, angle_t thresh, angle_t turnMax, bool preci
 // Returns the actor's old floorz.
 //
 #define STOPSPEED			0x1000
-#define FRICTION			0xe800
 #define CARRYSTOPSPEED		(STOPSPEED*32/3)
 
 fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly) 
@@ -2079,7 +2127,7 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 	if ((xmove | ymove) == 0)
 	{
 		if ( (mo->flags & MF_SKULLFLY)
-			 && ( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ) )
+			 && ( NETWORK_InClientMode() == false ) )
 		{
 			// the skull slammed into something
 			mo->flags &= ~MF_SKULLFLY;
@@ -2092,11 +2140,11 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 			if (!(mo->flags2 & MF2_DORMANT))
 			{
 				// [BC] If we are the server, tell clients about the state change and the
-				// momentum change.
+				// velocity change.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				{
-					SERVERCOMMANDS_SetThingState( mo, mo->SeeState != NULL ? STATE_SEE : STATE_SPAWN );
-					SERVERCOMMANDS_MoveThing( mo, CM_MOMX|CM_MOMY|CM_MOMZ );
+					SERVERCOMMANDS_SetThingState( mo, mo->SeeState != NULL ? STATE_SEE : STATE_IDLE );
+					SERVERCOMMANDS_MoveThing( mo, CM_VELX|CM_VELY|CM_VELZ );
 				}
 
 				if (mo->SeeState != NULL) mo->SetState (mo->SeeState);
@@ -2105,11 +2153,11 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 			else
 			{
 				// [BB] If we are the server, tell clients about the state change and the
-				// momentum change.
+				// velocity change.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 				{
-					SERVERCOMMANDS_SetThingState( mo, STATE_SPAWN );
-					SERVERCOMMANDS_MoveThing( mo, CM_MOMX|CM_MOMY|CM_MOMZ );
+					SERVERCOMMANDS_SetThingState( mo, STATE_IDLE );
+					SERVERCOMMANDS_MoveThing( mo, CM_VELX|CM_VELY|CM_VELZ );
 				}
 
 				mo->SetIdle();
@@ -2197,8 +2245,9 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 		ptryx = startx + Scale (xmove, step, steps);
 		ptryy = starty + Scale (ymove, step, steps);
 
-//		Printf ("%d,%d/%d: %d %d %d %d %d %d %d %d\n", level.time, step, steps, startxmove, Scale(xmove,step,steps), startymove, Scale(ymove,step,steps), mo->x, mo->y, mo->z);
-
+/*		if (mo->player)
+		Printf ("%d,%d/%d: %d %d %d %d %d %d %d\n", level.time, step, steps, startxmove, Scale(xmove,step,steps), startymove, Scale(ymove,step,steps), mo->x, mo->y, mo->z);
+*/
 		// [RH] If walking on a slope, stay on the slope
 		// killough 3/15/98: Allow objects to drop off
 		fixed_t startvelx = mo->velx, startvely = mo->vely;
@@ -2210,7 +2259,7 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 			line_t *BlockingLine = mo->BlockingLine;
 
 			if (!(mo->flags & MF_MISSILE) && (mo->BounceFlags & BOUNCE_MBF) 
-				&& (BlockingMobj != NULL ? P_BounceActor(mo, BlockingMobj) : P_BounceWall(mo)))
+				&& (BlockingMobj != NULL ? P_BounceActor(mo, BlockingMobj, false) : P_BounceWall(mo)))
 			{
 				// Do nothing, relevant actions already done in the condition.
 				// This allows to avoid setting velocities to 0 in the final else of this series.
@@ -2303,10 +2352,10 @@ fixed_t P_XYMovement (AActor *mo, fixed_t scrollx, fixed_t scrolly)
 				if (BlockingMobj)
 				{
 					// [BB] The server handles this.
-					if ( (mo->BounceFlags & BOUNCE_Actors) && !NETWORK_InClientMode() )
+					if ( (mo->BounceFlags & BOUNCE_Actors) && ( NETWORK_InClientMode() == false ) )
 					{
 						// Bounce test and code moved to P_BounceActor
-						if (!P_BounceActor(mo, BlockingMobj))
+						if (!P_BounceActor(mo, BlockingMobj, false))
 						{	// Struck a player/creature
 						
 							// Potentially reward the player who shot this missile with an accuracy/precision medal.
@@ -2377,33 +2426,33 @@ explode:
 						// Hack to prevent missiles exploding against the sky.
 						// Does not handle sky floors.
 
-					// Player didn't strike another player with this missile.
-					if ( mo->target && mo->target->player )
-						mo->target->player->ulConsecutiveHits = 0;
+						// Player didn't strike another player with this missile.
+						if ( mo->target && mo->target->player )
+							mo->target->player->ulConsecutiveHits = 0;
 
-					// [Dusk] Tell the clients that the mobj was deleted
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVERCOMMANDS_DestroyThing( mo );
+						// [Dusk] Tell the clients that the mobj was deleted
+						if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+							SERVERCOMMANDS_DestroyThing( mo );
 
 						mo->Destroy ();
 						return oldfloorz;
 					}
 
-				// Potentially reward the player who shot this missile with an accuracy/precision medal.
-				if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
-				{
-					if ( mo->target->player->bStruckPlayer )
-						PLAYER_StruckPlayer( mo->target->player );
-					else
-						mo->target->player->ulConsecutiveHits = 0;
-				}
+					// Potentially reward the player who shot this missile with an accuracy/precision medal.
+					if ((( mo->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && mo->target && mo->target->player )
+					{
+						if ( mo->target->player->bStruckPlayer )
+							PLAYER_StruckPlayer( mo->target->player );
+						else
+							mo->target->player->ulConsecutiveHits = 0;
+					}
 
 					// [RH] Don't explode on horizon lines.
 					if (mo->BlockingLine != NULL && mo->BlockingLine->special == Line_Horizon)
 					{
-					// [Dusk] Tell the clients that the mobj was deleted
-					if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-						SERVERCOMMANDS_DestroyThing( mo );
+						// [Dusk] Tell the clients that the mobj was deleted
+						if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+							SERVERCOMMANDS_DestroyThing( mo );
 
 						mo->Destroy ();
 						return oldfloorz;
@@ -2457,7 +2506,9 @@ explode:
 	}
 
 	if (mo->z > mo->floorz && !(mo->flags2 & MF2_ONMOBJ) &&
-		(!(mo->flags2 & MF2_FLY) || !(mo->flags & MF_NOGRAVITY)) && !mo->waterlevel)
+		!mo->IsNoClip2() &&
+		(!(mo->flags2 & MF2_FLY) || !(mo->flags & MF_NOGRAVITY)) &&
+		!mo->waterlevel)
 	{ // [RH] Friction when falling is available for larger aircontrols
 		if (player != NULL && level.airfriction != FRACUNIT)
 		{
@@ -2518,7 +2569,7 @@ explode:
 			// [BC] In client mode, we don't know if other players have any forwardmove or
 			// sidemove values, so the server will tell us when to put other players in
 			// idle mode.
-			if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) ||
+			if (( NETWORK_InClientMode() == false ) ||
 				(( player - players ) == consoleplayer ))
 			{
 				player->mo->PlayIdle ();
@@ -2580,7 +2631,7 @@ fixed_t P_OldXYMovement( AActor *mo )
 	xmove = clamp( mo->velx, -maxmove, maxmove );
 	ymove = clamp( mo->vely, -maxmove, maxmove );
 
-	if (!(mo->velx | mo->vely)) // Any momentum?
+	if (!(mo->velx | mo->vely)) // Any velocity?
 	{
 		if (mo->flags & MF_SKULLFLY)
 		{
@@ -2741,7 +2792,7 @@ fixed_t P_OldXYMovement( AActor *mo )
 			// [BC] In client mode, we don't know if other players have any forwardmove or
 			// sidemove values, so the server will tell us when to put other players in
 			// idle mode.
-			if ((( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false )) ||
+			if (( NETWORK_InClientMode() == false ) ||
 				(( player - players ) == consoleplayer ))
 			{
 				player->mo->PlayIdle ();
@@ -2828,7 +2879,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 	fixed_t oldz = mo->z;
 	fixed_t grav = mo->GetGravity();
 
-//	
+//
 // check for smooth step up
 //
 	// [BC] Don't adjust viewheight while predicting.
@@ -2842,10 +2893,8 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 	}
 
 	// [W] Added old ZDoom physics compatibility
-	if (!(zacompatflags & ZACOMPATF_OLD_ZDOOM_ZMOVEMENT) && !(mo->flags2 & MF2_FLOATBOB))
-	{
+	if (!(zacompatflags & ZACOMPATF_OLD_ZDOOM_ZMOVEMENT))
 		mo->z += mo->velz;
-	}
 
 //
 // apply gravity
@@ -2854,7 +2903,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 	{
 		fixed_t startvelz = mo->velz;
 
-		if (!mo->waterlevel || mo->flags & MF_CORPSE || (mo->player &&
+		if (mo->waterlevel == 0 || (mo->player &&
 			!(mo->player->cmd.ucmd.forwardmove | mo->player->cmd.ucmd.sidemove)))
 		{
 			// [RH] Double gravity only if running off a ledge. Coming down from
@@ -2870,27 +2919,67 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 				mo->velz -= grav;
 			}
 		}
-		if (mo->waterlevel > 1)
+		if (mo->player == NULL)
 		{
-			fixed_t sinkspeed = mo->flags & MF_CORPSE ? -WATER_SINK_SPEED/3 : -WATER_SINK_SPEED;
+			if (mo->waterlevel >= 1)
+			{
+				fixed_t sinkspeed;
 
-			if (mo->velz < sinkspeed)
-			{
-				mo->velz = (startvelz < sinkspeed) ? startvelz : sinkspeed;
+				if ((mo->flags & MF_SPECIAL) && !(mo->flags3 & MF3_ISMONSTER))
+				{ // Pickup items don't sink if placed and drop slowly if dropped
+					sinkspeed = (mo->flags & MF_DROPPED) ? -WATER_SINK_SPEED / 8 : 0;
+				}
+				else
+				{
+					sinkspeed = -WATER_SINK_SPEED;
+
+					// If it's not a player, scale sinkspeed by its mass, with
+					// 100 being equivalent to a player.
+					if (mo->player == NULL)
+					{
+						sinkspeed = Scale(sinkspeed, clamp(mo->Mass, 1, 4000), 100);
+					}
+				}
+				if (mo->velz < sinkspeed)
+				{ // Dropping too fast, so slow down toward sinkspeed.
+					mo->velz -= MAX(sinkspeed*2, -FRACUNIT*8);
+					if (mo->velz > sinkspeed)
+					{
+						mo->velz = sinkspeed;
+					}
+				}
+				else if (mo->velz > sinkspeed)
+				{ // Dropping too slow/going up, so trend toward sinkspeed.
+					mo->velz = startvelz + MAX(sinkspeed/3, -FRACUNIT*8);
+					if (mo->velz < sinkspeed)
+					{
+						mo->velz = sinkspeed;
+					}
+				}
 			}
-			else
+		}
+		else
+		{
+			if (mo->waterlevel > 1)
 			{
-				mo->velz = startvelz + ((mo->velz - startvelz) >>
-					(mo->waterlevel == 1 ? WATER_SINK_SMALL_FACTOR : WATER_SINK_FACTOR));
+				fixed_t sinkspeed = -WATER_SINK_SPEED;
+
+				if (mo->velz < sinkspeed)
+				{
+					mo->velz = (startvelz < sinkspeed) ? startvelz : sinkspeed;
+				}
+				else
+				{
+					mo->velz = startvelz + ((mo->velz - startvelz) >>
+						(mo->waterlevel == 1 ? WATER_SINK_SMALL_FACTOR : WATER_SINK_FACTOR));
+				}
 			}
 		}
 	}
 
 	// [W/BB] Apply the old ZDoom gravity here instead
-	if ((zacompatflags & ZACOMPATF_OLD_ZDOOM_ZMOVEMENT) || (mo->flags2 & MF2_FLOATBOB))
-	{
+	if ((zacompatflags & ZACOMPATF_OLD_ZDOOM_ZMOVEMENT))
 		mo->z += mo->velz;
-	}
 
 	// [BC] Mark this item as having moved.
 	if ( mo->z != oldz )
@@ -2900,8 +2989,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 //
 	// [BC] Don't float in client mode.
 	if ((mo->flags & MF_FLOAT) && !(mo->flags2 & MF2_DORMANT) && mo->target &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{	// float down towards target if too close
 		if (!(mo->flags & (MF_SKULLFLY | MF_INFLOAT)))
 		{
@@ -2909,27 +2997,30 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 			delta = (mo->target->z + (mo->height>>1)) - mo->z;
 			if (delta < 0 && dist < -(delta*3))
 			{
-				mo->z -= mo->FloatSpeed, mo->velz = 0;
+				mo->z -= mo->FloatSpeed;
 
 				// [BC] If we're the server, tell clients to update the thing's Z position.
-				// [WS] Inform clients of the momentum.
+				// [WS] Inform clients of the velocity.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_MoveThingExact( mo, CM_Z|CM_MOMZ );
+					SERVERCOMMANDS_MoveThingExact( mo, CM_Z|CM_VELZ );
 			}
 			else if (delta > 0 && dist < (delta*3))
 			{
-				mo->z += mo->FloatSpeed, mo->velz = 0;
+				mo->z += mo->FloatSpeed;
 
 				// [BC] If we're the server, tell clients to update the thing's Z position.
-				// [WS] Inform clients of the momentum.
+				// [WS] Inform clients of the velocity.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_MoveThingExact( mo, CM_Z|CM_MOMZ );
+					SERVERCOMMANDS_MoveThingExact( mo, CM_Z|CM_VELZ );
 			}
 		}
 	}
 	if (mo->player && (mo->flags & MF_NOGRAVITY) && (mo->z > mo->floorz))
 	{
-		mo->z += finesine[(FINEANGLES/80*level.maptime)&FINEMASK]/8;
+		if (!mo->IsNoClip2())
+		{
+			mo->z += finesine[(FINEANGLES/80*level.maptime)&FINEMASK]/8;
+		}
 		mo->velz = FixedMul (mo->velz, FRICTION_FLY);
 	}
 	if (mo->waterlevel && !(mo->flags & MF_NOGRAVITY))
@@ -2992,7 +3083,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 
 					// [TP] Tell clients the missile stopped moving vertically
 					if ( NETWORK_GetState() == NETSTATE_SERVER )
-						SERVERCOMMANDS_MoveThing( mo, CM_MOMZ );
+						SERVERCOMMANDS_MoveThing( mo, CM_VELZ );
 
 					return;
 				}
@@ -3049,7 +3140,6 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 				}
 			}
 			mo->z = mo->floorz;
-
 			if (mo->velz < 0)
 			{
 				const fixed_t minvel = -8*FRACUNIT;	// landing speed from a jump with normal gravity
@@ -3068,10 +3158,9 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 				mo->HitFloor ();
 				if (mo->player)
 				{
-					// [BB] This check from ZDoom revision 2238 breaks jumpmaze wads.
-					// For now we just keep the old behavior. Possibly we need to introduce
-					// a compat flag for this in the future.
-					//if (mo->player->jumpTics != 0 && mo->velz < -grav*4)
+					// [BB] ZDoom changed the jumping here revision 2238.
+					// The old behavior is necessary for existing jumpmaze wads.
+					if ( ( zacompatflags & ZACOMPATF_SKULLTAG_JUMPING ) || mo->player->jumpTics < 0 || mo->velz < minvel)
 					{ // delay any jumping for a short while
 						mo->player->jumpTics = 7;
 					}
@@ -3175,7 +3264,7 @@ void P_ZMovement (AActor *mo, fixed_t oldfloorz)
 	// [TIHan/BB] If it's a missile that is bounceable and it bounced, send info to the client
 	if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( mo->ulNetworkFlags & NETFL_BOUNCED_OFF_ACTOR ) )
 	{
-		SERVERCOMMANDS_MoveThingExact( mo, CM_X|CM_Y|CM_Z|CM_MOMX|CM_MOMY|CM_MOMZ|CM_ANGLE );
+		SERVERCOMMANDS_MoveThingExact( mo, CM_X|CM_Y|CM_Z|CM_VELX|CM_VELY|CM_VELZ|CM_ANGLE );
 		// [BB] Remove the mark, the syncing is done now.
 		mo->ulNetworkFlags &= ~NETFL_BOUNCED_OFF_ACTOR;
 	}
@@ -3282,7 +3371,8 @@ static void PlayerLandedOnThing (AActor *mo, AActor *onmobj)
 	{
 		grunted = false;
 		// Why should this number vary by gravity?
-		if (mo->velz < (fixed_t)(800.f /*level.gravity * mo->Sector->gravity*/ * -983.04f) && mo->health > 0)
+		// [BB] For unassigned voodoo dolls, mo->player->mo is NULL.
+		if (mo->player->mo && mo->health > 0 && mo->velz < -mo->player->mo->GruntSpeed)
 		{
 			S_Sound (mo, CHAN_VOICE, "*grunt", 1, ATTN_NORM);
 			grunted = true;
@@ -3332,19 +3422,51 @@ void P_NightmareRespawn (AActor *mobj)
 	// spawn it
 	x = mobj->SpawnPoint[0];
 	y = mobj->SpawnPoint[1];
-	mo = Spawn (RUNTIME_TYPE(mobj), x, y, z, NO_REPLACE);
+	mo = AActor::StaticSpawn(RUNTIME_TYPE(mobj), x, y, z, NO_REPLACE, true);
 
 	if (z == ONFLOORZ)
-		mo->z += mo->SpawnPoint[2];
+	{
+		mo->z += mobj->SpawnPoint[2];
+		if (mo->z < mo->floorz)
+		{ // Do not respawn monsters in the floor, even if that's where they
+		  // started. The initial P_ZMovement() call would have put them on
+		  // the floor right away, but we need them on the floor now so we
+		  // can use P_CheckPosition() properly.
+			mo->z = mo->floorz;
+		}
+		if (mo->z + mo->height > mo->ceilingz)
+		{
+			mo->z = mo->ceilingz - mo->height;
+		}
+	}
 	else if (z == ONCEILINGZ)
-		mo->z -= mo->SpawnPoint[2];
+	{
+		mo->z -= mobj->SpawnPoint[2];
+	}
+
+	// If there are 3D floors, we need to find floor/ceiling again.
+	P_FindFloorCeiling(mo, FFCF_SAMESECTOR | FFCF_ONLY3DFLOORS | FFCF_3DRESTRICT);
+
+	if (z == ONFLOORZ)
+	{
+		if (mo->z < mo->floorz)
+		{ // Do not respawn monsters in the floor, even if that's where they
+		  // started. The initial P_ZMovement() call would have put them on
+		  // the floor right away, but we need them on the floor now so we
+		  // can use P_CheckPosition() properly.
+			mo->z = mo->floorz;
+		}
+		if (mo->z + mo->height > mo->ceilingz)
+		{ // Do the same for the ceiling.
+			mo->z = mo->ceilingz - mo->height;
+		}
+	}
 
 	// something is occupying its position?
-	if (!P_TestMobjLocation (mo))
+	if (!P_CheckPosition(mo, mo->x, mo->y, true))
 	{
 		//[GrafZahl] MF_COUNTKILL still needs to be checked here.
-		if (mo->CountsAsKill()) level.total_monsters--;
-
+		mo->ClearCounters();
 		mo->Destroy ();
 		return;		// no respawn
 	}
@@ -3365,6 +3487,8 @@ void P_NightmareRespawn (AActor *mobj)
 	mo->Translation = mobj->Translation;
 
 	mo->skillrespawncount = mobj->skillrespawncount;
+
+	mo->PrevZ = z;		// Do not interpolate Z position if we changed it since spawning.
 
 	// [BB] The new actor has to inherit the STFL_LEVELSPAWNED flag from the old one.
 	// Otherwise level spawned actors respawned by P_NightmareRespawn won't be restored
@@ -3429,7 +3553,7 @@ AActor *AActor::TIDHash[128];
 
 void AActor::ClearTIDHashes ()
 {
-	memset(TIDHash, NULL, sizeof(TIDHash));
+	memset(TIDHash, 0, sizeof(TIDHash));
 }
 
 //
@@ -3614,8 +3738,7 @@ void AActor::HitFloor ()
 bool AActor::Slam (AActor *thing)
 {
 	// [BB] This is server side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return false;
 	}
@@ -3623,11 +3746,11 @@ bool AActor::Slam (AActor *thing)
 	flags &= ~MF_SKULLFLY;
 	velx = vely = velz = 0;
 
-	// [BB] If we are the server, tell clients about MF_SKULLFLY and the momentum change.
+	// [BB] If we are the server, tell clients about MF_SKULLFLY and the velocity change.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
 		SERVERCOMMANDS_SetThingFlags( this, FLAGSET_FLAGS );
-		SERVERCOMMANDS_MoveThing( this, CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThing( this, CM_VELX|CM_VELY|CM_VELZ );
 	}
 
 	if (health > 0)
@@ -3635,14 +3758,14 @@ bool AActor::Slam (AActor *thing)
 		if (!(flags2 & MF2_DORMANT))
 		{
 			int dam = GetMissileDamage (7, 1);
-			P_DamageMobj (thing, this, this, dam, NAME_Melee);
-			P_TraceBleed (dam, thing, this);
+			int newdam = P_DamageMobj (thing, this, this, dam, NAME_Melee);
+			P_TraceBleed (newdam > 0 ? newdam : dam, thing, this);
 			// The charging monster may have died by the target's actions here.
 			if (health > 0)
 			{
 				// [BC] If we are the server, tell clients about the state change.
 				if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-					SERVERCOMMANDS_SetThingState( this, SeeState != NULL ? STATE_SEE : STATE_SPAWN );
+					SERVERCOMMANDS_SetThingState( this, SeeState != NULL ? STATE_SEE : STATE_IDLE );
 
 				if (SeeState != NULL) SetState (SeeState);
 				else SetIdle();
@@ -3652,7 +3775,7 @@ bool AActor::Slam (AActor *thing)
 		{
 			// [BB] If we are the server, tell clients about the state change.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetThingState( this, STATE_SPAWN );
+				SERVERCOMMANDS_SetThingState( this, STATE_IDLE );
 
 			SetIdle();
 			tics = -1;
@@ -3683,7 +3806,7 @@ bool AActor::AdjustReflectionAngle (AActor *thing, angle_t &angle)
 	if (thing->flags4&MF4_SHIELDREFLECT)
 	{
 		// Shield reflection (from the Centaur
-		if (abs (angle - thing->angle)>>24 > 45)
+		if (absangle(angle - thing->angle)>>24 > 45)
 			return true;	// Let missile explode
 
 		if (thing->IsKindOf (RUNTIME_CLASS(AHolySpirit)))	// shouldn't this be handled by another flag???
@@ -3754,7 +3877,8 @@ bool AActor::IsOkayToAttack (AActor *link)
 	if ((link->flags5 & MF5_SUMMONEDMONSTER)			// No attack against minions on the same side
 		&& (link->tracer == Friend))					return false;
 	// [BB] Changed "multiplayer" check
-	if (( NETWORK_GetState( ) != NETSTATE_SINGLE ) && !deathmatch						// No attack against fellow players in coop
+	// [RK] Check for CTF and team games
+	if (( NETWORK_GetState( ) != NETSTATE_SINGLE ) && !deathmatch && !teamgame						// No attack against fellow players in coop
 		&& link->player && Friend->player)				return false;
 	if (((flags & link->flags) & MF_FRIENDLY)			// No friendly infighting amongst minions
 		&& IsFriend(link))								return false;
@@ -3763,7 +3887,7 @@ bool AActor::IsOkayToAttack (AActor *link)
 	if (P_CheckSight (this, link))
 	{
 		// AMageStaffFX2::IsOkayToAttack had an extra check here, generalized with a flag,
-		// to only allow the check to succeed if the enemy was in a ~84° FOV of the player
+		// to only allow the check to succeed if the enemy was in a ~84ï¿½ FOV of the player
 		if (flags3 & MF3_SCREENSEEKER)
 		{
 			angle_t angle = R_PointToAngle2(Friend->x, 
@@ -3792,6 +3916,30 @@ void AActor::SetShade (int r, int g, int b)
 	fillcolor = MAKEARGB(ColorMatcher.Pick (r, g, b), r, g, b);
 }
 
+void AActor::SetPitch(int p, bool interpolate)
+{
+	if (p != pitch)
+	{
+		pitch = p;
+		if (player != NULL && interpolate)
+		{
+			player->cheats |= CF_INTERPVIEW;
+		}
+	}
+}
+
+void AActor::SetAngle(angle_t ang, bool interpolate)
+{
+	if (ang != angle)
+	{
+		angle = ang;
+		if (player != NULL && interpolate)
+		{
+			player->cheats |= CF_INTERPVIEW;
+		}
+	}
+}
+
 //
 // P_MobjThinker
 //
@@ -3818,7 +3966,10 @@ void AActor::Tick ()
 	static const BYTE HereticScrollDirs[4] = { 6, 9, 1, 4 };
 	static const BYTE HereticSpeedMuls[5] = { 5, 10, 25, 30, 35 };
 
+
 	AActor *onmo;
+	// [BB] Zandronum's bot handling doesn't need this 'i'.
+	//int i;
 
 	//assert (state != NULL);
 	if (state == NULL)
@@ -3862,6 +4013,11 @@ void AActor::Tick ()
 			//Added by MC: Freeze mode.
 			if (/*bglobal.freeze ||*/ level.flags2 & LEVEL2_FROZEN)
 			{
+				// Boss cubes shouldn't be accelerated by timefreeze
+				if (flags6 & MF6_BOSSCUBE)
+				{
+					special2++;
+				}
 				return;
 			}
 		}
@@ -3892,47 +4048,50 @@ void AActor::Tick ()
 
 		if (!(flags5 & MF5_NOTIMEFREEZE))
 		{
+			// Boss cubes shouldn't be accelerated by timefreeze
+			if (flags6 & MF6_BOSSCUBE)
+			{
+				special2++;
+			}
 			// Apply freeze mode.
 			// [WS] Added Skulltag specific code for checking to see if the player is a spectator, if the player is then don't apply freeze mode.
-			if (( level.flags2 & LEVEL2_FROZEN ) &&
-				(( player && (( player->cheats & CF_TIMEFREEZE ) || player->bSpectating )) == false ))
+			if ((level.flags2 & LEVEL2_FROZEN) && (player == NULL || ( player->timefreezer == 0 && !player->bSpectating )))
 			{
 				return;
 			}
 		}
 
 
-		if (cl_rockettrails & 2)
+		if (effects & FX_ROCKET) 
 		{
-			if (effects & FX_ROCKET) 
+			if (++smokecounter == 4)
 			{
-				if (++smokecounter==4)
+				// add some smoke behind the rocket 
+				smokecounter = 0;
+				AActor *th = Spawn("RocketSmokeTrail", x-velx, y-vely, z-velz, ALLOW_REPLACE);
+				if (th)
 				{
-					// add some smoke behind the rocket 
-					smokecounter = 0;
-					AActor * th = Spawn("RocketSmokeTrail", x-velx, y-vely, z-velz, ALLOW_REPLACE);
-					if (th)
-					{
-						th->tics -= pr_rockettrail()&3;
-						if (th->tics < 1) th->tics = 1;
-					}
+					th->tics -= pr_rockettrail()&3;
+					if (th->tics < 1) th->tics = 1;
+					if (!(cl_rockettrails & 2)) th->renderflags |= RF_INVISIBLE;
 				}
 			}
-			else if (effects & FX_GRENADE) 
+		}
+		else if (effects & FX_GRENADE) 
+		{
+			if (++smokecounter == 8)
 			{
-				if (++smokecounter==8)
+				smokecounter = 0;
+				angle_t moveangle = R_PointToAngle2(0,0,velx,vely);
+				AActor * th = Spawn("GrenadeSmokeTrail", 
+					x - FixedMul (finecosine[(moveangle)>>ANGLETOFINESHIFT], radius*2) + (pr_rockettrail()<<10),
+					y - FixedMul (finesine[(moveangle)>>ANGLETOFINESHIFT], radius*2) + (pr_rockettrail()<<10),
+					z - (height>>3) * (velz>>16) + (2*height)/3, ALLOW_REPLACE);
+				if (th)
 				{
-					smokecounter = 0;
-					angle_t moveangle = R_PointToAngle2(0,0,velx,vely);
-					AActor * th = Spawn("GrenadeSmokeTrail", 
-						x - FixedMul (finecosine[(moveangle)>>ANGLETOFINESHIFT], radius*2) + (pr_rockettrail()<<10),
-						y - FixedMul (finesine[(moveangle)>>ANGLETOFINESHIFT], radius*2) + (pr_rockettrail()<<10),
-						z - (height>>3) * (velz>>16) + (2*height)/3, ALLOW_REPLACE);
-					if (th)
-					{
-						th->tics -= pr_rockettrail()&3;
-						if (th->tics < 1) th->tics = 1;
-					}
+					th->tics -= pr_rockettrail()&3;
+					if (th->tics < 1) th->tics = 1;
+					if (!(cl_rockettrails & 2)) th->renderflags |= RF_INVISIBLE;
 				}
 			}
 		}
@@ -4235,14 +4394,7 @@ void AActor::Tick ()
 			}
 
 		}
-		if (flags2 & MF2_FLOATBOB)
-		{ // Floating item bobbing motion
-			z += FloatBobDiffs[(FloatBobPhase + level.maptime) & 63];
-		}
-		if (velz || BlockingMobj ||
-			(z != floorz && (!(flags2 & MF2_FLOATBOB) ||
-			(z - FloatBobOffsets[(FloatBobPhase + level.maptime) & 63] != floorz)
-			)))
+		if (velz || BlockingMobj || z != floorz)
 		{	// Handle Z velocity and gravity
 			if (((flags2 & MF2_PASSMOBJ) || (flags & MF_SPECIAL)) && !(i_compatflags & COMPATF_NO_PASSMOBJ))
 			{
@@ -4278,9 +4430,34 @@ void AActor::Tick ()
 						}
 						z = onmo->z + onmo->height;
 					}
-					flags2 |= MF2_ONMOBJ;
-					velz = 0;
-					Crash();
+					// Check for MF6_BUMPSPECIAL
+					// By default, only players can activate things by bumping into them
+					// We trigger specials as long as we are on top of it and not just when
+					// we land on it. This could be considered as gravity making us continually
+					// bump into it, but it also avoids having to worry about walking on to
+					// something without dropping and not triggering anything.
+					if ((onmo->flags6 & MF6_BUMPSPECIAL) && ((player != NULL)
+						|| ((onmo->activationtype & THINGSPEC_MonsterTrigger) && (flags3 & MF3_ISMONSTER))
+						|| ((onmo->activationtype & THINGSPEC_MissileTrigger) && (flags & MF_MISSILE))
+						) && (level.maptime > onmo->lastbump)) // Leave the bumper enough time to go away
+					{
+						// [BB]
+						//if (player == NULL || !(player->cheats & CF_PREDICTING))
+						{
+							if (P_ActivateThingSpecial(onmo, this))
+								onmo->lastbump = level.maptime + TICRATE;
+						}
+					}
+					if (velz != 0 && (BounceFlags & BOUNCE_Actors))
+					{
+						P_BounceActor(this, onmo, true);
+					}
+					else
+					{
+						flags2 |= MF2_ONMOBJ;
+						velz = 0;
+						Crash();
+					}
 				}
 			}
 			else
@@ -4294,6 +4471,8 @@ void AActor::Tick ()
 		else if (z <= floorz)
 		{
 			Crash();
+			if (ObjectFlags & OF_EuthanizeMe)
+				return;		// actor was destroyed
 		}
 
 		UpdateWaterLevel (oldz);
@@ -4309,7 +4488,7 @@ void AActor::Tick ()
 		// Check for poison damage, but only once per PoisonPeriod tics (or once per second if none).
 		if (PoisonDurationReceived && (level.time % (PoisonPeriodReceived ? PoisonPeriodReceived : TICRATE) == 0))
 		{
-			P_DamageMobj(this, NULL, Poisoner, PoisonDamageReceived, NAME_Poison, 0);
+			P_DamageMobj(this, NULL, Poisoner, PoisonDamageReceived, PoisonDamageTypeReceived ? PoisonDamageTypeReceived : (FName)NAME_Poison, 0);
 
 			--PoisonDurationReceived;
 
@@ -4326,23 +4505,38 @@ void AActor::Tick ()
 	if ( this->player && this->player->bSpectating )
 		return;
 
+	assert (state != NULL);
+	if (state == NULL)
+	{
+		Destroy();
+		return;
+	}
+	if ((flags7 & MF7_HANDLENODELAY) && !(flags2 & MF2_DORMANT))
+	{
+		flags7 &= ~MF7_HANDLENODELAY;
+		if (state->GetNoDelay())
+		{
+			// For immediately spawned objects with the NoDelay flag set for their
+			// Spawn state, explicitly set the current state so that it calls its
+			// action and chains 0-tic states.
+			int starttics = tics;
+			if (!SetState(state))
+				return;				// freed itself
+			// If the initial state had a duration of 0 tics, let the next state run
+			// normally. Otherwise, increment tics by 1 so that we don't double up ticks.
+			else if (starttics > 0 && tics >= 0)
+			{
+				tics++;
+			}
+		}
+	}
 	// cycle through states, calling action functions at transitions
 	if (tics != -1)
 	{
-		tics--;
-				
-		// you can cycle through multiple states in a tic
-		// [RH] Use <= 0 instead of == 0 so that spawnstates
+		// [RH] Use tics <= 0 instead of == 0 so that spawnstates
 		// of 0 tics work as expected.
-		if (tics <= 0)
+		if (--tics <= 0)
 		{
-			assert (state != NULL);
-			if (state == NULL)
-			{
-				Destroy();
-				return;
-			}
-
 			// [BB] Active player bodies my not be deleted!
 			if ( ( state->GetNextState() == NULL ) && player && ( player->mo == this ) ) {
 				Printf ( PRINT_BOLD, "WARNING: The active body of a player does not have a next state, but the current state has a finite duration! Freezing player body in its current state.\n" );
@@ -4350,15 +4544,14 @@ void AActor::Tick ()
 				return;
 			}
 
-			if (!SetState (state->GetNextState()))
+			if (!SetState(state->GetNextState()))
 				return; 		// freed itself
 		}
 	}
 	else
 	{
 		// [BC] The rest is server-side.
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			return;
 		}
@@ -4504,10 +4697,10 @@ bool AActor::UpdateWaterLevel (fixed_t oldz, bool dosplash)
 			{
 				reset = true;
 			}
-			}
+		}
 #ifdef _3DFLOORS
-			else
-			{
+		else
+		{
 			// Check 3D floors as well!
 			for(unsigned int i=0;i<Sector->e->XFloor.ffloors.Size();i++)
 			{
@@ -4556,40 +4749,50 @@ bool AActor::UpdateWaterLevel (fixed_t oldz, bool dosplash)
 	return false;	// we did the splash ourselves
 }
 
+
 //==========================================================================
 //
 //*****************************************************************************
 //
-void ACTOR_ClearNetIDList( void )
+template <typename T>
+void IDList<T>::clear( void )
 {
-	ULONG	ulIdx;
+	for ( ULONG ulIdx = 0; ulIdx < MAX_NETID; ulIdx++ )
+		freeID ( ulIdx );
 
-	for ( ulIdx = 0; ulIdx < MAX_NETID; ulIdx++ )
-	{
-		g_NetIDList[ulIdx].bFree = true;
-		g_NetIDList[ulIdx].pActor = NULL;
-	}
-
-	g_ulFirstFreeNetID = 1;
+	_firstFreeID = 1;
 }
 
 //*****************************************************************************
 //
-void ACTOR_RebuildNetIDList( void )
+template <typename T>
+void IDList<T>::rebuild( void )
 {
-	ACTOR_ClearNetIDList();
+	clear();
 
-	AActor *pActor;
+	T *pActor;
 
-	TThinkerIterator<AActor> it;
+	TThinkerIterator<T> it;
 
 	while ( (pActor = it.Next()) )
 	{
 		if (( pActor->lNetID > 0 ) && ( pActor->lNetID < MAX_NETID ))
-		{
-			g_NetIDList[pActor->lNetID].bFree = false;
-			g_NetIDList[pActor->lNetID].pActor = pActor;
-		}
+			useID ( pActor->lNetID, pActor );
+	}
+}
+
+//*****************************************************************************
+//
+template <typename T>
+void IDList<T>::useID ( const LONG lNetID, T *pActor )
+{
+	if ( isIndexValid ( lNetID ) )
+	{
+		if ( ( _entries[lNetID].bFree == false ) && ( _entries[lNetID].pActor != pActor ) )
+			SERVER_PrintWarning ( "IDList<T>::useID is using an already used ID.\n" );
+
+		_entries[lNetID].bFree = false;
+		_entries[lNetID].pActor = pActor;
 	}
 }
 
@@ -4597,20 +4800,19 @@ void ACTOR_RebuildNetIDList( void )
 //
 void CountActors ( ); // [BB]
 
-ULONG ACTOR_GetNewNetID( void )
+template <typename T>
+ULONG IDList<T>::getNewID( void )
 {
-	ULONG	ulID;
-
 	// Actor's network ID is the first availible net ID.
-	ulID = g_ulFirstFreeNetID;
+	ULONG ulID = _firstFreeID;
 
 	do
 	{
-		g_ulFirstFreeNetID++;
-		if ( g_ulFirstFreeNetID >= MAX_NETID )
-			g_ulFirstFreeNetID = 1;
+		_firstFreeID++;
+		if ( _firstFreeID >= MAX_NETID )
+			_firstFreeID = 1;
 
-		if ( g_ulFirstFreeNetID == ulID )
+		if ( _firstFreeID == ulID )
 		{
 			// [BB] In case there is no free netID, the server has to abort the current game.
 			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -4624,10 +4826,12 @@ ULONG ACTOR_GetNewNetID( void )
 
 			return ( 0 );
 		}
-	} while ( g_NetIDList[g_ulFirstFreeNetID].bFree == false );
+	} while ( _entries[_firstFreeID].bFree == false );
 
 	return ( ulID );
 }
+
+template class IDList<AActor>;
 
 // [BB] AActor::FreeNetID
 //
@@ -4635,13 +4839,7 @@ ULONG ACTOR_GetNewNetID( void )
 
 void AActor::FreeNetID ()
 {
-	// [BB] Actors may have lNetID == -1. 
-	if ( ( lNetID >= 0 ) && ( lNetID < MAX_NETID ) )
-	{
-		g_NetIDList[lNetID].bFree = true;
-		g_NetIDList[lNetID].pActor = NULL;
-	}
-
+	g_NetIDList.freeID ( lNetID );
 	lNetID = -1;
 }
 
@@ -4667,12 +4865,23 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 	}
 
 	if (allowreplacement)
-		type = type->ActorInfo->GetReplacement()->Class;
+		type = type->GetReplacement();
 
 
 	AActor *actor;
 	
 	actor = static_cast<AActor *>(const_cast<PClass *>(type)->CreateNew ());
+
+	// Set default dialogue
+	actor->ConversationRoot = GetConversation(actor->GetClass()->TypeName);
+	if (actor->ConversationRoot != -1)
+	{
+		actor->Conversation = StrifeDialogues[actor->ConversationRoot];
+	}
+	else
+	{
+		actor->Conversation = NULL;
+	}
 
 	actor->x = actor->PrevX = ix;
 	actor->y = actor->PrevY = iy;
@@ -4744,7 +4953,7 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 		// z-coordinate.
 		if (!SpawningMapThing) 
 		{
-			P_FindFloorCeiling(actor, true);
+			P_FindFloorCeiling(actor, FFCF_ONLYSPAWNPOS);
 		}
 		else
 		{
@@ -4792,14 +5001,10 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 	}
 	else
 	{
-		actor->SpawnPoint[2] = (actor->z - actor->floorz);
+		actor->SpawnPoint[2] = (actor->z - actor->Sector->floorplane.ZatPoint(actor->x,actor->y));
 	}
 
-	if (actor->flags2 & MF2_FLOATBOB)
-	{ // Prime the bobber
-		actor->FloatBobPhase = rng();
-		actor->z += FloatBobOffsets[(actor->FloatBobPhase + level.maptime - 1) & 63];
-	}
+	if (actor->FloatBobPhase == (BYTE)-1) actor->FloatBobPhase = rng();	// Don't make everything bob in sync (unless deliberately told to do)
 	if (actor->flags2 & MF2_FLOORCLIP)
 	{
 		actor->AdjustFloorClip ();
@@ -4835,14 +5040,23 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 	{
 		level.total_items++;
 	}
+	// And for secrets
+	if (actor->flags5 & MF5_COUNTSECRET)
+	{
+		// [Zandronum] The total amount of secrets counter should be synched with server.
+		if ( !NETWORK_InClientMode( ) )
+			level.total_secrets++;
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+			SERVERCOMMANDS_SetMapNumTotalSecrets();
+	}
 
 	if ((( actor->ulNetworkFlags & NETFL_NONETID ) == false ) && ( ( actor->ulNetworkFlags & NETFL_SERVERSIDEONLY ) == false ) &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
-		actor->lNetID = ACTOR_GetNewNetID( );
-		g_NetIDList[actor->lNetID].pActor = actor;
-		g_NetIDList[actor->lNetID].bFree = false;
+		actor->lNetID = g_NetIDList.getNewID( );
+		g_NetIDList.useID ( actor->lNetID, actor );
+		if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && sv_showspawnnames )
+			Printf ( "%s %d\n", actor->GetClass()->TypeName.GetChars(), actor->lNetID );
 	}
 	else
 		actor->lNetID = -1;
@@ -4853,8 +5067,7 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 	// Check if the flag or skull has spawned in an instant return zone.
 	if (( TEAM_SpawningTemporaryFlag( ) == false ) &&
 		( actor->Sector->MoreFlags & SECF_RETURNZONE ) &&
-		( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+		( NETWORK_InClientMode() == false ))
 	{
 		for ( ULONG i = 0; i < teams.Size( ); i++ )
 		{
@@ -4865,12 +5078,6 @@ AActor *AActor::StaticSpawn (const PClass *type, fixed_t ix, fixed_t iy, fixed_t
 		if (( oneflagctf ) && ( actor->GetClass( ) == PClass::FindClass( "WhiteFlag" )))
 			TEAM_ExecuteReturnRoutine( teams.Size( ), NULL );
 	}
-
-	// [BB] Moved to backport GZDoom revision 1302. Needs to be adapted when our GZDoom base is updated.
-	//if (screen != NULL)
-	//{
-	//	screen->StateChanged(actor);
-	//}
 
 	g_SpawnCycles.Unclock();
 	return actor;
@@ -4899,8 +5106,15 @@ AActor *Spawn (FName classname, fixed_t x, fixed_t y, fixed_t z, replace_t allow
 void AActor::LevelSpawned ()
 {
 	if (tics > 0 && !(flags4 & MF4_SYNCHRONIZED))
+	{
 		tics = 1 + (pr_spawnmapthing() % tics);
-	flags &= ~MF_DROPPED;		// [RH] clear MF_DROPPED flag
+	}
+	// [RH] Clear MF_DROPPED flag if the default version doesn't have it set.
+	// (AInventory::BeginPlay() makes all inventory items spawn with it set.)
+	if (!(GetDefault()->flags & MF_DROPPED))
+	{
+		flags &= ~MF_DROPPED;
+	}
 	HandleSpawnFlags ();
 
 	// [BC] Mark this item as having been spawned on the map.
@@ -4941,6 +5155,15 @@ void AActor::HandleSpawnFlags ()
 	{
 		RenderStyle = STYLE_None;
 	}
+	if (SpawnFlags & MTF_SECRET)
+	{
+		if (!(flags5 & MF5_COUNTSECRET))
+		{
+			//Printf("Secret %s in sector %i!\n", GetTag(), Sector->sectornum);
+			flags5 |= MF5_COUNTSECRET;
+			level.total_secrets++;
+		}
+	}
 
 	// [BC]
 	InitialState = state;
@@ -4959,12 +5182,25 @@ void AActor::BeginPlay ()
 
 void AActor::PostBeginPlay ()
 {
-	// [BB] Backported from GZDoom revision 1302. Needs to be adapted when our GZDoom base is updated.
-	if (screen != NULL)
+	if (Renderer != NULL)
 	{
-		screen->StateChanged(this);
+		Renderer->StateChanged(this);
 	}
 	PrevAngle = angle;
+	flags7 |= MF7_HANDLENODELAY;
+}
+
+void AActor::MarkPrecacheSounds() const
+{
+	SeeSound.MarkUsed();
+	AttackSound.MarkUsed();
+	PainSound.MarkUsed();
+	DeathSound.MarkUsed();
+	ActiveSound.MarkUsed();
+	UseSound.MarkUsed();
+	BounceSound.MarkUsed();
+	WallBounceSound.MarkUsed();
+	CrushPainSound.MarkUsed();
 }
 
 bool AActor::isFast()
@@ -4972,6 +5208,11 @@ bool AActor::isFast()
 	if (flags5&MF5_ALWAYSFAST) return true;
 	if (flags5&MF5_NEVERFAST) return false;
 	return !!G_SkillProperty(SKILLP_FastMonsters);
+}
+
+bool AActor::isSlow()
+{
+	return !!G_SkillProperty(SKILLP_SlowMonsters);
 }
 
 void AActor::Activate (AActor *activator)
@@ -5034,13 +5275,8 @@ bool AActor::IsActive( void ) const
 
 void AActor::Destroy ()
 {
-	// [BC] Free it's network ID.
-	// [BB] Actors may have lNetID == -1. 
-	if ( ( lNetID >= 0 ) && ( lNetID < MAX_NETID ) )
-	{
-		g_NetIDList[lNetID].bFree = true;
-		g_NetIDList[lNetID].pActor = NULL;
-	}
+	// [BC/BB] Free it's network ID.
+	g_NetIDList.freeID ( lNetID );
 
 	lNetID = -1;
 
@@ -5130,55 +5366,39 @@ void AActor::AdjustFloorClip ()
 // Most of the player structure stays unchanged between levels.
 //
 EXTERN_CVAR (Bool, chasedemo)
+
 extern bool demonew;
 
-APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, bool tempplayer)
+APlayerPawn *P_SpawnPlayer (FPlayerStart *mthing, int playernum, int flags)
 {
-	int		  playernum;
+	player_t *p;
 	APlayerPawn *mobj, *oldactor;
 	// [BB] I want this to be const, so we need declare it later.
 	//BYTE	  state;
-	fixed_t spawn_x, spawn_y;
+	fixed_t spawn_x, spawn_y, spawn_z;
 	angle_t spawn_angle;
 	// [BC]
 	LONG		lSkin;
 	AInventory	*pInventory;
 
-	if ( p == NULL )
-	{
-		// [RH] Things 4001-? are also multiplayer starts. Just like 1-4.
-		//		To make things simpler, figure out which player is being
-		//		spawned here.
-		if (mthing->type <= 4)
-		{
-			playernum = mthing->type - 1;
-		}
-		else
-		{
-			playernum = mthing->type - gameinfo.player5start + 4;
-		}
+	// not playing?
+	if ((unsigned)playernum >= (unsigned)MAXPLAYERS || !playeringame[playernum])
+		return NULL;
 
-		// not playing?
-		if (playernum >= MAXPLAYERS || !playeringame[playernum])
-			return NULL;
-
-		p = &players[playernum];
-	}
-	else
-		playernum = p - players;
+	p = &players[playernum];
 
 	// [BB] Make sure that the player only uses a class available to his team.
-	if ( tempplayer == false )
+	if ( !(flags & SPF_TEMPPLAYER) )
 		TEAM_EnsurePlayerHasValidClass ( p );
 
 	// [BB] We may not filter coop inventory if the player changed the player class.
 	// Thus we need to keep track of the old class.
 	const BYTE oldPlayerClass = p->CurrentPlayerClass;
 
-	// [BB] The (p->userinfo.PlayerClass != p->CurrentPlayerClass) check allows the player to change its class when respawning.
+	// [BB] The (p->userinfo.GetPlayerClassNum() != p->CurrentPlayerClass) check allows the player to change its class when respawning.
 	// We have to make sure though that the class is not changed when traveling from one map to the next, because a travelling
 	// player gets its inventory from the last map (which of course belongs to the previous class) after being spawned completely.
-	if (p->cls == NULL || ( (p->userinfo.PlayerClass != p->CurrentPlayerClass) && ( p->playerstate != PST_LIVE ) ) )
+	if (p->cls == NULL || ( (p->userinfo.GetPlayerClassNum() != p->CurrentPlayerClass) && ( p->playerstate != PST_LIVE ) ) )
 	{
 		// [GRB] Pick a class from player class list
 		if (PlayerClasses.Size () > 1)
@@ -5193,7 +5413,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 			}
 			else
 			{
-				type = p->userinfo.PlayerClass;
+				type = p->userinfo.GetPlayerClassNum();
 				if (type < 0)
 				{
 					// [BB] If the player is on a team, only a class valid for this team may be selected.
@@ -5239,10 +5459,30 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		{
 			spawn_angle = ANG45 * (mthing->angle / 45);
 		}
+		if (i_compatflags2 & COMPATF2_BADANGLES)
+		{
+			spawn_angle += 1 << ANGLETOFINESHIFT;
+		}
 	}
 
+	if (GetDefaultByType(p->cls)->flags & MF_SPAWNCEILING)
+		spawn_z = ONCEILINGZ;
+	else if (GetDefaultByType(p->cls)->flags2 & MF2_SPAWNFLOAT)
+		spawn_z = FLOATRANDZ;
+	else
+		spawn_z = ONFLOORZ;
+
 	mobj = static_cast<APlayerPawn *>
-		(Spawn (p->cls, spawn_x, spawn_y, ONFLOORZ, NO_REPLACE));
+		(Spawn (p->cls, spawn_x, spawn_y, spawn_z, NO_REPLACE));
+
+	if (level.flags & LEVEL_USEPLAYERSTARTZ)
+	{
+		if (spawn_z == ONFLOORZ)
+			mobj->z += mthing->z;
+		else if (spawn_z == ONCEILINGZ)
+			mobj->z -= mthing->z;
+		P_FindFloorCeiling(mobj, FFCF_SAMESECTOR | FFCF_ONLY3DFLOORS | FFCF_3DRESTRICT);
+	}
 
 	mobj->FriendPlayer = playernum + 1;	// [RH] players are their own friends
 	oldactor = p->mo;
@@ -5256,7 +5496,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		// [BB] The server may not start handing out the inventory yet, see further down.
 		G_PlayerReborn (playernum, ( NETWORK_GetState( ) != NETSTATE_SERVER ) );
 	}
-	else if (oldactor != NULL && oldactor->player == p && !tempplayer)
+	else if (oldactor != NULL && oldactor->player == p && !(flags & SPF_TEMPPLAYER))
 	{
 		// Move the voodoo doll's inventory to the new player.
 		mobj->ObtainInventory (oldactor);
@@ -5264,8 +5504,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	}
 
 	// [GRB] Reset skin
-	p->userinfo.skin = R_FindSkin (skins[p->userinfo.skin].name, p->CurrentPlayerClass);
-
+	p->userinfo.SkinNumChanged(R_FindSkin (skins[p->userinfo.GetSkin()].name, p->CurrentPlayerClass));
 
 	if (!(mobj->flags2 & MF2_DONTTRANSLATE))
 	{
@@ -5275,7 +5514,6 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		// [RH] set color translations for player sprites
 		mobj->Translation = TRANSLATION(TRANSLATION_Players,playernum);
 	}
-
 
 	mobj->angle = spawn_angle;
 	mobj->pitch = mobj->roll = 0;
@@ -5294,23 +5532,24 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	}
 	else if ( cl_skins >= 2 )
 	{
-		if ( skins[p->userinfo.skin].bCheat )
+		if ( skins[p->userinfo.GetSkin()].bCheat )
 		{
 			lSkin = R_FindSkin( "base", p->CurrentPlayerClass );
 			mobj->flags4 |= MF4_NOSKIN;
 		}
 		else
-			lSkin = p->userinfo.skin;
+			lSkin = p->userinfo.GetSkin();
 	}
 	else
-		lSkin = p->userinfo.skin;
+		lSkin = p->userinfo.GetSkin();
 
 	if (( lSkin < 0 ) || ( static_cast<unsigned> (lSkin) >= skins.Size() ))
 		lSkin = R_FindSkin( "base", p->CurrentPlayerClass );
 
-	mobj->sprite = skins[lSkin].sprite;
-	mobj->scaleX = skins[lSkin].ScaleX;
-	mobj->scaleY = skins[lSkin].ScaleY;
+	if (!(mobj->flags4 & MF4_NOSKIN))
+	{
+		mobj->sprite = skins[lSkin].sprite;
+	}
 
 	p->DesiredFOV = p->FOV = 90.f;
 	p->camera = p->mo;
@@ -5330,14 +5569,19 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	p->BlendR = p->BlendG = p->BlendB = p->BlendA = 0.f;
 	p->mo->ResetAirSupply(false);
 	p->Uncrouch();
+	p->MinPitch = p->MaxPitch = 0;	// will be filled in by PostBeginPlay()/netcode
+	p->cheats &= ~CF_FLY;
 
 	p->velx = p->vely = 0;		// killough 10/98: initialize bobbing to 0.
 
 	if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 	{
-		if (players[consoleplayer].camera == oldactor)
+		for (int ii = 0; ii < MAXPLAYERS; ++ii)
 		{
-			players[consoleplayer].camera = mobj;
+			if (playeringame[ii] && players[ii].camera == oldactor)
+			{
+				players[ii].camera = mobj;
+			}
 		}
 	}
 
@@ -5361,7 +5605,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 			p->pSkullBot->PostEvent( BOTEVENT_SPECTATING );
 	}
 	// [BB] If this not a coop game and cheats are not allowed, remove the chasecam.
-	else if ( !( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_COOPERATIVE ) && ( sv_cheats == false ) )
+	else if ( !( GAMEMODE_GetCurrentFlags() & GMF_COOPERATIVE ) && ( sv_cheats == false ) )
 	{
 		p->cheats &= ~(CF_CHASECAM);
 	}
@@ -5377,7 +5621,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	// Tell clients about the respawning player.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 	{
-		if ( bClientUpdate )
+		if ( flags & SPF_CLIENTUPDATE )
 			SERVERCOMMANDS_SpawnPlayer( playernum, state );
 
 		// [BB] We may only start handing out the inventory when the player is already spawned on the clients.
@@ -5395,7 +5639,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		}
 
 		// [Dusk] If we are sharing keys, give this player the keys that have been found.
-		if (( bClientUpdate ) &&
+		if (( flags & SPF_CLIENTUPDATE ) &&
 			( zadmflags & ZADF_SHARE_KEYS ) &&
 			( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
 			( state == PST_ENTER || state == PST_ENTERNOINVENTORY ))
@@ -5405,11 +5649,9 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	}
 
 	// setup gun psprite
-	if (!tempplayer)
-	{
-		// This can also start a script so don't do it for
-		// the dummy player.
-		P_SetupPsprites (p);
+	if (!(flags & SPF_TEMPPLAYER))
+	{ // This can also start a script so don't do it for the dummy player.
+		P_SetupPsprites (p, !!(flags & SPF_WEAPONFULLYUP));
 	}
 
 	if (deathmatch)
@@ -5429,8 +5671,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	}
 
 	// [BC] Apply temporary invulnerability when respawned.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ) &&
+	if (( NETWORK_InClientMode() == false ) &&
 		// [BB] Added PST_REBORNNOINVENTORY, PST_ENTERNOINVENTORY.
 		(state == PST_REBORN || state == PST_ENTER || state == PST_REBORNNOINVENTORY || state == PST_ENTERNOINVENTORY) &&
 		(( dmflags2 & DF2_NO_RESPAWN_INVUL ) == false ) &&
@@ -5442,7 +5683,8 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		if ( invul != NULL )
 		{
 			invul->EffectTics = 3*TICRATE;
-			invul->BlendColor = 0;				// don't mess with the view
+			invul->BlendColor = 0;			// don't mess with the view
+			invul->ItemFlags |= IF_UNDROPPABLE;	// Don't drop this
 			// [BB] The clients are informed about the powerup and these adjustments later.
 
 			// Apply respawn invulnerability effect.
@@ -5472,7 +5714,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	// [BB] Don't spawn fog for temp players.
 	// [EP] Don't spawn fog for facing west spawners offline, if compatflag is on.
 	if (( NETWORK_GetState( ) != NETSTATE_SINGLE ) &&
-		( p->bDeadSpectator == false ) && ( p->bSpectating == false ) && ( tempplayer == false ) &&
+		( p->bDeadSpectator == false ) && ( p->bSpectating == false ) && !(flags & SPF_TEMPPLAYER ) &&
 		( !( zacompatflags & ZACOMPATF_SILENT_WEST_SPAWNS ) || mobj->angle != ANGLE_180 ))
 	{
 		unsigned an = mobj->angle >> ANGLETOFINESHIFT;
@@ -5481,7 +5723,13 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		// [BB] Clients spawn the fog on their own. Giving the fog the NETFL_ALLOWCLIENTSPAWN flag will prevent
 		// the server from telling the clients to spawn the fog again during a full update.
 		if ( pFog && ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
+		{
 			pFog->ulNetworkFlags |= NETFL_ALLOWCLIENTSPAWN;
+			// [BB] Also remove the netID. Otherwise, the server will not know that 
+			// it cannot notify the client about changes to the fog, like when it is
+			// destroyed during a map reset.
+			pFog->FreeNetID();
+		}
 	}
 
 	// [BB] Moved the exec.wad MAP01 "fix" up.
@@ -5500,7 +5748,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 		}
 	}
 	// [BC] Do script stuff
-	if (!tempplayer)
+	if (!(flags & SPF_TEMPPLAYER))
 	{
 		if (state == PST_ENTER || state == PST_ENTERNOINVENTORY || (state == PST_LIVE && !savegamerestore))
 		{
@@ -5555,7 +5803,9 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 					if (bodyque[ii] == p->mo)
 						bodyque[ii] = oldactor;
 			}
-			FBehavior::StaticStartTypedScripts (SCRIPT_Respawn, p->mo, true);
+			// [BB] Don't run respawn scripts if we're spawning a dead spectator body.
+			if ( p->bDeadSpectator == false )
+				FBehavior::StaticStartTypedScripts (SCRIPT_Respawn, p->mo, true);
 		}
 	}
 
@@ -5564,7 +5814,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 	{
 		p->ulTime = 0;
 		p->ulDeathCount = 0;
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_USEMAXLIVES )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_USEMAXLIVES )
 		{
 			PLAYER_SetLivesLeft ( p, GAMEMODE_GetMaxLives() - 1 );
 		}
@@ -5606,7 +5856,7 @@ APlayerPawn *P_SpawnPlayer (FMapThing *mthing, bool bClientUpdate, player_t *p, 
 //
 // P_SpawnMapThing
 // The fields of the mapthing should
-// already be in host BYTE order.
+// already be in host byte order.
 //
 // [RH] position is used to weed out unwanted start spots
 AActor *P_SpawnMapThing (FMapThing *mthing, int position)
@@ -5622,14 +5872,16 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	// count deathmatch start positions
 	if (mthing->type == 11)
 	{
-		deathmatchstarts.Push (*mthing);
+		FPlayerStart start(mthing);
+		deathmatchstarts.Push(start);
 		return NULL;
 	}
 
 	// [BC] Count temporary team starts.
 	if ( mthing->type == 5082 )
 	{
-		TemporaryTeamStarts.Push( *mthing );
+		FPlayerStart start( mthing );
+		TemporaryTeamStarts.Push( start );
 		return NULL;
 	}
 
@@ -5638,7 +5890,8 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	{
 		if ( mthing->type == static_cast<int> (teams[i].ulPlayerStartThingNumber) )
 		{
-			teams[i].TeamStarts.Push( *mthing );
+			FPlayerStart start( mthing );
+			teams[i].TeamStarts.Push( start );
 			return NULL;
 		}
 	}
@@ -5646,20 +5899,25 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	// [RC] Catalog possession starts
 	if ( mthing->type == 6000 )
 	{
-		PossessionStarts.Push( *mthing );
+		FPlayerStart start( mthing );
+		PossessionStarts.Push( start );
 		return NULL;
 	}
 
 	// [RC] Catalog terminator starts
 	if ( mthing->type == 6001 )
 	{
-		TerminatorStarts.Push( *mthing );
+		FPlayerStart start( mthing );
+		TerminatorStarts.Push( start );
 		return NULL;
 	}
 
 	// [BC/BB] Count invasion starts.
 	if ( INVASION_IsMapThingInvasionSpot( mthing ) )
-		GenericInvasionStarts.Push( *mthing );
+	{
+		FPlayerStart start( mthing );
+		GenericInvasionStarts.Push( start );
+	}
 
 	// Convert Strife starts to Hexen-style starts
 	if (gameinfo.gametype == GAME_Strife && mthing->type >= 118 && mthing->type <= 127)
@@ -5790,15 +6048,18 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 			return NULL;
 
 		// save spots for respawning in network games
-		playerstarts[pnum] = *mthing;
+		FPlayerStart start(mthing);
+		playerstarts[pnum] = start;
+		AllPlayerStarts.Push(start);
 
 		// [BB] To spawn voodoo dolls in multiplayer games, we need to keep track of all starts for every player.
-		AllPlayerStarts[pnum].Push( *mthing );
+		AllStartsOfPlayer[pnum].Push( start );
 
+		// [BB] Zandronum handles spawning differently.
+		// if (!deathmatch && !(level.flags2 & LEVEL2_RANDOMPLAYERSTARTS))
 		// [BC] Need to maintain this method so that we get voodoo dolls, which some doomers are used to.
 		if ( NETWORK_GetState( ) == NETSTATE_SINGLE && ( deathmatch == false ) && ( teamgame == false ))
-			return P_SpawnPlayer (mthing, false, NULL);
-
+			return P_SpawnPlayer(&start, pnum, (level.flags2 & LEVEL2_PRERAISEWEAPON) ? SPF_WEAPONFULLYUP : 0);
 		return NULL;
 	}
 
@@ -5857,12 +6118,18 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	{
 		// Handle decorate replacements explicitly here
 		// to check for missing frames in the replacement object.
-		i = i->ActorInfo->GetReplacement()->Class;
+		i = i->GetReplacement();
 
 		const AActor *defaults = GetDefaultByType (i);
 		if (defaults->SpawnState == NULL ||
 			sprites[defaults->SpawnState->sprite].numframes == 0)
 		{
+			// We don't load mods for shareware games so we'll just ignore
+			// missing actors. Heretic needs this since the shareware includes
+			// the retail weapons in Deathmatch.
+			if (gameinfo.flags & GI_SHAREWARE)
+				return NULL;
+
 			Printf ("%s at (%i, %i) has no frames\n",
 					i->TypeName.GetChars(), mthing->x>>FRACBITS, mthing->y>>FRACBITS);
 			i = PClass::FindClass("Unknown");
@@ -5920,8 +6187,7 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	}
 */
 	// [BC] If we're a client, there's no need to spawn map things (unless specified).
-	if ((( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( ))) && 
+	if ( NETWORK_InClientMode() && 
 		(( info->ulNetworkFlags & NETFL_ALLOWCLIENTSPAWN ) == false ) &&
 		(( info->ulNetworkFlags & NETFL_CLIENTSIDEONLY ) == false ))
 	{
@@ -5957,7 +6223,11 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	mobj->SpawnPoint[2] = mthing->z;
 	mobj->SpawnAngle = mthing->angle;
 	mobj->SpawnFlags = mthing->flags;
-	P_FindFloorCeiling(mobj, true);
+	if (mthing->gravity < 0) mobj->gravity = -mthing->gravity;
+	else if (mthing->gravity > 0) mobj->gravity = FixedMul(mobj->gravity, mthing->gravity);
+	else mobj->flags &= ~MF_NOGRAVITY;
+
+	P_FindFloorCeiling(mobj, FFCF_SAMESECTOR | FFCF_ONLY3DFLOORS | FFCF_3DRESTRICT);
 
 	if (!(mobj->flags2 & MF2_ARGSDEFINED))
 	{
@@ -5980,12 +6250,52 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 	// [Dusk] Save TID for map resets.
 	mobj->SavedTID = mobj->tid;
 
-	mobj->PrevAngle = mobj->angle = (DWORD)((mthing->angle * UCONST64(0x100000000)) / 360);
+	mobj->PrevAngle = mobj->angle = (DWORD)((mthing->angle * CONST64(0x100000000)) / 360);
+
+	// Check if this actor's mapthing has a conversation defined
+	if (mthing->Conversation > 0)
+	{
+		// Make sure that this does not partially overwrite the default dialogue settings.
+		int root = GetConversation(mthing->Conversation);
+		if (root != -1)
+		{
+			mobj->ConversationRoot = root;
+			mobj->Conversation = StrifeDialogues[mobj->ConversationRoot];
+		}
+	}
+
+	// Set various UDMF options
+	if (mthing->alpha != -1)
+		mobj->alpha = mthing->alpha;
+	if (mthing->RenderStyle != STYLE_Count)
+		mobj->RenderStyle = (ERenderStyle)mthing->RenderStyle;
+	if (mthing->scaleX)
+		mobj->scaleX = FixedMul(mthing->scaleX, mobj->scaleX);
+	if (mthing->scaleY)
+		mobj->scaleY = FixedMul(mthing->scaleY, mobj->scaleY);
+	if (mthing->pitch)
+		mobj->pitch = ANGLE_1 * mthing->pitch;
+	if (mthing->roll)
+		mobj->roll = ANGLE_1 * mthing->roll;
+	if (mthing->score)
+		mobj->Score = mthing->score;
+	if (mthing->fillcolor)
+		mobj->fillcolor = mthing->fillcolor;
+
 	mobj->BeginPlay ();
 	if (!(mobj->ObjectFlags & OF_EuthanizeMe))
 	{
 		mobj->LevelSpawned ();
 	}
+
+	if (mthing->health > 0)
+		mobj->health *= mthing->health;
+	else
+		mobj->health = -mthing->health;
+	if (mthing->health == 0)
+		mobj->Die(NULL, NULL);
+	else if (mthing->health != 1)
+		mobj->StartHealth = mobj->health;
   
 	// [BB] Potentially adjust the default flags of this actor.
 	GAMEMODE_AdjustActorSpawnFlags ( mobj );
@@ -6005,17 +6315,17 @@ AActor *P_SpawnMapThing (FMapThing *mthing, int position)
 //
 
 // [BC] Added bTellClientToSpawn.
-AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t y, fixed_t z, angle_t dir, int updown, int flags, bool bTellClientToSpawn)
+AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t y, fixed_t z, angle_t dir, int updown, int flags, AActor *vict, bool bTellClientToSpawn)
 {
 	// [CK] If we're a client in this function and we're supposed to be a server
 	// telling clients to spawn it, then we will get information later from the
 	// server.
-	if ( NETWORK_InClientMode( ) && CLIENT_ShouldPredictPuffs( ) == false )
+	if ( NETWORK_InClientMode() && CLIENT_ShouldPredictPuffs( ) == false )
 		return NULL;
 
 	// [CK] The client also should not be doing this puff prediction if it's not
 	// for themselves.
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 	{
 		// If these aren't valid or the player is not the console player, don't 
 		// predict anything.
@@ -6035,20 +6345,29 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 	// and just made some fixes to make it less buggy.
 	// [BC]
 	ULONG	ulState = STATE_SPAWN;
-
-	z += pr_spawnpuff.Random2 () << 10;
+	
+	if (!(flags & PF_NORANDOMZ))
+		z += pr_spawnpuff.Random2 () << 10;
 
 	puff = Spawn (pufftype, x, y, z, ALLOW_REPLACE);
 	if (puff == NULL) return NULL;
 
 	// [CK] The puff has been made if we're a client, so any client prediction 
 	// of puffs is done, meaning we can exit now.
-	if ( NETWORK_InClientMode( ) )
+	if ( NETWORK_InClientMode() )
 		return NULL;
 
+	//Moved puff creation and target/master/tracer setting to here. 
+	if (puff && vict)
+	{
+		if (puff->flags7 & MF7_HITTARGET)	puff->target = vict;
+		if (puff->flags7 & MF7_HITMASTER)	puff->master = vict;
+		if (puff->flags7 & MF7_HITTRACER)	puff->tracer = vict;
+	}
 	// [BB] If the puff came from a player, set the target of the puff to this player.
 	if ( puff && (puff->flags5 & MF5_PUFFGETSOWNER))
 		puff->target = source;
+	
 
 	if (source != NULL) puff->angle = R_PointToAngle2(x, y, source->x, source->y);
 
@@ -6069,6 +6388,10 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 		// Freeing the ID needs to be done before setting the state!
 		puff->FreeNetID();
 
+		puff->SetState (crashstate);
+	}
+	else if ((flags & PF_HITTHINGBLEED) && (crashstate = puff->FindState(NAME_Death, NAME_Extreme, true)) != NULL)
+	{
 		puff->SetState (crashstate);
 	}
 	else if ((flags & PF_MELEERANGE) && puff->MeleeState != NULL)
@@ -6093,7 +6416,7 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 		// treat it as a special case.
 		if ( ulState != STATE_SPAWN )
 		{
-			SERVERCOMMANDS_SpawnPuff( puff, ulState, false );
+			SERVERCOMMANDS_SpawnPuffNoNetID( puff, ulState, false );
 		}
 		// In certain other conditions, we need to spawn the puff with a network
 		// ID so that things like sounds work.
@@ -6102,12 +6425,11 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 		{
 			if ( puff->lNetID == -1 )
 			{
-				puff->lNetID = ACTOR_GetNewNetID( );
-				g_NetIDList[puff->lNetID].pActor = puff;
-				g_NetIDList[puff->lNetID].bFree = false;
+				puff->lNetID = g_NetIDList.getNewID( );
+				g_NetIDList.useID ( puff->lNetID , puff );
 			}
 
-			SERVERCOMMANDS_SpawnThing( puff );
+			SERVERCOMMANDS_SpawnPuff( puff );
 		}
 		else
 		{
@@ -6127,16 +6449,18 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 					// [CK] If the player is the source, and the player fired a
 					// puff with +NONETID, and the player wants to predict puffs
 					// then we won't send them this command.
-					if ( ( activatorPlayerNumber == ulPlayer ) && ( puff->ulNetworkFlags & NETFL_NONETID ) && ( source->player->userinfo.clientFlags & CLIENTFLAGS_CLIENTSIDEPUFFS ) )
+					if ( ( activatorPlayerNumber == ulPlayer ) && ( puff->ulNetworkFlags & NETFL_NONETID ) && ( source->player->userinfo.GetClientFlags() & CLIENTFLAGS_CLIENTSIDEPUFFS ) )
 						continue;
 
-					SERVERCOMMANDS_SpawnThingNoNetID( puff, ulPlayer, SVCF_ONLYTHISCLIENT );
+					// [BB] If the puff has a net ID, it must be spawned with one.
+					SERVERCOMMANDS_SpawnPuff( puff, ulPlayer, SVCF_ONLYTHISCLIENT );
 				}
 			}
 			else
 			{
 				// [CK] It is always sent when fired from a non-player.
-				SERVERCOMMANDS_SpawnThingNoNetID( puff );
+				// [BB] If the puff has a net ID, it must be spawned with one.
+				SERVERCOMMANDS_SpawnPuff( puff );
 			}
 		}
 	}
@@ -6151,25 +6475,11 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 
 		if ((flags & PF_HITTHING) && puff->SeeSound)
 		{ // Hit thing sound
-			S_Sound (puff, CHAN_BODY, puff->SeeSound, 1, ATTN_NORM);
-
-		// [BC] If we're the server, play this sound.
-		if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
-			( bTellClientToSpawn ))
-		{
-			SERVERCOMMANDS_SoundActor( puff, CHAN_BODY, S_GetName( puff->SeeSound ), 1, ATTN_NORM );
-		}
+			S_Sound (puff, CHAN_BODY, puff->SeeSound, 1, ATTN_NORM, bTellClientToSpawn );	// [BC] Inform the clients.
 		}
 		else if (puff->AttackSound)
 		{
-			S_Sound (puff, CHAN_BODY, puff->AttackSound, 1, ATTN_NORM);
-
-			// [BC] If we're the server, play this sound.
-			if (( NETWORK_GetState( ) == NETSTATE_SERVER ) &&
-				( bTellClientToSpawn ))
-			{
-				SERVERCOMMANDS_SoundActor( puff, CHAN_BODY, S_GetName( puff->AttackSound ), 1, ATTN_NORM );
-			}
+			S_Sound (puff, CHAN_BODY, puff->AttackSound, 1, ATTN_NORM, bTellClientToSpawn );	// [BC] Inform the clients.
 		}
 	}
 
@@ -6183,9 +6493,11 @@ AActor *P_SpawnPuff (AActor *source, const PClass *pufftype, fixed_t x, fixed_t 
 // P_SpawnBlood
 // 
 //---------------------------------------------------------------------------
+
 void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AActor *originator)
 {
-	AActor *th;
+	// [BB] Initialize with NULL.
+	AActor *th = NULL;
 	PalEntry bloodcolor = originator->GetBloodColor();
 	const PClass *bloodcls = originator->GetBloodType();
 	
@@ -6194,14 +6506,14 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	// [BC] Always spawn blood if we're the server. That way we can tell clients to spawn
-	// the blood actor, and then they can elect to spawn either the actor or particles.
-	if (bloodcls!=NULL && (( bloodtype <= 1 ) || ( NETWORK_GetState( ) == NETSTATE_SERVER )))
+	if (bloodcls != NULL)
 	{
 		z += pr_spawnblood.Random2 () << 10;
-		th = Spawn (bloodcls, x, y, z, ALLOW_REPLACE);
+		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
 		th->velz = FRACUNIT*2;
 		th->angle = dir;
+		// [NG] Applying PUFFGETSOWNER to the blood will make it target the owner
+		if (th->flags5 & MF5_PUFFGETSOWNER) th->target = originator;
 		if (gameinfo.gametype & GAME_DoomChex)
 		{
 			th->tics -= pr_spawnblood() & 3;
@@ -6223,39 +6535,68 @@ void P_SpawnBlood (fixed_t x, fixed_t y, fixed_t z, angle_t dir, int damage, AAc
 				if (damage > 13)
 				{
 					FState *state = th->FindState(NAME_Spray);
-					if (state != NULL) th->SetState (state);
+					if (state != NULL)
+					{
+						th->SetState (state);
+						goto statedone;
+					}
 				}
-				else damage+=2;
+				else damage += 2;
 			}
+			int advance = 0;
 			if (damage <= 12 && damage >= 9)
 			{
-				th->SetState (th->SpawnState + 1);
+				advance = 1;
 			}
 			else if (damage < 9)
 			{
-				th->SetState (th->SpawnState + 2);
+				advance = 2;
 			}
-		}
 
-		// [BC] If we're the server, tell clients to spawn the blood.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		{
-			// [BB] If the bloodcolor is not the standard one, we have to inform the client 
-			// about the correct color.
-			if ( bloodcolor == 0 )
+			PClass *cls = th->GetClass();
+
+			while (cls != RUNTIME_CLASS(AActor))
 			{
-				// [BC] It's not translated, nor is it spawning in a state other than its
-				// spawn state. Therefore, there's no need to treat it as a special case.
-				// [BB] This saves bandwidth, but doesn't spawn the blood size based on the damage dealt,
-				// so only use this for players with a slow connection.
-				SERVERCOMMANDS_SpawnThingNoNetID( th, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_0 );
-				SERVERCOMMANDS_SpawnBlood( x, y, z, dir, damage, originator, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_1 );
+				FActorInfo *ai = cls->ActorInfo;
+				int checked_advance = advance;
+				if (ai->OwnsState(th->SpawnState))
+				{
+					for (; checked_advance > 0; --checked_advance)
+					{
+						// [RH] Do not set to a state we do not own.
+						if (ai->OwnsState(th->SpawnState + checked_advance))
+						{
+							th->SetState(th->SpawnState + checked_advance);
+							goto statedone;
+						}
+					}
+				}
+				cls = cls->ParentClass;
 			}
-			else
-				SERVERCOMMANDS_SpawnBlood( x, y, z, dir, damage, originator );
 		}
 	}
 
+statedone:
+
+	// [BC] If we're the server, tell clients to spawn the blood.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+	{
+		// [BB] If the bloodcolor is not the standard one, we have to inform the client 
+		// about the correct color.
+		if ( ( bloodcolor == 0 ) && ( th != NULL ) )
+		{
+			// [BC] It's not translated, nor is it spawning in a state other than its
+			// spawn state. Therefore, there's no need to treat it as a special case.
+			// [BB] This saves bandwidth, but doesn't spawn the blood size based on the damage dealt,
+			// so only use this for players with a slow connection.
+			SERVERCOMMANDS_SpawnThingNoNetID( th, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_0 );
+			SERVERCOMMANDS_SpawnBlood( x, y, z, dir, damage, originator, MAXPLAYERS, SVCF_ONLY_CONNECTIONTYPE_1 );
+		}
+		else
+			SERVERCOMMANDS_SpawnBlood( x, y, z, dir, damage, originator );
+	}
+
+	if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	if (bloodtype >= 1)
 		P_DrawSplash2 (40, x, y, z, dir, 2, bloodcolor);
 }
@@ -6276,21 +6617,32 @@ void P_BloodSplatter (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 
-		mo = Spawn(bloodcls, x, y, z, ALLOW_REPLACE);
+		mo = Spawn(bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
 		mo->target = originator;
 		mo->velx = pr_splatter.Random2 () << 10;
 		mo->vely = pr_splatter.Random2 () << 10;
 		mo->velz = 3*FRACUNIT;
+
+		// [BB] This is not fully synced, but handled with SERVERCOMMANDS_SpawnBloodSplatter.
+		// In order to prevent the server from printing warnings when the server calls P_ExplodeMissile,
+		// we also mark this as SERVERSIDEONLY.
+		if ( NETWORK_GetState () == NETSTATE_SERVER )
+		{
+			mo->ulNetworkFlags |= NETFL_SERVERSIDEONLY;
+			mo->FreeNetID ();
+		}
 
 		// colorize the blood!
 		if (bloodcolor!=0 && !(mo->flags2 & MF2_DONTTRANSLATE)) 
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -6318,14 +6670,14 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *mo;
 		
 		x += ((pr_splat()-128)<<11);
 		y += ((pr_splat()-128)<<11);
 
-		mo = Spawn (bloodcls, x, y, z, ALLOW_REPLACE);
+		mo = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
 		mo->target = originator;
 
 		// colorize the blood!
@@ -6333,6 +6685,8 @@ void P_BloodSplatter2 (fixed_t x, fixed_t y, fixed_t z, AActor *originator)
 		{
 			mo->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) mo->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -6365,10 +6719,12 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 	if (bloodcls != NULL && !(GetDefaultByType(bloodcls)->flags4 & MF4_ALLOWPARTICLES))
 		bloodtype = 0;
 
-	if (bloodcls!=NULL && bloodtype <= 1)
+	if (bloodcls != NULL)
 	{
 		AActor *th;
-		th = Spawn (bloodcls, x, y, z, ALLOW_REPLACE);
+		th = Spawn (bloodcls, x, y, z, NO_REPLACE); // GetBloodType already performed the replacement
+		// [NG] Applying PUFFGETSOWNER to the blood will make it target the owner
+		if (th->flags5 & MF5_PUFFGETSOWNER) th->target = bleeder;
 		if (gameinfo.gametype == GAME_Heretic)
 			th->flags |= MF_NOGRAVITY;
 		th->velx = mo->velx >> 1;
@@ -6380,6 +6736,8 @@ void P_RipperBlood (AActor *mo, AActor *bleeder)
 		{
 			th->Translation = TRANSLATION(TRANSLATION_Blood, bloodcolor.a);
 		}
+
+		if (!(bloodtype <= 1)) th->renderflags |= RF_INVISIBLE;
 	}
 	if (bloodtype >= 1)
 	{
@@ -6414,7 +6772,7 @@ int P_GetThingFloorType (AActor *thing)
 
 bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z, bool checkabove, bool alert)
 {
-	if (thing->flags2 & MF2_FLOATBOB || thing->flags3 & MF3_DONTSPLASH)
+	if (thing->flags3 & MF3_DONTSPLASH)
 		return false;
 
 	// [BC] Spectators can't cause splashes.
@@ -6425,8 +6783,7 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 	}
 
 	// [BC] Let the server handle splashes.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( false );
 	}
@@ -6443,7 +6800,30 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 	if (y == FIXED_MIN) y = thing->y;
 	if (z == FIXED_MIN) z = thing->z;
 	// don't splash above the object
-	if (checkabove && z > thing->z + (thing->height >> 1)) return false;
+	if (checkabove)
+	{
+		fixed_t compare_z = thing->z + (thing->height >> 1);
+		// Missiles are typically small and fast, so they might
+		// end up submerged by the move that calls P_HitWater.
+		if (thing->flags & MF_MISSILE)
+			compare_z -= thing->velz;
+		if (z > compare_z) 
+			return false;
+	}
+
+#if 0 // needs some rethinking before activation
+
+	// This avoids spawning splashes on invisible self referencing sectors.
+	// For network consistency do this only in single player though because
+	// it is not guaranteed that all players have GL nodes loaded.
+	if (!multiplayer && thing->subsector->sector != thing->subsector->render_sector)
+	{
+		fixed_t zs = thing->subsector->sector->floorplane.ZatPoint(x, y);
+		fixed_t zr = thing->subsector->render_sector->floorplane.ZatPoint(x, y);
+
+		if (zs > zr && thing->z >= zs) return false;
+	}
+#endif
 
 #ifdef _3DFLOORS
 	for(unsigned int i=0;i<sec->e->XFloor.ffloors.Size();i++)
@@ -6460,7 +6840,7 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 			}
 		}
 		planez = rover->bottom.plane->ZatPoint(x, y);
-		if (planez < z) return false;
+		if (planez < z && !(planez < thing->floorz)) return false;
 	}
 #endif
 	hsec = sec->GetHeightSec();
@@ -6475,7 +6855,7 @@ bool P_HitWater (AActor * thing, sector_t * sec, fixed_t x, fixed_t y, fixed_t z
 #ifdef _3DFLOORS
 foundone:
 #endif
-	
+
 	int splashnum = Terrains[terrainnum].Splash;
 	bool smallsplash = false;
 	const secplane_t *plane;
@@ -6503,6 +6883,10 @@ foundone:
 	{
 		mo = Spawn (splash->SmallSplash, x, y, z, ALLOW_REPLACE);
 		if (mo) mo->floorclip += splash->SmallSplashClip;
+
+		// [BC/BB] Tell clients to spawn the splash.
+		if ( mo && ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
+			SERVERCOMMANDS_SpawnThing( mo );
 	}
 	else
 	{
@@ -6519,10 +6903,21 @@ foundone:
 				mo->vely = pr_chunk.Random2() << splash->ChunkYVelShift;
 			}
 			mo->velz = splash->ChunkBaseZVel + (pr_chunk() << splash->ChunkZVelShift);
+
+			// [BC/BB] Tell clients to spawn the splash.
+			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+			{
+				SERVERCOMMANDS_SpawnThing( mo );
+				SERVERCOMMANDS_MoveThing( mo, CM_VELX|CM_VELY|CM_VELZ );
+			}
 		}
 		if (splash->SplashBase)
 		{
 			mo = Spawn (splash->SplashBase, x, y, z, ALLOW_REPLACE);
+
+			// [BC/BB] Tell clients to spawn the splash.
+			if ( mo && ( NETWORK_GetState( ) == NETSTATE_SERVER ) )
+				SERVERCOMMANDS_SpawnThing( mo );
 		}
 		if (thing->player && !splash->NoAlert && alert)
 		{
@@ -6533,14 +6928,7 @@ foundone:
 	{
 		S_Sound (mo, CHAN_ITEM, smallsplash ?
 			splash->SmallSplashSound : splash->NormalSplashSound,
-			1, ATTN_IDLE);
-
-		// [BC] Tell clients to spawn the splash and play the sound.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		{
-			SERVERCOMMANDS_SpawnThing( mo );
-			SERVERCOMMANDS_SoundActor( mo, CHAN_ITEM, smallsplash ? S_GetName( splash->SmallSplashSound ) : S_GetName( splash->NormalSplashSound ), 1, ATTN_IDLE );
-		}
+			1, ATTN_IDLE, true );	// [BC] Inform the clients.
 	}
 	else
 	{
@@ -6574,10 +6962,10 @@ bool P_HitFloor (AActor *thing)
 	{
 		thing->flags6 &= ~MF6_ARMED; // Disarm
 		P_DamageMobj (thing, NULL, NULL, thing->health, NAME_Crush, DMG_FORCED);  // kill object
-		return true;
+		return false;
 	}
 
-	if (thing->flags2 & MF2_FLOATBOB || thing->flags3 & MF3_DONTSPLASH)
+	if (thing->flags3 & MF3_DONTSPLASH)
 		return false;
 
 	// don't splash if landing on the edge above water/lava/etc....
@@ -6622,7 +7010,7 @@ bool P_HitFloor (AActor *thing)
 
 void P_CheckSplash(AActor *self, fixed_t distance)
 {
-	if (self->z <= self->floorz + (distance<<FRACBITS) && self->floorsector == self->Sector)
+	if (self->z <= self->floorz + (distance<<FRACBITS) && self->floorsector == self->Sector && self->Sector->GetHeightSec() == NULL)
 	{
 		// Explosion splashes never alert monsters. This is because A_Explode has
 		// a separate parameter for that so this would get in the way of proper 
@@ -6640,10 +7028,8 @@ void P_CheckSplash(AActor *self, fixed_t distance)
 //
 //---------------------------------------------------------------------------
 // [WS] Added bExplode.
-bool P_CheckMissileSpawn (AActor* th, bool bExplode)
+bool P_CheckMissileSpawn (AActor* th, fixed_t maxdist, bool bExplode)
 {
-	int shift, count = 1;
-
 	// [RH] Don't decrement tics if they are already less than 1
 	if ((th->flags4 & MF4_RANDOMIZE) && th->tics > 0)
 	{
@@ -6652,76 +7038,64 @@ bool P_CheckMissileSpawn (AActor* th, bool bExplode)
 			th->tics = 1;
 	}
 
-	// move a little forward so an angle can be computed if it immediately explodes
-	if (th->Speed >= 100*FRACUNIT)
-	{ // Ultra-fast ripper spawning missile
-		shift = 3;
-	}
-	else
-	{ // Normal missile
-		shift = 1;
-	}
-
-	if (th->radius > 0)
+	if (maxdist > 0)
 	{
-		while ( ((th->velx >> shift) > th->radius) || ((th->vely >> shift) > th->radius))
+		// move a little forward so an angle can be computed if it immediately explodes
+		TVector3<double> advance(FIXED2DBL(th->velx), FIXED2DBL(th->vely), FIXED2DBL(th->velz));
+		double maxsquared = FIXED2DBL(maxdist);
+		maxsquared *= maxsquared;
+
+		// Keep halving the advance vector until we get something less than maxdist
+		// units away, since we still want to spawn the missile inside the shooter.
+		do
 		{
-			// we need to take smaller steps but to produce the same end result
-			// we have to do more of them.
-			shift++;
-			count<<=1;
+			advance *= 0.5f;
 		}
+		while (TVector2<double>(advance).LengthSquared() >= maxsquared);
+		th->x += FLOAT2FIXED(advance.X);
+		th->y += FLOAT2FIXED(advance.Y);
+		th->z += FLOAT2FIXED(advance.Z);
 	}
 
 	FCheckPosition tm(!!(th->flags2 & MF2_RIP));
 
-	for(int i=0; i<count; i++)
+	// killough 8/12/98: for non-missile objects (e.g. grenades)
+	// 
+	// [GZ] MBF excludes non-missile objects from the P_TryMove test
+	// and subsequent potential P_ExplodeMissile call. That is because
+	// in MBF, a projectile is not an actor with the MF_MISSILE flag
+	// but an actor with either or both the MF_MISSILE and MF_BOUNCES
+	// flags, and a grenade is identified by not having MF_MISSILE.
+	// Killough wanted grenades not to explode directly when spawned,
+	// therefore they can be fired safely even when humping a wall as
+	// they will then just drop on the floor at their shooter's feet.
+	//
+	// However, ZDoom does allow non-missiles to be shot as well, so
+	// Killough's check for non-missiles is inadequate here. So let's
+	// replace it by a check for non-missile and MBF bounce type.
+	// This should allow MBF behavior where relevant without altering
+	// established ZDoom behavior for crazy stuff like a cacodemon cannon.
+	bool MBFGrenade = (!(th->flags & MF_MISSILE) || (th->BounceFlags & BOUNCE_MBF));
+
+	// killough 3/15/98: no dropoff (really = don't care for missiles)
+	if (!(P_TryMove (th, th->x, th->y, false, NULL, tm, true)))
 	{
-		th->x += th->velx >> shift;
-		th->y += th->vely >> shift;
-		th->z += th->velz >> shift;
-
-		// killough 8/12/98: for non-missile objects (e.g. grenades)
-		// 
-		// [GZ] MBF excludes non-missile objects from the P_TryMove test
-		// and subsequent potential P_ExplodeMissile call. That is because
-		// in MBF, a projectile is not an actor with the MF_MISSILE flag
-		// but an actor with either or both the MF_MISSILE and MF_BOUNCES
-		// flags, and a grenade is identified by not having MF_MISSILE.
-		// Killough wanted grenades not to explode directly when spawned,
-		// therefore they can be fired safely even when humping a wall as
-		// they will then just drop on the floor at their shooter's feet.
-		//
-		// However, ZDoom does allow non-missiles to be shot as well, so
-		// Killough's check for non-missiles is inadequate here. So let's
-		// replace it by a check for non-missile and MBF bounce type.
-		// This should allow MBF behavior where relevant without altering
-		// established ZDoom behavior for crazy stuff like a cacodemon cannon.
-		bool MBFGrenade = (!(th->flags & MF_MISSILE) || (th->BounceFlags & BOUNCE_MBF));
-
-		// killough 3/15/98: no dropoff (really = don't care for missiles)
-		if (!(P_TryMove (th, th->x, th->y, false, false, tm)))
+		// [RH] Don't explode ripping missiles that spawn inside something
+		if (th->BlockingMobj == NULL || !(th->flags2 & MF2_RIP) || (th->BlockingMobj->flags5 & MF5_DONTRIP))
 		{
-			// [RH] Don't explode ripping missiles that spawn inside something
-			if (th->BlockingMobj == NULL || !(th->flags2 & MF2_RIP) || (th->BlockingMobj->flags5 & MF5_DONTRIP))
+			// If this is a monster spawned by A_CustomMissile subtract it from the counter.
+			th->ClearCounters();
+			// [RH] Don't explode missiles that spawn on top of horizon lines
+			if (th->BlockingLine != NULL && th->BlockingLine->special == Line_Horizon)
 			{
-				// If this is a monster spawned by A_CustomMissile subtract it from the counter.
-				if (th->CountsAsKill())
-				{
-					th->flags&=~MF_COUNTKILL;
-					level.total_monsters--;
-				}
-				// [RH] Don't explode missiles that spawn on top of horizon lines
-				if (th->BlockingLine != NULL && th->BlockingLine->special == Line_Horizon)
-				{
-					th->Destroy ();
-				}
-				else if (MBFGrenade && th->BlockingLine != NULL													)
-				{
-					P_BounceWall(th);
-				}
-				else
-				{
+				th->Destroy ();
+			}
+			else if (MBFGrenade && th->BlockingLine != NULL)
+			{
+				P_BounceWall(th);
+			}
+			else
+			{
 				// Potentially reward the player who shot this missile with an accuracy/precision medal.
 				if ((( th->ulSTFlags & STFL_EXPLODEONDEATH ) == false ) && th->target && th->target->player )
 				{
@@ -6730,12 +7104,11 @@ bool P_CheckMissileSpawn (AActor* th, bool bExplode)
 					else
 						th->target->player->ulConsecutiveHits = 0;
 				}
-					// [WS] Can we explode the missile?
-					if (bExplode)
-						P_ExplodeMissile (th, NULL, th->BlockingMobj);
-				}
-				return false;
+				// [WS] Can we explode the missile?
+				if (bExplode)
+					P_ExplodeMissile (th, NULL, th->BlockingMobj);
 			}
+			return false;
 		}
 	}
 	return true;
@@ -6791,19 +7164,20 @@ static fixed_t GetDefaultSpeed(const PClass *type)
 //
 //---------------------------------------------------------------------------
 
-AActor *P_SpawnMissile (AActor *source, AActor *dest, const PClass *type, AActor *owner)
+AActor *P_SpawnMissile (AActor *source, AActor *dest, const PClass *type, AActor *owner, const bool bSpawnOnClient ) // [BB] Added bSpawnOnClient.
 {
-	return P_SpawnMissileXYZ (source->x, source->y, source->z + 32*FRACUNIT,
-		source, dest, type, true, owner);
+	return P_SpawnMissileXYZ (source->x, source->y, source->z + 32*FRACUNIT + source->GetBobOffset(),
+		source, dest, type, true, owner, bSpawnOnClient); // [BB] Added bSpawnOnClient.
 }
 
-AActor *P_SpawnMissileZ (AActor *source, fixed_t z, AActor *dest, const PClass *type)
+AActor *P_SpawnMissileZ (AActor *source, fixed_t z, AActor *dest, const PClass *type, const bool bSpawnOnClient) // [BB] Added bSpawnOnClient.
 {
-	return P_SpawnMissileXYZ (source->x, source->y, z, source, dest, type);
+	return P_SpawnMissileXYZ (source->x, source->y, z, source, dest, type,
+		true, NULL, bSpawnOnClient ); // [BB] Added bSpawnOnClient.
 }
 
 AActor *P_SpawnMissileXYZ (fixed_t x, fixed_t y, fixed_t z,
-	AActor *source, AActor *dest, const PClass *type, bool checkspawn, AActor *owner)
+	AActor *source, AActor *dest, const PClass *type, bool checkspawn, AActor *owner, const bool bSpawnOnClient ) // [BB] Added bSpawnOnClient.
 {
 	if (dest == NULL)
 	{
@@ -6822,8 +7196,8 @@ AActor *P_SpawnMissileXYZ (fixed_t x, fixed_t y, fixed_t z,
 	P_PlaySpawnSound(th, source);
 
 	// record missile's originator
-	if (owner)	th->target = owner;
-	else		th->target = source;
+	if (owner == NULL) owner = source;
+	th->target = owner;
 
 	float speed = (float)(th->Speed);
 
@@ -6850,7 +7224,8 @@ AActor *P_SpawnMissileXYZ (fixed_t x, fixed_t y, fixed_t z,
 	th->velz = (fixed_t)(velocity.Z);
 
 	// invisible target: rotate velocity vector in 2D
-	if (dest->flags & MF_SHADOW)
+	// [RC] Now monsters can aim at invisible player as if they were fully visible.
+	if (dest->flags & MF_SHADOW && !(source->flags6 & MF6_SEEINVISIBLE))
 	{
 		angle_t an = pr_spawnmissile.Random2 () << 20;
 		an >>= ANGLETOFINESHIFT;
@@ -6863,7 +7238,19 @@ AActor *P_SpawnMissileXYZ (fixed_t x, fixed_t y, fixed_t z,
 
 	th->angle = R_PointToAngle2 (0, 0, th->velx, th->vely);
 
-	return (!checkspawn || P_CheckMissileSpawn (th)) ? th : NULL;
+	if (th->flags4 & MF4_SPECTRAL)
+	{
+		th->SetFriendPlayer(owner->player);
+	}
+
+	// [BB]
+	AActor *pMissile = (!checkspawn || P_CheckMissileSpawn (th, source->radius)) ? th : NULL;
+
+	// [BB] If we're the server, tell clients to spawn the missile.
+	if ( bSpawnOnClient && ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( pMissile ))
+		SERVERCOMMANDS_SpawnMissile( pMissile );
+
+	return pMissile;
 }
 
 AActor * P_OldSpawnMissile(AActor * source, AActor * owner, AActor * dest, const PClass *type)
@@ -6887,7 +7274,13 @@ AActor * P_OldSpawnMissile(AActor * source, AActor * owner, AActor * dest, const
 		dist = 1;
 
 	th->velz = (dest->z - source->z) / dist;
-	P_CheckMissileSpawn(th);
+
+	if (th->flags4 & MF4_SPECTRAL)
+	{
+		th->SetFriendPlayer(owner->player);
+	}
+
+	P_CheckMissileSpawn(th, source->radius);
 	return th;
 }
 
@@ -6901,20 +7294,22 @@ AActor * P_OldSpawnMissile(AActor * source, AActor * owner, AActor * dest, const
 //---------------------------------------------------------------------------
 
 AActor *P_SpawnMissileAngle (AActor *source, const PClass *type,
-	angle_t angle, fixed_t velz)
+	angle_t angle, fixed_t velz, bool bSpawnOnClient) // [BB] Added bSpawnOnClient.
 {
-	return P_SpawnMissileAngleZSpeed (source, source->z + 32*FRACUNIT,
-		type, angle, velz, GetDefaultSpeed (type));
+	return P_SpawnMissileAngleZSpeed (source, source->z + 32*FRACUNIT + source->GetBobOffset(),
+		type, angle, velz, GetDefaultSpeed (type),
+		NULL, true, bSpawnOnClient ); // [BB] Added bSpawnOnClient.
 }
 
 AActor *P_SpawnMissileAngleZ (AActor *source, fixed_t z,
-	const PClass *type, angle_t angle, fixed_t velz)
+	const PClass *type, angle_t angle, fixed_t velz, bool bSpawnOnClient) // [BB] Added bSpawnOnClient.
 {
 	return P_SpawnMissileAngleZSpeed (source, z, type, angle, velz,
-		GetDefaultSpeed (type));
+		GetDefaultSpeed (type),
+		NULL, true, bSpawnOnClient ); // [BB] Added bSpawnOnClient.
 }
 
-AActor *P_SpawnMissileZAimed (AActor *source, fixed_t z, AActor *dest, const PClass *type)
+AActor *P_SpawnMissileZAimed (AActor *source, fixed_t z, AActor *dest, const PClass *type, bool bSpawnOnClient ) // [BB] Added bSpawnOnClient.
 {
 	angle_t an;
 	fixed_t dist;
@@ -6931,7 +7326,7 @@ AActor *P_SpawnMissileZAimed (AActor *source, fixed_t z, AActor *dest, const PCl
 	speed = GetDefaultSpeed (type);
 	dist /= speed;
 	velz = dist != 0 ? (dest->z - source->z)/dist : speed;
-	return P_SpawnMissileAngleZSpeed (source, z, type, an, velz, speed);
+	return P_SpawnMissileAngleZSpeed (source, z, type, an, velz, speed, NULL, true, bSpawnOnClient ); // [BB] Added bSpawnOnClient.
 }
 
 //---------------------------------------------------------------------------
@@ -6946,12 +7341,12 @@ AActor *P_SpawnMissileZAimed (AActor *source, fixed_t z, AActor *dest, const PCl
 AActor *P_SpawnMissileAngleSpeed (AActor *source, const PClass *type,
 	angle_t angle, fixed_t velz, fixed_t speed)
 {
-	return P_SpawnMissileAngleZSpeed (source, source->z + 32*FRACUNIT,
+	return P_SpawnMissileAngleZSpeed (source, source->z + 32*FRACUNIT + source->GetBobOffset(),
 		type, angle, velz, speed);
 }
 
 AActor *P_SpawnMissileAngleZSpeed (AActor *source, fixed_t z,
-	const PClass *type, angle_t angle, fixed_t velz, fixed_t speed, AActor *owner, bool checkspawn)
+	const PClass *type, angle_t angle, fixed_t velz, fixed_t speed, AActor *owner, bool checkspawn, const bool bSpawnOnClient ) // [BB] Added bSpawnOnClient.
 {
 	AActor *mo;
 
@@ -6963,13 +7358,27 @@ AActor *P_SpawnMissileAngleZSpeed (AActor *source, fixed_t z,
 	mo = Spawn (type, source->x, source->y, z, ALLOW_REPLACE);
 
 	P_PlaySpawnSound(mo, source);
-	mo->target = owner != NULL ? owner : source; // Originator
+	if (owner == NULL) owner = source;
+	mo->target = owner;
 	mo->angle = angle;
 	angle >>= ANGLETOFINESHIFT;
 	mo->velx = FixedMul (speed, finecosine[angle]);
 	mo->vely = FixedMul (speed, finesine[angle]);
 	mo->velz = velz;
-	return (!checkspawn || P_CheckMissileSpawn(mo)) ? mo : NULL;
+
+	if (mo->flags4 & MF4_SPECTRAL)
+	{
+		mo->SetFriendPlayer(owner->player);
+	}
+
+	// [BB]
+	AActor *pMissile = (!checkspawn || P_CheckMissileSpawn(mo, source->radius)) ? mo : NULL;
+
+	// [BB] If we're the server, tell clients to spawn the missile.
+	if ( bSpawnOnClient && ( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( pMissile ))
+		SERVERCOMMANDS_SpawnMissile( pMissile );
+
+	return pMissile;
 }
 
 /*
@@ -6999,13 +7408,17 @@ AActor *P_SpawnPlayerMissile (AActor *source, fixed_t x, fixed_t y, fixed_t z,
 							  bool nofreeaim, bool bSpawnSound, bool bSpawnOnClient)
 {
 	static const int angdiff[3] = { -1<<26, 1<<26, 0 };
-	int i;
-	angle_t an;
+	angle_t an = angle;
 	angle_t pitch;
 	AActor *linetarget;
-	int vrange = nofreeaim? ANGLE_1*35 : 0;
+	AActor *defaultobject = GetDefaultByType(type);
+	int vrange = nofreeaim ? ANGLE_1*35 : 0;
 
-	if (source && source->player && source->player->ReadyWeapon && (source->player->ReadyWeapon->WeaponFlags & WIF_NOAUTOAIM))
+	if (source == NULL)
+	{
+		return NULL;
+	}
+	if (source->player && source->player->ReadyWeapon && (source->player->ReadyWeapon->WeaponFlags & WIF_NOAUTOAIM))
 	{
 		// Keep exactly the same angle and pitch as the player's own aim
 		an = angle;
@@ -7014,11 +7427,16 @@ AActor *P_SpawnPlayerMissile (AActor *source, fixed_t x, fixed_t y, fixed_t z,
 	}
 	else // see which target is to be aimed at
 	{
-		i = 2;
+		// [XA] If MaxTargetRange is defined in the spawned projectile, use this as the
+		//      maximum range for the P_AimLineAttack call later; this allows MaxTargetRange
+		//      to function as a "maximum tracer-acquisition range" for seeker missiles.
+		fixed_t linetargetrange = defaultobject->maxtargetrange > 0 ? defaultobject->maxtargetrange*64 : 16*64*FRACUNIT;
+
+		int i = 2;
 		do
 		{
 			an = angle + angdiff[i];
-			pitch = P_AimLineAttack (source, an, 16*64*FRACUNIT, &linetarget, vrange);
+			pitch = P_AimLineAttack (source, an, linetargetrange, &linetarget, vrange);
 	
 			if (source->player != NULL &&
 				!nofreeaim &&
@@ -7028,7 +7446,6 @@ AActor *P_SpawnPlayerMissile (AActor *source, fixed_t x, fixed_t y, fixed_t z,
 				break;
 			}
 		} while (linetarget == NULL && --i >= 0);
-	}
 
 		if (linetarget == NULL)
 		{
@@ -7037,10 +7454,9 @@ AActor *P_SpawnPlayerMissile (AActor *source, fixed_t x, fixed_t y, fixed_t z,
 			{
 				pitch = 0;
 			}
+		}
 	}
 	if (pLineTarget) *pLineTarget = linetarget;
-
-	i = GetDefaultByType (type)->flags3;
 
 	if (z != ONFLOORZ && z != ONCEILINGZ)
 	{
@@ -7089,11 +7505,12 @@ AActor *P_SpawnPlayerMissile (AActor *source, fixed_t x, fixed_t y, fixed_t z,
 	MissileActor->velz = (fixed_t)vec.Z;
 
 	if (MissileActor->flags4 & MF4_SPECTRAL)
-		MissileActor->health = -1;
-
+	{
+		MissileActor->SetFriendPlayer(source->player);
+	}
 	// [WS] Redid some logic here for ST to handle when we should spawn a missile
 	// as well as exploding the missile and informing the clients.
-	bool bValidSpawn = P_CheckMissileSpawn (MissileActor, false);
+	bool bValidSpawn = P_CheckMissileSpawn (MissileActor, source->radius, false);
 
 	// [BC/BB] Possibly tell clients to spawn this missile.
 	// [WS] If we know the missile is going to explode,
@@ -7124,7 +7541,7 @@ bool AActor::IsTeammate (AActor *other)
 		return ( true );
 
 	// Teamplay deathmatch, CTF, Skulltag, etc.
-	if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSONTEAMS )
+	if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSONTEAMS )
 	{
 		int myTeam = DesignatedTeam;
 		int otherTeam = other->DesignatedTeam;
@@ -7244,7 +7661,7 @@ bool AActor::IsHostile (AActor *other)
 	return true;
 }
 
-int AActor::DoSpecialDamage (AActor *target, int damage)
+int AActor::DoSpecialDamage (AActor *target, int damage, FName damagetype)
 {
 	if (target->player && target->player->mo == target && damage < 1000 &&
 		(target->player->cheats & CF_GODMODE))
@@ -7286,6 +7703,10 @@ int AActor::TakeSpecialDamage (AActor *inflictor, AActor *source, int damage, FN
 	{
 		return damage;
 	}
+	
+	if (inflictor && inflictor->DeathType != NAME_None)
+		damagetype = inflictor->DeathType;
+
 	if (damagetype == NAME_Ice)
 	{
 		death = FindState (NAME_Death, NAME_Ice, true);
@@ -7302,8 +7723,16 @@ int AActor::TakeSpecialDamage (AActor *inflictor, AActor *source, int damage, FN
 	return (death == NULL) ? -1 : damage;
 }
 
+int AActor::GibHealth()
+{
+	return -abs(GetClass()->Meta.GetMetaInt (AMETA_GibHealth, FixedMul(SpawnHealth(), gameinfo.gibfactor)));
+}
+
 void AActor::Crash()
 {
+	// [RC] Weird that this forces the Crash state regardless of flag.
+	if(!(flags6 & MF6_DONTCORPSE))
+	{
 	if (((flags & MF_CORPSE) || (flags6 & MF6_KILLED)) &&
 		!(flags3 & MF3_CRASHED) &&
 		!(flags & MF_ICECORPSE))
@@ -7312,14 +7741,19 @@ void AActor::Crash()
 		
 		if (DamageType != NAME_None)
 		{
-			crashstate = FindState(NAME_Crash, DamageType, true);
+			if (health < GibHealth())
+			{ // Extreme death
+				FName labels[] = { NAME_Crash, NAME_Extreme, DamageType };
+				crashstate = FindState (3, labels, true);
+			}
+			if (crashstate == NULL)
+			{ // Normal death
+				crashstate = FindState(NAME_Crash, DamageType, true);
+			}
 		}
 		if (crashstate == NULL)
 		{
-			int gibhealth = -abs(GetClass()->Meta.GetMetaInt (AMETA_GibHealth,
-				gameinfo.gametype & GAME_DoomChex ? -SpawnHealth() : -SpawnHealth()/2));
-
-			if (health < gibhealth)
+			if (health < GibHealth())
 			{ // Extreme death
 				crashstate = FindState (NAME_Crash, NAME_Extreme);
 			}
@@ -7333,6 +7767,7 @@ void AActor::Crash()
 		// so this code doesn't have to be executed repeatedly.
 		flags3 |= MF3_CRASHED;
 	}
+	}
 }
 
 void AActor::SetIdle()
@@ -7344,19 +7779,81 @@ void AActor::SetIdle()
 
 int AActor::SpawnHealth()
 {
-	if (!(flags3 & MF3_ISMONSTER) || GetDefault()->health == 0)
+	int defhealth = StartHealth ? StartHealth : GetDefault()->health;
+	if (!(flags3 & MF3_ISMONSTER) || defhealth == 0)
 	{
-		return GetDefault()->health;
+		return defhealth;
 	}
 	else if (flags & MF_FRIENDLY)
 	{
-		int adj = FixedMul(GetDefault()->health, G_SkillProperty(SKILLP_FriendlyHealth));
+		int adj = FixedMul(defhealth, G_SkillProperty(SKILLP_FriendlyHealth));
 		return (adj <= 0) ? 1 : adj;
 	}
 	else
 	{
-		int adj = FixedMul(GetDefault()->health, G_SkillProperty(SKILLP_MonsterHealth));
+		int adj = FixedMul(defhealth, G_SkillProperty(SKILLP_MonsterHealth));
 		return (adj <= 0) ? 1 : adj;
+	}
+}
+
+FState *AActor::GetRaiseState()
+{
+	if (!(flags & MF_CORPSE))
+	{
+		return NULL;	// not a monster
+	}
+
+	if (tics != -1 && // not lying still yet
+		!state->GetCanRaise()) // or not ready to be raised yet
+	{
+		return NULL;
+	}
+
+	if (IsKindOf(RUNTIME_CLASS(APlayerPawn)))
+	{
+		return NULL;	// do not resurrect players
+	}
+
+	return FindState(NAME_Raise);
+}
+
+void AActor::Revive()
+{
+	AActor *info = GetDefault();
+	flags = info->flags;
+	flags2 = info->flags2;
+	flags3 = info->flags3;
+	flags4 = info->flags4;
+	flags5 = info->flags5;
+	flags6 = info->flags6;
+	flags7 = info->flags7;
+
+	// [BC] Apply new ST flags as well.
+	// [BB] The STFL_LEVELSPAWNED flag may not be removed by the default flags.
+	// Otherwise level spawned actors revived by an Archvile won't be restored
+	// during a call of GAME_ResetMap.
+	// [WS] We also need this similar treatment for STFL_POSITIONCHANGED.
+	const bool actorWasLevelSpawned = !!(ulSTFlags & STFL_LEVELSPAWNED);
+	const bool actorHasPositionChanged = !!(ulSTFlags & STFL_POSITIONCHANGED);
+	ulSTFlags = info->ulSTFlags;
+	if ( actorWasLevelSpawned )
+		ulSTFlags |= STFL_LEVELSPAWNED;
+	if ( actorHasPositionChanged )
+		ulSTFlags |= STFL_POSITIONCHANGED;
+	ulNetworkFlags = info->ulNetworkFlags;
+
+	DamageType = info->DamageType;
+	health = SpawnHealth();
+	target = NULL;
+	lastenemy = NULL;
+
+	// [RH] If it's a monster, it gets to count as another kill
+	if (CountsAsKill())
+	{
+		level.total_monsters++;
+
+		// [BB] The number of total monsters was increased, update the invasion monster count accordingly.
+		INVASION_UpdateMonsterCount( this, false );
 	}
 }
 
@@ -7364,7 +7861,7 @@ FDropItem *AActor::GetDropItems()
 {
 	unsigned int index = GetClass()->Meta.GetMetaInt (ACMETA_DropItems) - 1;
 
-	if (index >= 0 && index < DropItemList.Size())
+	if (index < DropItemList.Size())
 	{
 		return DropItemList[index];
 	}
@@ -7386,11 +7883,13 @@ bool AActor::IsSentient() const
 }
 
 
+FSharedStringArena AActor::mStringPropertyData;
+
 const char *AActor::GetTag(const char *def) const
 {
-	if (Tag != NAME_None)
+	if (Tag != NULL)
 	{
-		const char *tag = Tag.GetChars();
+		const char *tag = Tag->GetChars();
 		if (tag[0] == '$')
 		{
 			return GStrings(tag + 1);
@@ -7407,6 +7906,53 @@ const char *AActor::GetTag(const char *def) const
 	else
 	{
 		return GetClass()->TypeName.GetChars();
+	}
+}
+
+void AActor::SetTag(const char *def)
+{
+	if (def == NULL || *def == 0) 
+	{
+		Tag = NULL;
+	}
+	else 
+	{
+		Tag = mStringPropertyData.Alloc(def);
+	}
+}
+
+
+void AActor::ClearCounters()
+{
+	if (CountsAsKill() && health > 0)
+	{
+		level.total_monsters--;
+
+		// [BB] Since a monster was removed, we also need to correct the number of monsters in invasion mode.
+		INVASION_UpdateMonsterCount( this, true );
+
+		// [BB] Inform the clients.
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+			SERVERCOMMANDS_SetMapNumTotalMonsters( );
+
+		flags &= ~MF_COUNTKILL;
+	}
+	// Same, for items
+	if (flags & MF_COUNTITEM)
+	{
+		level.total_items--;
+
+		// [BB] Inform the clients.
+		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+			SERVERCOMMANDS_SetMapNumTotalItems( );
+
+		flags &= ~MF_COUNTITEM;
+	}
+	// And finally for secrets
+	if (flags5 & MF5_COUNTSECRET)
+	{
+		level.total_secrets--;
+		flags5 &= ~MF5_COUNTSECRET;
 	}
 }
 
@@ -7428,12 +7974,13 @@ void FreeDropItemChain(FDropItem *chain)
 	}
 }
 
-FDropItemPtrArray::~FDropItemPtrArray()
+void FDropItemPtrArray::Clear()
 {
 	for (unsigned int i = 0; i < Size(); ++i)
 	{
 		FreeDropItemChain ((*this)[i]);
 	}
+	TArray<FDropItem *>::Clear();
 }
 
 int StoreDropItemChain(FDropItem *chain)
@@ -7441,7 +7988,7 @@ int StoreDropItemChain(FDropItem *chain)
 	return DropItemList.Push (chain) + 1;
 }
 
-void PrintMiscActorInfo(AActor * query)
+void PrintMiscActorInfo(AActor *query)
 {
 	if (query)
 	{
@@ -7458,42 +8005,46 @@ void PrintMiscActorInfo(AActor * query)
 		static const char * renderstyles[]= {"None", "Normal", "Fuzzy", "SoulTrans",
 			"OptFuzzy", "Stencil", "Translucent", "Add", "Shaded", "TranslucentStencil"};
 
-		Printf("%s has the following flags:\n\tflags: %x", query->GetTag(), query->flags);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("%s @ %p has the following flags:\n   flags: %x", query->GetTag(), query, query->flags);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags));
-		Printf("\n\tflags2: %x", query->flags2);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("\n   flags2: %x", query->flags2);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags2 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags2));
-		Printf("\n\tflags3: %x", query->flags3);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("\n   flags3: %x", query->flags3);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags3 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags3));
-		Printf("\n\tflags4: %x", query->flags4);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("\n   flags4: %x", query->flags4);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags4 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags4));
-		Printf("\n\tflags5: %x", query->flags5);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("\n   flags5: %x", query->flags5);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags5 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags5));
-		Printf("\n\tflags6: %x", query->flags6);
-		for (flagi = 0; flagi < 31; flagi++)
+		Printf("\n   flags6: %x", query->flags6);
+		for (flagi = 0; flagi <= 31; flagi++)
 			if (query->flags6 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags6));
-		Printf("\nIts bounce style and factors are %x and f:%f, w:%f; its bounce flags are:\n\tflagsb: %x", 
+		Printf("\n   flags7: %x", query->flags7);
+		for (flagi = 0; flagi <= 31; flagi++)
+			if (query->flags7 & 1<<flagi) Printf(" %s", FLAG_NAME(1<<flagi, flags7));
+		Printf("\nBounce flags: %x\nBounce factors: f:%f, w:%f", 
 			query->BounceFlags, FIXED2FLOAT(query->bouncefactor), 
-			FIXED2FLOAT(query->wallbouncefactor), query->BounceFlags);
+			FIXED2FLOAT(query->wallbouncefactor));
 		/*for (flagi = 0; flagi < 31; flagi++)
 			if (query->BounceFlags & 1<<flagi) Printf(" %s", flagnamesb[flagi]);*/
-		Printf("\nIts render style is %i:%s with alpha %f and the following render flags:\n\tflagsr: %x", 
+		Printf("\nRender style = %i:%s, alpha %f\nRender flags: %x", 
 			querystyle, (querystyle < STYLE_Count ? renderstyles[querystyle] : "Unknown"),
 			FIXED2FLOAT(query->alpha), query->renderflags);
 		/*for (flagi = 0; flagi < 31; flagi++)
 			if (query->renderflags & 1<<flagi) Printf(" %s", flagnamesr[flagi]);*/
-		Printf("\nIts thing special and arguments are %s(%i, %i, %i, %i, %i), and its specials are %i and %i.",
+		Printf("\nSpecial+args: %s(%i, %i, %i, %i, %i)\nspecial1: %i, special2: %i.",
 			(query->special ? LineSpecialsInfo[query->special]->name : "None"),
 			query->args[0], query->args[1], query->args[2], query->args[3], 
 			query->args[4],	query->special1, query->special2);
-		Printf("\nIts coordinates are x: %f, y: %f, z:%f, floor:%f, ceiling:%f.",
+		Printf("\nTID: %d", query->tid);
+		Printf("\nCoord= x: %f, y: %f, z:%f, floor:%f, ceiling:%f.",
 			FIXED2FLOAT(query->x), FIXED2FLOAT(query->y), FIXED2FLOAT(query->z),
 			FIXED2FLOAT(query->floorz), FIXED2FLOAT(query->ceilingz));
-		Printf("\nIts speed is %f and velocity is x:%f, y:%f, z:%f, combined:%f.\n",
+		Printf("\nSpeed= %f, velocity= x:%f, y:%f, z:%f, combined:%f.\n",
 			FIXED2FLOAT(query->Speed), FIXED2FLOAT(query->velx), FIXED2FLOAT(query->vely), FIXED2FLOAT(query->velz),
 			sqrt(pow(FIXED2FLOAT(query->velx), 2) + pow(FIXED2FLOAT(query->vely), 2) + pow(FIXED2FLOAT(query->velz), 2)));
 	}

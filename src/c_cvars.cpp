@@ -63,6 +63,7 @@
 #include "m_png.h"
 #include "p_acs.h"
 #include "version.h"
+#include "menu/menu.h"
 
 struct FLatchedValue
 {
@@ -164,6 +165,10 @@ void FBaseCVar::ForceSet (UCVarValue value, ECVarType type, bool nouserinfosend)
 		Callback ();
 
 	Flags &= ~CVAR_ISDEFAULT;
+
+	// [TP]
+	if ( DMenu::CurrentMenu != NULL )
+		DMenu::CurrentMenu->CVarChanged ( this );
 }
 
 void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
@@ -255,7 +260,16 @@ int FBaseCVar::ToInt (UCVarValue value, ECVarType type)
 #else
 	case CVAR_Float:		res = (int)value.Float; break;
 #endif
-	case CVAR_String:		res = strtol (value.String, NULL, 0); break;
+	case CVAR_String:		
+		{
+			if (stricmp (value.String, "true") == 0)
+				res = 1;
+			else if (stricmp (value.String, "false") == 0)
+				res = 0;
+			else
+				res = strtol (value.String, NULL, 0); 
+			break;
+		}
 	case CVAR_GUID:			res = 0; break;
 	default:				res = 0; break;
 	}
@@ -478,7 +492,12 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 		break;
 
 	case CVAR_Int:
-		ret.Int = strtol (value, NULL, 0);
+		if (stricmp (value, "true") == 0)
+			ret.Int = 1;
+		else if (stricmp (value, "false") == 0)
+			ret.Int = 0;
+		else
+			ret.Int = strtol (value, NULL, 0);
 		break;
 
 	case CVAR_Float:
@@ -520,9 +539,10 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 					goodv = false;
 				break;
 			default:
-				if (value[i] < '0' && value[i] > '9' &&
-					value[i] < 'A' && value[i] > 'F' &&
-					value[i] < 'a' && value[i] > 'f')
+				if (value[i] < '0' || 
+					(value[i] > '9' && value[i] < 'A') || 
+					(value[i] > 'F' && value[i] < 'a') || 
+					value[i] > 'f')
 				{
 					goodv = false;
 				}
@@ -632,6 +652,23 @@ void FBaseCVar::EnableCallbacks ()
 		}
 		cvar = cvar->m_Next;
 	}
+}
+
+void FBaseCVar::DisableCallbacks ()
+{
+	m_UseCallback = false;
+}
+
+// [TP]
+bool FBaseCVar::IsServerInfo()
+{
+	if ( IsFlagCVar() )
+		return static_cast<FFlagCVar*>( this )->GetValueVar()->IsServerInfo();
+
+	if ( IsMaskCVar() )
+		return static_cast<FMaskCVar*>( this )->GetValueVar()->IsServerInfo();
+
+	return !!( Flags & CVAR_SERVERINFO );
 }
 
 //
@@ -1156,6 +1193,115 @@ void FFlagCVar::DoSet (UCVarValue value, ECVarType type)
 	ValueVar = val.Int;
 }
 
+//
+// Mask cvar implementation
+//
+// Similar to FFlagCVar but can have multiple bits
+//
+
+FMaskCVar::FMaskCVar (const char *name, FIntCVar &realvar, DWORD bitval)
+: FBaseCVar (name, 0, NULL),
+ValueVar (realvar),
+BitVal (bitval)
+{
+	int bit;
+
+	Flags &= ~CVAR_ISDEFAULT;
+
+	assert (bitval != 0);
+
+	bit = 0;
+	while ((bitval & 1) == 0)
+	{
+		++bit;
+		bitval >>= 1;
+	}
+	BitNum = bit;
+}
+
+ECVarType FMaskCVar::GetRealType () const
+{
+	return CVAR_Dummy;
+}
+
+UCVarValue FMaskCVar::GetGenericRep (ECVarType type) const
+{
+	return FromInt ((ValueVar & BitVal) >> BitNum, type);
+}
+
+UCVarValue FMaskCVar::GetFavoriteRep (ECVarType *type) const
+{
+	UCVarValue ret;
+	*type = CVAR_Int;
+	ret.Int = (ValueVar & BitVal) >> BitNum;
+	return ret;
+}
+
+UCVarValue FMaskCVar::GetGenericRepDefault (ECVarType type) const
+{
+	ECVarType dummy;
+	UCVarValue def;
+	def = ValueVar.GetFavoriteRepDefault (&dummy);
+	return FromInt ((def.Int & BitVal) >> BitNum, type);
+}
+
+UCVarValue FMaskCVar::GetFavoriteRepDefault (ECVarType *type) const
+{
+	ECVarType dummy;
+	UCVarValue def;
+	def = ValueVar.GetFavoriteRepDefault (&dummy);
+	def.Int = (def.Int & BitVal) >> BitNum;
+	*type = CVAR_Int;
+	return def;
+}
+
+void FMaskCVar::SetGenericRepDefault (UCVarValue value, ECVarType type)
+{
+	int val = ToInt(value, type) << BitNum;
+	ECVarType dummy;
+	UCVarValue def;
+	def = ValueVar.GetFavoriteRepDefault (&dummy);
+	def.Int &= ~BitVal;
+	def.Int |= val;
+	ValueVar.SetGenericRepDefault (def, CVAR_Int);
+}
+
+void FMaskCVar::DoSet (UCVarValue value, ECVarType type)
+{
+	int val = ToInt(value, type) << BitNum;
+
+	// Server cvars that get changed by this need to use a special message, because
+	// changes are not processed until the next net update. This is a problem with
+	// exec scripts because all flags will base their changes off of the value of
+	// the "master" cvar at the time the script was run, overriding any changes
+	// another flag might have made to the same cvar earlier in the script.
+	if ((ValueVar.GetFlags() & CVAR_SERVERINFO) && gamestate != GS_STARTUP && !demoplayback)
+	{
+		// [BB] netgame && !players[consoleplayer].settings_controller -> NETWORK_InClientMode( )
+		if ( NETWORK_InClientMode( ) )
+		{
+			Printf ("Only setting controllers can change %s\n", Name);
+			return;
+		}
+		// Ugh...
+		for(int i = 0; i < 32; i++)
+		{
+			if (BitVal & (1<<i))
+			{
+				D_SendServerFlagChange (&ValueVar, i, !!(val & (1<<i)));
+			}
+		}
+	}
+	else
+	{
+		int vval = *ValueVar;
+		vval &= ~BitVal;
+		vval |= val;
+		ValueVar = vval;
+	}
+}
+
+
 ////////////////////////////////////////////////////////////////////////
 static int STACK_ARGS sortcvars (const void *a, const void *b)
 {
@@ -1164,52 +1310,56 @@ static int STACK_ARGS sortcvars (const void *a, const void *b)
 
 void FilterCompactCVars (TArray<FBaseCVar *> &cvars, DWORD filter)
 {
-	FBaseCVar *cvar = CVars;
-	while (cvar)
+	// Accumulate all cvars that match the filter flags.
+	for (FBaseCVar *cvar = CVars; cvar != NULL; cvar = cvar->m_Next)
 	{
 		if ((cvar->Flags & filter) && !(cvar->Flags & CVAR_IGNORE))
-			cvars.Push (cvar);
-		cvar = cvar->m_Next;
+			cvars.Push(cvar);
 	}
-	if (cvars.Size () > 0)
+	// Now sort them, so they're in a deterministic order and not whatever
+	// order the linker put them in.
+	if (cvars.Size() > 0)
 	{
-		cvars.ShrinkToFit ();
-		qsort (&cvars[0], cvars.Size(), sizeof(FBaseCVar *), sortcvars);
+		qsort(&cvars[0], cvars.Size(), sizeof(FBaseCVar *), sortcvars);
 	}
 }
 
 void C_WriteCVars (BYTE **demo_p, DWORD filter, bool compact)
 {
-	FBaseCVar *cvar = CVars;
-	BYTE *ptr = *demo_p;
+	FString dump = C_GetMassCVarString(filter, compact);
+	size_t dumplen = dump.Len() + 1;	// include terminating \0
+	memcpy(*demo_p, dump.GetChars(), dumplen);
+	*demo_p += dumplen;
+}
+
+FString C_GetMassCVarString (DWORD filter, bool compact)
+{
+	FBaseCVar *cvar;
+	FString dump;
 
 	if (compact)
 	{
 		TArray<FBaseCVar *> cvars;
-		ptr += sprintf ((char *)ptr, "\\\\%ux", filter);
-		FilterCompactCVars (cvars, filter);
+		dump.AppendFormat("\\\\%ux", filter);
+		FilterCompactCVars(cvars, filter);
 		while (cvars.Pop (cvar))
 		{
-			UCVarValue val = cvar->GetGenericRep (CVAR_String);
-			ptr += sprintf ((char *)ptr, "\\%s", val.String);
+			UCVarValue val = cvar->GetGenericRep(CVAR_String);
+			dump << '\\' << val.String;
 		}
 	}
 	else
 	{
-		cvar = CVars;
-		while (cvar)
+		for (cvar = CVars; cvar != NULL; cvar = cvar->m_Next)
 		{
 			if ((cvar->Flags & filter) && !(cvar->Flags & (CVAR_NOSAVE|CVAR_IGNORE)))
 			{
-				UCVarValue val = cvar->GetGenericRep (CVAR_String);
-				ptr += sprintf ((char *)ptr, "\\%s\\%s",
-					cvar->GetName (), val.String);
+				UCVarValue val = cvar->GetGenericRep(CVAR_String);
+				dump << '\\' << cvar->GetName() << '\\' << val.String;
 			}
-			cvar = cvar->m_Next;
 		}
 	}
-
-	*demo_p = ptr + 1;
+	return dump;
 }
 
 void C_ReadCVars (BYTE **demo_p)
@@ -1280,58 +1430,42 @@ void C_ReadCVars (BYTE **demo_p)
 	*demo_p += strlen (*((char **)demo_p)) + 1;
 }
 
-static struct backup_s
+struct FCVarBackup
 {
-	char *name, *string;
-} CVarBackups[MAX_DEMOCVARS];
-
-static int numbackedup = 0;
+	FString Name, String;
+};
+static TArray<FCVarBackup> CVarBackups;
 
 void C_BackupCVars (void)
 {
-	struct backup_s *backup = CVarBackups;
-	FBaseCVar *cvar = CVars;
+	assert(CVarBackups.Size() == 0);
+	CVarBackups.Clear();
 
-	while (cvar)
+	FCVarBackup backup;
+
+	for (FBaseCVar *cvar = CVars; cvar != NULL; cvar = cvar->m_Next)
 	{
-		if ((cvar->Flags & (CVAR_SERVERINFO|CVAR_DEMOSAVE))
-			&& !(cvar->Flags & CVAR_LATCH))
+		if ((cvar->Flags & (CVAR_SERVERINFO|CVAR_DEMOSAVE)) && !(cvar->Flags & CVAR_LATCH))
 		{
-			if (backup == &CVarBackups[MAX_DEMOCVARS])
-				I_Error ("C_BackupDemoCVars: Too many cvars to save (%d)", MAX_DEMOCVARS);
-			backup->name = copystring (cvar->GetName());
-			backup->string = copystring (cvar->GetGenericRep (CVAR_String).String);
-			backup++;
+			backup.Name = cvar->GetName();
+			backup.String = cvar->GetGenericRep(CVAR_String).String;
+			CVarBackups.Push(backup);
 		}
-		cvar = cvar->m_Next;
 	}
-	numbackedup = int(backup - CVarBackups);
 }
 
 void C_RestoreCVars (void)
 {
-	struct backup_s *backup = CVarBackups;
-	int i;
-
-	for (i = numbackedup; i; i--, backup++)
+	for (unsigned int i = 0; i < CVarBackups.Size(); ++i)
 	{
-		cvar_set (backup->name, backup->string);
+		cvar_set(CVarBackups[i].Name, CVarBackups[i].String);
 	}
 	C_ForgetCVars();
 }
 
 void C_ForgetCVars (void)
 {
-	struct backup_s *backup = CVarBackups;
-	int i;
-
-	for (i = numbackedup; i; i--, backup++)
-	{
-		delete[] backup->name;
-		delete[] backup->string;
-		backup->name = backup->string = NULL;
-	}
-	numbackedup = 0;
+	CVarBackups.Clear();
 }
 
 FBaseCVar *FindCVar (const char *var_name, FBaseCVar **prev)
@@ -1451,12 +1585,9 @@ void C_ArchiveCVars (FConfigFile *f, uint32 filter)
 			// [BB] This is ancient code from Skulltag...
 			if ( filter == (CVAR_ARCHIVE|CVAR_USERINFO) )
 			{
-				char	szString[64];
-
-				strncpy( szString, val.String, 63 );
-				szString[63] = 0;
-				V_UnColorizeString( szString, 64 );
-				f->SetValueForKey (cvar->GetName (), szString);
+				FString uncolorized = val.String;
+				V_UnColorizeString( uncolorized );
+				f->SetValueForKey( cvar->GetName(), uncolorized );
 			}
 			else
 				f->SetValueForKey (cvar->GetName (), val.String);

@@ -77,7 +77,7 @@ CUSTOM_CVAR( Int, sv_maxlives, 0, CVAR_SERVERINFO | CVAR_LATCH )
 
 	if (( NETWORK_GetState( ) == NETSTATE_SERVER ) && ( gamestate != GS_STARTUP ))
 	{
-		SERVER_Printf( PRINT_HIGH, "%s changed to: %d\n", self.GetName( ), (int)self );
+		SERVER_Printf( "%s changed to: %d\n", self.GetName( ), (int)self );
 		SERVERCOMMANDS_SetGameModeLimits( );
 	}
 }
@@ -87,6 +87,7 @@ CUSTOM_CVAR( Int, sv_maxlives, 0, CVAR_SERVERINFO | CVAR_LATCH )
 
 static	ULONG			g_ulSurvivalCountdownTicks = 0;
 static	SURVIVALSTATE_e	g_SurvivalState;
+static	bool			g_SurvivalResetMap = true;
 
 //*****************************************************************************
 //	FUNCTIONS
@@ -108,8 +109,7 @@ void SURVIVAL_Tick( void )
 	{
 	case SURVS_WAITINGFORPLAYERS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -131,8 +131,7 @@ void SURVIVAL_Tick( void )
 
 			// FIGHT!
 			if (( g_ulSurvivalCountdownTicks == 0 ) &&
-				( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-				( CLIENTDEMO_IsPlaying( ) == false ))
+				( NETWORK_InClientMode() == false ))
 			{
 				SURVIVAL_DoFight( );
 			}
@@ -147,8 +146,7 @@ void SURVIVAL_Tick( void )
 		break;
 	case SURVS_INPROGRESS:
 
-		if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-			( CLIENTDEMO_IsPlaying( )))
+		if ( NETWORK_InClientMode() )
 		{
 			break;
 		}
@@ -156,11 +154,7 @@ void SURVIVAL_Tick( void )
 		// If everyone is dead, the mission has failed!
 		if ( GAME_CountLivingAndRespawnablePlayers( ) == 0 )
 		{
-			// Put the game state in the mission failed state.
-			SURVIVAL_SetState( SURVS_MISSIONFAILED );
-
-			// Pause for five seconds for the failed sequence.
-			GAME_SetEndLevelDelay( 5 * TICRATE );
+			SURVIVAL_FailMission( );
 		}
 	default:
 		break;
@@ -188,8 +182,7 @@ void SURVIVAL_StartCountdown( ULONG ulTicks )
 	}
 */
 	// Put the game in a countdown state.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		SURVIVAL_SetState( SURVS_COUNTDOWN );
 	}
@@ -212,8 +205,7 @@ void SURVIVAL_DoFight( void )
 	DHUDMessageFadeOut	*pMsg;
 
 	// The battle is now in progress.
-	if (( NETWORK_GetState( ) != NETSTATE_CLIENT ) &&
-		( CLIENTDEMO_IsPlaying( ) == false ))
+	if ( NETWORK_InClientMode() == false )
 	{
 		SURVIVAL_SetState( SURVS_INPROGRESS );
 	}
@@ -232,6 +224,9 @@ void SURVIVAL_DoFight( void )
 	{
 		// Play fight sound.
 		ANNOUNCER_PlayEntry( cl_announcer, "Fight" );
+
+		// [EP] Clear all the HUD messages.
+		StatusBar->DetachAllMessages();
 
 		// Display "FIGHT!" HUD message.
 		pMsg = new DHUDMessageFadeOut( BigFont, "FIGHT!",
@@ -261,6 +256,66 @@ void SURVIVAL_DoFight( void )
 	SCOREBOARD_RefreshHUD( );
 }
 
+//*****************************************************************************
+//
+void SURVIVAL_FailMission( void )
+{
+	// Put the game state in the mission failed state.
+	SURVIVAL_SetState( SURVS_MISSIONFAILED );
+
+	// Pause for five seconds for the failed sequence.
+	GAME_SetEndLevelDelay( 5 * TICRATE );
+}
+
+//*****************************************************************************
+//
+static void SURVIVAL_RefreshLives( void )
+{
+	// We want to allow players who were not in game
+	// but are in queue to join the game. We also want players who died
+	// to keep their inventory in accordance to the "keep inventory"
+	// dmflags. Game state must be altered to drive conditions
+	// necessary for this to work properly.
+	// It's just another gross hack.
+
+	// First let all players who died to respawn and keep their inventory.
+	// This will not pop awaiting players from the join queue.
+	GAMEMODE_RespawnDeadSpectators( zadmflags & ZADF_DEAD_PLAYERS_CAN_KEEP_INVENTORY ? PST_REBORN : PST_REBORNNOINVENTORY );
+
+	// Next let all players in queue to join the game.
+	// JOINQUEUE_PopQueue will not join players unless the game
+	// state is appropriate.
+	g_SurvivalState = SURVS_WAITINGFORPLAYERS;
+	JOINQUEUE_PopQueue( -1 );
+
+	if ( GAMEMODE_GetCurrentFlags() & GMF_USEMAXLIVES )
+	{
+		// Make sure that all lives are restored.
+		for ( int playerIdx = 0; playerIdx < MAXPLAYERS; ++playerIdx )
+		{
+			if ( playeringame[playerIdx] )
+				PLAYER_SetLivesLeft( &players[playerIdx], GAMEMODE_GetMaxLives( ) - 1 );
+		}
+	}
+
+	// Now set the game state to the proper one.
+	SURVIVAL_SetState( SURVS_INPROGRESS );
+
+	// Share keys so that resurrected dead spectators can get them.
+	SERVER_SyncSharedKeys( MAXPLAYERS, false );
+}
+
+void SURVIVAL_RestartMission( void )
+{
+	if ( g_SurvivalResetMap )
+	{
+		SURVIVAL_SetState( SURVS_WAITINGFORPLAYERS );
+	}
+	else
+	{
+		SURVIVAL_RefreshLives( );
+	}
+}
 //*****************************************************************************
 //*****************************************************************************
 //
@@ -305,13 +360,18 @@ void SURVIVAL_SetState( SURVIVALSTATE_e State )
 		}
 		break;
 	case SURVS_MISSIONFAILED:
+		g_SurvivalResetMap = !(zadmflags & ZADF_SURVIVAL_NO_MAP_RESET_ON_DEATH); // yay for double-negation
 
 		if ( NETWORK_GetState( ) != NETSTATE_SERVER )
 		{
 			DHUDMessageFadeOut	*pMsg;
 
-			// Display "%s WINS!" HUD message.
-			pMsg = new DHUDMessageFadeOut( BigFont, "MISSION FAILED!",
+			const char *text = "";
+			if ( g_SurvivalResetMap )
+				text = "MISSION FAILED!";
+			else
+				text = "ALL PLAYERS DIED.\nRESPAWNING.";
+			pMsg = new DHUDMessageFadeOut( BigFont, text,
 				160.4f,
 				75.0f,
 				320,

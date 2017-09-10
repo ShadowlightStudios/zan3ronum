@@ -24,6 +24,7 @@
 #define __M_MISC__
 
 #include "basictypes.h"
+#include "zstring.h"
 
 class FConfigFile;
 class FGameConfigFile;
@@ -34,6 +35,7 @@ bool M_WriteFile (char const *name, void *source, int length);
 int M_ReadFile (char const *name, BYTE **buffer);
 // [BC] Returns true if the file exists.
 bool M_DoesFileExist( const char *pszFileName );
+int M_ReadFileMalloc (char const *name, BYTE **buffer);
 void M_FindResponseFile (void);
 
 // [RH] M_ScreenShot now accepts a filename parameter.
@@ -45,7 +47,20 @@ void M_LoadDefaults ();
 bool M_SaveDefaults (const char *filename);
 void M_SaveCustomKeys (FConfigFile *config, char *section, char *subsection, size_t sublen);
 
-// Prepends ~/.zdoom to path
-FString GetUserFile (const char *path);
+
+
+FString M_ZLibError(int zerrnum);
+
+// Get special directory paths (defined in m_specialpaths.cpp)
+
+#ifdef __unix__
+FString GetUserFile (const char *path);		// Prepends ~/.zdoom to path
+#endif
+FString M_GetCachePath(bool create);
+FString M_GetAutoexecPath();
+FString M_GetCajunPath(const char *filename);
+FString M_GetConfigPath(bool for_reading);
+FString M_GetScreenshotsPath();
+FString M_GetSavegamesPath();
 
 #endif

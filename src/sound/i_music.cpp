@@ -3,7 +3,7 @@
 ** Plays music
 **
 **---------------------------------------------------------------------------
-** Copyright 1998-2006 Randy Heit
+** Copyright 1998-2010 Randy Heit
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -84,6 +84,15 @@ extern void ChildSigHandler (int signum);
 #define GZIP_FNAME		8
 #define GZIP_FCOMMENT	16
 
+enum EMIDIType
+{
+	MIDI_NOTMIDI,
+	MIDI_MIDI,
+	MIDI_HMI,
+	MIDI_XMI,
+	MIDI_MUS
+};
+
 extern int MUSHeaderSearch(const BYTE *head, int len);
 
 EXTERN_CVAR (Int, snd_samplerate)
@@ -132,6 +141,68 @@ CUSTOM_CVAR (Float, snd_musicvolume, 0.5f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 	}
 }
 
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void I_InitMusic (void)
+{
+	static bool setatterm = false;
+
+	Timidity::LoadConfig();
+
+	snd_musicvolume.Callback ();
+
+	nomusic = !!Args->CheckParm("-nomusic") || !!Args->CheckParm("-nosound") || !!Args->CheckParm("-host");
+
+#ifdef _WIN32
+	I_InitMusicWin32 ();
+#endif // _WIN32
+	
+	if (!setatterm)
+	{
+		setatterm = true;
+		atterm (I_ShutdownMusic);
+	
+#ifndef _WIN32
+		signal (SIGCHLD, ChildSigHandler);
+#endif
+	}
+	MusicDown = false;
+}
+
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void I_ShutdownMusic(void)
+{
+	if (MusicDown)
+		return;
+	MusicDown = true;
+	if (currSong)
+	{
+		S_StopMusic (true);
+		assert (currSong == NULL);
+	}
+	Timidity::FreeAll();
+#ifdef _WIN32
+	I_ShutdownMusicWin32();
+#endif // _WIN32
+}
+
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
 MusInfo::MusInfo()
 : m_Status(STATE_Stopped), m_Looping(false), m_NotStartedYet(true)
 {
@@ -139,9 +210,45 @@ MusInfo::MusInfo()
 
 MusInfo::~MusInfo ()
 {
+	if (currSong == this) currSong = NULL;
 }
 
+//==========================================================================
+//
+// starts playing this song
+//
+//==========================================================================
+
+void MusInfo::Start(bool loop, float rel_vol, int subsong)
+{
+	if (nomusic) return;
+
+	if (rel_vol > 0.f) saved_relative_volume = relative_volume = rel_vol;
+	Stop ();
+	Play (loop, subsong);
+	m_NotStartedYet = false;
+	
+	if (m_Status == MusInfo::STATE_Playing)
+		currSong = this;
+	else
+		currSong = NULL;
+		
+	// Notify the sound system of the changed relative volume
+	snd_musicvolume.Callback();
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
 bool MusInfo::SetPosition (unsigned int ms)
+{
+	return false;
+}
+
+bool MusInfo::IsMIDI() const
 {
 	return false;
 }
@@ -190,132 +297,94 @@ MusInfo *MusInfo::GetWaveDumper(const char *filename, int rate)
 	return NULL;
 }
 
-void I_InitMusic (void)
+//==========================================================================
+//
+// create a streamer based on MIDI file type
+//
+//==========================================================================
+
+static MIDIStreamer *CreateMIDIStreamer(FILE *file, BYTE *musiccache, int len, EMidiDevice devtype, EMIDIType miditype)
 {
-	static bool setatterm = false;
-
-	Timidity::LoadConfig();
-
-	snd_musicvolume.Callback ();
-
-	nomusic = !!Args->CheckParm("-nomusic") || !!Args->CheckParm("-nosound") || !!Args->CheckParm("-host");
-
-#ifdef _WIN32
-	I_InitMusicWin32 ();
-#endif // _WIN32
-	
-	if (!setatterm)
+	switch (miditype)
 	{
-		setatterm = true;
-		atterm (I_ShutdownMusic);
-	
-#ifndef _WIN32
-		signal (SIGCHLD, ChildSigHandler);
-#endif
+	case MIDI_MUS:
+		return new MUSSong2(file, musiccache, len, devtype);
+
+	case MIDI_MIDI:
+		return new MIDISong2(file, musiccache, len, devtype);
+
+	case MIDI_HMI:
+		return new HMISong(file, musiccache, len, devtype);
+
+	case MIDI_XMI:
+		return new XMISong(file, musiccache, len, devtype);
+
+	default:
+		return NULL;
 	}
-	MusicDown = false;
 }
 
+//==========================================================================
+//
+// identify MIDI file type
+//
+//==========================================================================
 
-void I_ShutdownMusic(void)
+static EMIDIType IdentifyMIDIType(DWORD *id, int size)
 {
-	if (MusicDown)
-		return;
-	MusicDown = true;
-	if (currSong)
+	// Check for MUS format
+	// Tolerate sloppy wads by searching up to 32 bytes for the header
+	if (MUSHeaderSearch((BYTE*)id, size) >= 0)
 	{
-		S_StopMusic (true);
-		assert (currSong == NULL);
+		return MIDI_MUS;
 	}
-	Timidity::FreeAll();
-#ifdef _WIN32
-	I_ShutdownMusicWin32();
-#endif // _WIN32
-}
-
-
-void I_PlaySong (void *handle, int _looping, float rel_vol, int subsong)
-{
-	MusInfo *info = (MusInfo *)handle;
-
-	if (!info || nomusic)
-		return;
-
-	saved_relative_volume = relative_volume = rel_vol;
-	info->Stop ();
-	info->Play (!!_looping, subsong);
-	info->m_NotStartedYet = false;
-	
-	if (info->m_Status == MusInfo::STATE_Playing)
-		currSong = info;
+	// Check for HMI format
+	else 
+	if (id[0] == MAKE_ID('H','M','I','-') &&
+		id[1] == MAKE_ID('M','I','D','I') &&
+		id[2] == MAKE_ID('S','O','N','G'))
+	{
+		return MIDI_HMI;
+	}
+	// Check for HMP format
 	else
-		currSong = NULL;
-		
-	// Notify the sound system of the changed relative volume
-	snd_musicvolume.Callback();
-}
-
-
-void I_PauseSong (void *handle)
-{
-	MusInfo *info = (MusInfo *)handle;
-
-	if (info)
-		info->Pause ();
-}
-
-void I_ResumeSong (void *handle)
-{
-	MusInfo *info = (MusInfo *)handle;
-
-	if (info)
-		info->Resume ();
-}
-
-void I_StopSong (void *handle)
-{
-	MusInfo *info = (MusInfo *)handle;
-	
-	if (info)
-		info->Stop ();
-
-	if (info == currSong)
-		currSong = NULL;
-}
-
-void I_UnRegisterSong (void *handle)
-{
-	MusInfo *info = (MusInfo *)handle;
-
-	if (info)
+	if (id[0] == MAKE_ID('H','M','I','M') &&
+		id[1] == MAKE_ID('I','D','I','P'))
 	{
-		delete info;
+		return MIDI_HMI;
+	}
+	// Check for XMI format
+	else
+	if ((id[0] == MAKE_ID('F','O','R','M') &&
+		 id[2] == MAKE_ID('X','D','I','R')) ||
+		((id[0] == MAKE_ID('C','A','T',' ') || id[0] == MAKE_ID('F','O','R','M')) &&
+		 id[2] == MAKE_ID('X','M','I','D')))
+	{
+		return MIDI_XMI;
+	}
+	// Check for MIDI format
+	else if (id[0] == MAKE_ID('M','T','h','d'))
+	{
+		return MIDI_MIDI;
+	}
+	else
+	{
+		return MIDI_NOTMIDI;
 	}
 }
 
-MusInfo *I_RegisterURLSong (const char *url)
-{
-	StreamSong *song;
-
-	song = new StreamSong(url, 0, 0);
-	if (song->IsValid())
-	{
-		return song;
-	}
-	delete song;
-	return NULL;
-}
+//==========================================================================
+//
+// identify a music lump's type and set up a player for it
+//
+//==========================================================================
 
 MusInfo *I_RegisterSong (const char *filename, BYTE *musiccache, int offset, int len, int device)
 {
 	FILE *file;
 	MusInfo *info = NULL;
-	union
-	{
-		DWORD id[32/4];
-		BYTE idstr[32];
-	};
 	const char *fmt;
+	DWORD id[32/4];
 	BYTE *ungzipped;
 	int i;
 
@@ -406,165 +475,48 @@ MusInfo *I_RegisterSong (const char *filename, BYTE *musiccache, int offset, int
 		}
 	}
 
-	// Check for MUS format
-	// Tolerate sloppy wads by searching up to 32 bytes for the header
-	if (MUSHeaderSearch(idstr, sizeof(idstr)) >= 0)
+	EMIDIType miditype = IdentifyMIDIType(id, sizeof(id));
+	if (miditype != MIDI_NOTMIDI)
 	{
-		/*	MUS are played as:
-		- OPL: 
-			- if explicitly selected by $mididevice 
-			- when snd_mididevice  is -3 and no midi device is set for the song
+		EMidiDevice devtype = (EMidiDevice)device;
 
-		  Timidity: 
-			- if explicitly selected by $mididevice 
-			- when snd_mididevice  is -2 and no midi device is set for the song
-
-		  FMod:
-			- if explicitly selected by $mididevice 
-			- when snd_mididevice  is -1 and no midi device is set for the song
-			- as fallback when both OPL and Timidity failed unless snd_mididevice is >= 0
-
-		  MMAPI (Win32 only):
-			- if explicitly selected by $mididevice (non-Win32 redirects this to FMOD)
-			- when snd_mididevice  is >= 0 and no midi device is set for the song
-			- as fallback when both OPL and Timidity failed and snd_mididevice is >= 0
-		*/
-		if ((snd_mididevice == -3 && device == MDEV_DEFAULT) || device == MDEV_OPL)
-		{
-			info = new MUSSong2 (file, musiccache, len, MIDI_OPL);
-		}
-		else if (device == MDEV_TIMIDITY || (device == MDEV_DEFAULT && snd_mididevice == -2))
-		{
-			info = new TimiditySong (file, musiccache, len);
-		}
-		else if (snd_mididevice == -4 && device == MDEV_DEFAULT)
-		{
-			info = new MUSSong2(file, musiccache, len, MIDI_Timidity);
-		}
-#ifdef HAVE_FLUIDSYNTH
-		else if (snd_mididevice == -5 && device == MDEV_DEFAULT)
-		{
-			info = new MUSSong2(file, musiccache, len, MIDI_Fluid);
-		}
-#endif
+retry_as_fmod:
+		info = CreateMIDIStreamer(file, musiccache, len, devtype, miditype);
 		if (info != NULL && !info->IsValid())
 		{
 			delete info;
 			info = NULL;
-			device = MDEV_DEFAULT;
 		}
-		if (info == NULL && (snd_mididevice == -1 || device == MDEV_FMOD) && device != MDEV_MMAPI)
+		if (info == NULL && devtype != MDEV_FMOD && snd_mididevice < 0)
 		{
-			TArray<BYTE> midi;
-			bool midi_made = false;
-
-			if (file == NULL)
-			{
-				midi_made = ProduceMIDI((BYTE *)musiccache, len, midi);
-			}
-			else
-			{
-				BYTE *mus = new BYTE[len];
-				size_t did_read = fread(mus, 1, len, file);
-				if (did_read == (size_t)len)
-				{
-					midi_made = ProduceMIDI(mus, len, midi);
-				}
-				fseek(file, -(long)did_read, SEEK_CUR);
-				delete[] mus;
-			}
-			if (midi_made)
-			{
-				info = new StreamSong((char *)&midi[0], -1, midi.Size());
-				if (!info->IsValid())
-				{
-					delete info;
-					info = NULL;
-				}
-			}
+			devtype = MDEV_FMOD;
+			goto retry_as_fmod;
 		}
 #ifdef _WIN32
-		if (info == NULL)
+		if (info == NULL && devtype != MDEV_MMAPI && snd_mididevice >= 0)
 		{
-			info = new MUSSong2 (file, musiccache, len, MIDI_Win);
+			info = CreateMIDIStreamer(file, musiccache, len, MDEV_MMAPI, miditype);
 		}
-#endif // _WIN32
-	}
-	// Check for MIDI format
-	else 
-	{
-		if (id[0] == MAKE_ID('M','T','h','d'))
-		{
-			// This is a midi file
-
-			/*	MIDI are played as:
-			  OPL: 
-				- if explicitly selected by $mididevice 
-				- when snd_mididevice  is -3 and no midi device is set for the song
-
-			  Timidity: 
-				- if explicitly selected by $mididevice 
-				- when snd_mididevice  is -2 and no midi device is set for the song
-
-			  FMOD:
-				- if explicitly selected by $mididevice 
-				- when snd_mididevice  is -1 and no midi device is set for the song
-				- as fallback when Timidity failed unless snd_mididevice is >= 0
-
-			  MMAPI (Win32 only):
-				- if explicitly selected by $mididevice (non-Win32 redirects this to FMOD)
-				- when snd_mididevice  is >= 0 and no midi device is set for the song
-				- as fallback when Timidity failed and snd_mididevice is >= 0
-			*/
-			if (device == MDEV_OPL || (snd_mididevice == -3 && device == MDEV_DEFAULT))
-			{
-				info = new MIDISong2 (file, musiccache, len, MIDI_OPL);
-			}
-			else if (device == MDEV_TIMIDITY || (snd_mididevice == -2 && device == MDEV_DEFAULT))
-			{
-				info = new TimiditySong (file, musiccache, len);
-			}
-			else if (snd_mididevice == -4 && device == MDEV_DEFAULT)
-			{
-				info = new MIDISong2(file, musiccache, len, MIDI_Timidity);
-			}
-#ifdef HAVE_FLUIDSYNTH
-			else if (snd_mididevice == -5 && device == MDEV_DEFAULT)
-			{
-				info = new MIDISong2(file, musiccache, len, MIDI_Fluid);
-			}
 #endif
-			if (info != NULL && !info->IsValid())
-			{
-				delete info;
-				info = NULL;
-				device = MDEV_DEFAULT;
-			}
-#ifdef _WIN32
-			if (info == NULL && device != MDEV_FMOD && (snd_mididevice >= 0 || device == MDEV_MMAPI))
-			{
-				info = new MIDISong2 (file, musiccache, len, MIDI_Win);
-			}
-#endif // _WIN32
-		}
-		// Check for various raw OPL formats
-		else if (
-			(id[0] == MAKE_ID('R','A','W','A') && id[1] == MAKE_ID('D','A','T','A')) ||		// Rdos Raw OPL
-			(id[0] == MAKE_ID('D','B','R','A') && id[1] == MAKE_ID('W','O','P','L')) ||		// DosBox Raw OPL
-			(id[0] == MAKE_ID('A','D','L','I') && *((BYTE *)id + 4) == 'B'))		// Martin Fernandez's modified IMF
-		{
-			info = new OPLMUSSong (file, musiccache, len);
-		}
-		// Check for game music
-		else if ((fmt = GME_CheckFormat(id[0])) != NULL && fmt[0] != '\0')
-		{
-			info = GME_OpenSong(file, musiccache, len, fmt);
-		}
-		// Check for module formats
-		else
-		{
-			info = MOD_OpenSong(file, musiccache, len);
-		}
+	}
+
+	// Check for various raw OPL formats
+	else if (
+		(id[0] == MAKE_ID('R','A','W','A') && id[1] == MAKE_ID('D','A','T','A')) ||		// Rdos Raw OPL
+		(id[0] == MAKE_ID('D','B','R','A') && id[1] == MAKE_ID('W','O','P','L')) ||		// DosBox Raw OPL
+		(id[0] == MAKE_ID('A','D','L','I') && *((BYTE *)id + 4) == 'B'))		// Martin Fernandez's modified IMF
+	{
+		info = new OPLMUSSong (file, musiccache, len);
+	}
+	// Check for game music
+	else if ((fmt = GME_CheckFormat(id[0])) != NULL && fmt[0] != '\0')
+	{
+		info = GME_OpenSong(file, musiccache, len, fmt);
+	}
+	// Check for module formats
+	else
+	{
+		info = MOD_OpenSong(file, musiccache, len);
 	}
 
 	if (info == NULL)
@@ -626,6 +578,12 @@ MusInfo *I_RegisterSong (const char *filename, BYTE *musiccache, int offset, int
 	return info;
 }
 
+//==========================================================================
+//
+// play CD music
+//
+//==========================================================================
+
 MusInfo *I_RegisterCDSong (int track, int id)
 {
 	MusInfo *info = new CDSong (track, id);
@@ -637,6 +595,25 @@ MusInfo *I_RegisterCDSong (int track, int id)
 	}
 
 	return info;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+MusInfo *I_RegisterURLSong (const char *url)
+{
+	StreamSong *song;
+
+	song = new StreamSong(url, 0, 0);
+	if (song->IsValid())
+	{
+		return song;
+	}
+	delete song;
+	return NULL;
 }
 
 //==========================================================================
@@ -721,6 +698,12 @@ BYTE *ungzip(BYTE *data, int *complen)
 	return newdata;
 }
 
+//==========================================================================
+//
+// 
+//
+//==========================================================================
+
 void I_UpdateMusic()
 {
 	if (currSong != NULL)
@@ -729,28 +712,24 @@ void I_UpdateMusic()
 	}
 }
 
-// Is the song playing?
-bool I_QrySongPlaying (void *handle)
-{
-	MusInfo *info = (MusInfo *)handle;
-
-	return info ? info->IsPlaying () : false;
-}
-
-// Change to a different part of the song
-bool I_SetSongPosition (void *handle, int order)
-{
-	MusInfo *info = (MusInfo *)handle;
-	return info ? info->SetPosition (order) : false;
-}
-
+//==========================================================================
+//
 // Sets relative music volume. Takes $musicvolume in SNDINFO into consideration
+//
+//==========================================================================
+
 void I_SetMusicVolume (float factor)
 {
 	factor = clamp<float>(factor, 0, 2.0f);
 	relative_volume = saved_relative_volume * factor;
 	snd_musicvolume.Callback();
 }
+
+//==========================================================================
+//
+// test a relative music volume
+//
+//==========================================================================
 
 CCMD(testmusicvol)
 {
@@ -848,5 +827,53 @@ CCMD (writewave)
 	else
 	{
 		Printf ("Usage: writewave <filename> [sample rate]");
+	}
+}
+
+//==========================================================================
+//
+// CCMD writemidi
+//
+// If the currently playing song is a MIDI variant, write it to disk.
+// If successful, the current song will restart, since MIDI file generation
+// involves a simulated playthrough of the song.
+//
+//==========================================================================
+
+CCMD (writemidi)
+{
+	if (argv.argc() != 2)
+	{
+		Printf("Usage: writemidi <filename>");
+		return;
+	}
+	if (currSong == NULL)
+	{
+		Printf("No song is currently playing.\n");
+		return;
+	}
+	if (!currSong->IsMIDI())
+	{
+		Printf("Current song is not MIDI-based.\n");
+		return;
+	}
+
+	TArray<BYTE> midi;
+	FILE *f;
+	bool success;
+
+	static_cast<MIDIStreamer *>(currSong)->CreateSMF(midi, 1);
+	f = fopen(argv[1], "wb");
+	if (f == NULL)
+	{
+		Printf("Could not open %s.\n", argv[1]);
+		return;
+	}
+	success = (fwrite(&midi[0], 1, midi.Size(), f) == (size_t)midi.Size());
+	fclose (f);
+
+	if (!success)
+	{
+		Printf("Could not write to music file.\n");
 	}
 }

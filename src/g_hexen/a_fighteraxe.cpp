@@ -26,8 +26,6 @@ void A_FAxeAttack (AActor *actor);
 
 extern void AdjustPlayerAngle (AActor *pmo, AActor *linetarget);
 
-EXTERN_CVAR (Int, cl_bloodtype)
-
 // The Fighter's Axe --------------------------------------------------------
 
 class AFWeapAxe : public AFighterWeapon
@@ -126,7 +124,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FAxeCheckUp)
 	}
 	if (player->ReadyWeapon->Ammo1->Amount)
 	{
-		P_SetPsprite (player, ps_weapon, player->ReadyWeapon->FindState ("ReadyGlow"));
+		P_SetPsprite (player, ps_weapon, player->ReadyWeapon->FindState ("SelectGlow"));
 	}
 	else
 	{
@@ -235,7 +233,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FAxeAttack)
 				AdjustPlayerAngle (pmo, linetarget);
 
 				// [BC] Apply spread.
-				if ( player->cheats & CF_SPREAD )
+				if ( player->cheats2 & CF2_SPREAD )
 				{
 					P_LineAttack (pmo, angle + ( ANGLE_45 / 3 ), AXERANGE, slope, damage, NAME_Melee, pufftype, true);
 					if (linetarget->flags3&MF3_ISMONSTER || linetarget->player)
@@ -270,7 +268,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FAxeAttack)
 				AdjustPlayerAngle (pmo, linetarget);
 
 				// [BC] Apply spread.
-				if ( player->cheats & CF_SPREAD )
+				if ( player->cheats2 & CF2_SPREAD )
 				{
 					P_LineAttack (pmo, angle + ( ANGLE_45 / 3 ), AXERANGE, slope, damage, NAME_Melee, pufftype, true);
 					if (linetarget->flags3&MF3_ISMONSTER || linetarget->player)
@@ -300,7 +298,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_FAxeAttack)
 	P_LineAttack (pmo, angle, MELEERANGE, slope, damage, NAME_Melee, pufftype, true);
 
 	// [BC] Apply spread.
-	if ( player->cheats & CF_SPREAD )
+	if ( player->cheats2 & CF2_SPREAD )
 	{
 		P_LineAttack (pmo, angle + ( ANGLE_45 / 3 ), MELEERANGE, slope, damage, NAME_Melee, pufftype, true);
 		P_LineAttack (pmo, angle - ( ANGLE_45 / 3 ), MELEERANGE, slope, damage, NAME_Melee, pufftype, true);

@@ -27,16 +27,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_ShootGun)
 	if (self->target == NULL)
 		return;
 
-	// [BC] Play this sound to clients.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SoundActor( self, CHAN_WEAPON, "monsters/rifle", 1, ATTN_NORM );
-
-	S_Sound (self, CHAN_WEAPON, "monsters/rifle", 1, ATTN_NORM);
+	S_Sound (self, CHAN_WEAPON, "monsters/rifle", 1, ATTN_NORM, true);	// [BC] Inform the clients.
 	A_FaceTarget (self);
 	pitch = P_AimLineAttack (self, self->angle, MISSILERANGE);
 	P_LineAttack (self, self->angle + (pr_shootgun.Random2() << 19),
 		MISSILERANGE, pitch,
-		3*(pr_shootgun() % 5 + 1), NAME_None, NAME_StrifePuff);
+		3*(pr_shootgun() % 5 + 1), NAME_Hitscan, NAME_StrifePuff);
 }
 
 // Teleporter Beacon --------------------------------------------------------
@@ -55,8 +51,7 @@ bool ATeleporterBeacon::Use (bool pickup)
 	AInventory *drop;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return ( true );
 	}
@@ -89,8 +84,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Beacon)
 	AActor	*pFog;
 
 	// [BC] This is handled server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -121,7 +115,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Beacon)
 		{
 			rebel->Translation = owner->Translation;
 		}
-		rebel->FriendPlayer = owner->player != NULL ? BYTE(owner->player - players + 1) : 0;
+		rebel->SetFriendPlayer(owner->player);
 		// Set the rebel's target to whatever last hurt the player, so long as it's not
 		// one of the player's other rebels.
 		if (owner->target != NULL && !rebel->IsFriend (owner->target))

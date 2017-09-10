@@ -68,7 +68,7 @@
 	bool		G15_IsDeviceConnected( void );
 	void		G15_Deconstruct( void ) { }
 	void		G15_Printf( const char *pszString ) { }
-	void		G15_ShowLargeFragMessage( char *name, bool bWeFragged ) { }
+	void		G15_ShowLargeFragMessage( const char *name, bool bWeFragged ) { }
 #else
 
 #include "include/lcdwin32.h"
@@ -343,7 +343,7 @@ void G15_Printf( const char *pszString )
 
 //*****************************************************************************
 //
-void G15_ShowLargeFragMessage( char *name, bool bWeFragged )
+void G15_ShowLargeFragMessage( const char *name, bool bWeFragged )
 {
 	// Show the "you fragged!" / "you were fragged!" message.
 	g_ulMessageTicks = TICRATE * 2;
@@ -441,7 +441,7 @@ void g15_SetUpModes( void )
 	// Version string.
 	g_hLogo_text = g_LCD->AddText(LG_STATIC_TEXT, LG_MEDIUM, DT_CENTER, 120);
 	g_LCD->SetOrigin(g_hLogo_text, 51, 29);
-	g_LCD->SetText(g_hLogo_text,DOTVERSIONSTR_REV);
+	g_LCD->SetText(g_hLogo_text,GetVersionStringRev());
 
 	//=============================
 	// Set up the in-game HUD mode.

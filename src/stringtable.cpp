@@ -43,6 +43,7 @@
 #include "sc_man.h"
 #include "c_dispatch.h"
 #include "v_text.h"
+#include "gi.h"
 
 // PassNum identifies which language pass this string is from.
 // PassNum 0 is for DeHacked.
@@ -54,7 +55,7 @@ struct FStringTable::StringEntry
 	StringEntry *Next;
 	char *Name;
 	BYTE PassNum;
-	char String[2];
+	char String[];
 };
 
 FStringTable::FStringTable ()
@@ -224,6 +225,18 @@ void FStringTable::LoadLanguage (int lumpnum, DWORD code, bool exactMatch, int p
 				sc.ScriptError ("Found a string without a language specified.");
 			}
 
+			bool savedskip = skip;
+			if (sc.Compare("$"))
+			{
+				sc.MustGetStringName("ifgame");
+				sc.MustGetStringName("(");
+				sc.MustGetString();
+				skip |= !sc.Compare(GameTypeName());
+				sc.MustGetStringName(")");
+				sc.MustGetString();
+
+			}
+
 			if (skip)
 			{ // We're not interested in this language, so skip the string.
 				sc.MustGetStringName ("=");
@@ -231,7 +244,9 @@ void FStringTable::LoadLanguage (int lumpnum, DWORD code, bool exactMatch, int p
 				do
 				{
 					sc.MustGetString ();
-				} while (!sc.Compare (";"));
+				} 
+				while (!sc.Compare (";"));
+				skip = savedskip;
 				continue;
 			}
 
@@ -268,7 +283,7 @@ void FStringTable::LoadLanguage (int lumpnum, DWORD code, bool exactMatch, int p
 			}
 			if (entry == NULL || cmpval > 0)
 			{
-				entry = (StringEntry *)M_Malloc (sizeof(*entry) + strText.Len() + strName.Len());
+				entry = (StringEntry *)M_Malloc (sizeof(*entry) + strText.Len() + strName.Len() + 2);
 				entry->Next = *pentry;
 				*pentry = entry;
 				strcpy (entry->String, strText.GetChars());
@@ -309,6 +324,10 @@ size_t FStringTable::ProcessEscapes (char *iptr)
 // Finds a string by name and returns its value
 const char *FStringTable::operator[] (const char *name) const
 {
+	if (name == NULL)
+	{
+		return NULL;
+	}
 	DWORD bucket = MakeKey (name) & (HASH_SIZE - 1);
 	StringEntry *entry = Buckets[bucket];
 
@@ -390,7 +409,7 @@ void FStringTable::SetString (const char *name, const char *newString)
 	size_t namelen = strlen (name);
 
 	// Create a new string entry
-	StringEntry *entry = (StringEntry *)M_Malloc (sizeof(*entry) + newlen + namelen);
+	StringEntry *entry = (StringEntry *)M_Malloc (sizeof(*entry) + newlen + namelen + 2);
 	strcpy (entry->String, newString);
 	strcpy (entry->Name = entry->String + newlen + 1, name);
 	entry->PassNum = 0;

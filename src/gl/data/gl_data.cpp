@@ -42,7 +42,6 @@
 
 #include "doomtype.h"
 #include "colormatcher.h"
-#include "r_translate.h"
 #include "i_system.h"
 #include "p_local.h"
 #include "p_lnspec.h"
@@ -53,6 +52,7 @@
 #include "gi.h"
 #include "g_level.h"
 
+#include "gl/system/gl_interface.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/data/gl_data.h"
@@ -71,6 +71,7 @@ long gl_frameMS;
 long gl_frameCount;
 
 EXTERN_CVAR(Int, gl_lightmode)
+EXTERN_CVAR(Bool, gl_brightfog)
 
 CUSTOM_CVAR(Float, maxviewpitch, 90.f, CVAR_ARCHIVE|CVAR_SERVERINFO)
 {
@@ -112,6 +113,7 @@ void AdjustSpriteOffsets()
 		FScanner sc;
 		sc.OpenLumpNum(lump);
 		GLRenderer->FlushTextures();
+		int ofslumpno = Wads.GetLumpFile(lump);
 		while (sc.GetString())
 		{
 			int x,y;
@@ -126,11 +128,11 @@ void AdjustSpriteOffsets()
 				FTexture * tex = TexMan[texno];
 
 				int lumpnum = tex->GetSourceLump();
-				// We only want to change texture offsets for sprites in the IWAD!
+				// We only want to change texture offsets for sprites in the IWAD or the file this lump originated from.
 				if (lumpnum >= 0 && lumpnum < Wads.GetNumLumps())
 				{
 					int wadno = Wads.GetLumpFile(lumpnum);
-					if (wadno==FWadCollection::IWAD_FILENUM)
+					if (wadno==FWadCollection::IWAD_FILENUM || wadno == ofslumpno)
 					{
 						tex->LeftOffset=x;
 						tex->TopOffset=y;
@@ -156,8 +158,8 @@ static int LS_Sector_SetPlaneReflection (line_t *ln, AActor *it, bool backSide,
 	while ((secnum = P_FindSectorFromTag (arg0, secnum)) >= 0)
 	{
 		sector_t * s = &sectors[secnum];
-		if (s->floorplane.a==0 && s->floorplane.b==0) s->floor_reflect = arg1/255.f;
-		if (s->ceilingplane.a==0 && s->ceilingplane.b==0) sectors[secnum].ceiling_reflect = arg2/255.f;
+		if (s->floorplane.a==0 && s->floorplane.b==0) s->reflect[sector_t::floor] = arg1/255.f;
+		if (s->ceilingplane.a==0 && s->ceilingplane.b==0) sectors[secnum].reflect[sector_t::ceiling] = arg2/255.f;
 
 		// [BC] If we're the server, tell clients that this sector's reflection is being altered.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -212,6 +214,7 @@ struct FGLROptions : public FOptionalMapinfoData
 		fogdensity = 0;
 		outsidefogdensity = 0;
 		skyfog = 0;
+		brightfog = false;
 		lightmode = -1;
 		nocoloredspritelighting = -1;
 		notexturefill = -1;
@@ -236,6 +239,7 @@ struct FGLROptions : public FOptionalMapinfoData
 	int			outsidefogdensity;
 	int			skyfog;
 	int			lightmode;
+	int			brightfog;
 	SBYTE		nocoloredspritelighting;
 	SBYTE		notexturefill;
 	FVector3	skyrotatevector;
@@ -248,6 +252,14 @@ DEFINE_MAP_OPTION(fogdensity, false)
 	parse.ParseAssign();
 	parse.sc.MustGetNumber();
 	opt->fogdensity = parse.sc.Number;
+}
+
+DEFINE_MAP_OPTION(brightfog, false)
+{
+	FGLROptions *opt = info->GetOptData<FGLROptions>("gl_renderer");
+	parse.ParseAssign();
+	parse.sc.MustGetNumber();
+	opt->brightfog = parse.sc.Number;
 }
 
 DEFINE_MAP_OPTION(outsidefogdensity, false)
@@ -334,6 +346,11 @@ DEFINE_MAP_OPTION(skyrotate2, false)
 	opt->skyrotatevector2.MakeUnit();
 }
 
+bool IsLightmodeValid()
+{
+	return (glset.map_lightmode >= 0 && glset.map_lightmode <= 4) || glset.map_lightmode == 8;
+}
+
 void InitGLRMapinfoData()
 {
 	FGLROptions *opt = level.info->GetOptData<FGLROptions>("gl_renderer", false);
@@ -342,6 +359,7 @@ void InitGLRMapinfoData()
 	{
 		gl_SetFogParams(opt->fogdensity, level.info->outsidefog, opt->outsidefogdensity, opt->skyfog);
 		glset.map_lightmode = opt->lightmode;
+		glset.map_brightfog = opt->brightfog;
 		glset.map_nocoloredspritelighting = opt->nocoloredspritelighting;
 		glset.map_notexturefill = opt->notexturefill;
 		glset.skyrotatevector = opt->skyrotatevector;
@@ -352,6 +370,7 @@ void InitGLRMapinfoData()
 	{
 		gl_SetFogParams(0, level.info->outsidefog, 0, 0);
 		glset.map_lightmode = -1;
+		glset.map_brightfog = -1;
 		glset.map_nocoloredspritelighting = -1;
 		glset.map_notexturefill = -1;
 		glset.skyrotatevector = FVector3(0,0,1);
@@ -361,12 +380,14 @@ void InitGLRMapinfoData()
 	// [BB/EP] Take care of gl_lightmode and ZADF_FORCE_GL_DEFAULTS.
 	OVERRIDE_LIGHTMODE_IF_NECESSARY
 
-	if (glset.map_lightmode < 0 || glset.map_lightmode > 4) glset.lightmode = gl_lightmode;
+	if (!IsLightmodeValid()) glset.lightmode = gl_lightmode;
 	else glset.lightmode = glset.map_lightmode;
 	if (glset.map_nocoloredspritelighting == -1) glset.nocoloredspritelighting = gl_nocoloredspritelighting;
 	else glset.nocoloredspritelighting = !!glset.map_nocoloredspritelighting;
 	if (glset.map_notexturefill == -1) glset.notexturefill = gl_notexturefill;
 	else glset.notexturefill = !!glset.map_notexturefill;
+	if (glset.map_brightfog == -1) glset.brightfog = gl_brightfog;
+	else glset.brightfog = !!glset.map_brightfog;
 }
 
 CCMD(gl_resetmap)
@@ -374,12 +395,14 @@ CCMD(gl_resetmap)
 	// [BB/EP] Take care of gl_lightmode and ZADF_FORCE_GL_DEFAULTS.
 	OVERRIDE_LIGHTMODE_IF_NECESSARY
 
-	if (glset.map_lightmode < 0 || glset.map_lightmode > 4) glset.lightmode = gl_lightmode;
+	if (!IsLightmodeValid()) glset.lightmode = gl_lightmode;
 	else glset.lightmode = glset.map_lightmode;
 	if (glset.map_nocoloredspritelighting == -1) glset.nocoloredspritelighting = gl_nocoloredspritelighting;
 	else glset.nocoloredspritelighting = !!glset.map_nocoloredspritelighting;
 	if (glset.map_notexturefill == -1) glset.notexturefill = gl_notexturefill;
 	else glset.notexturefill = !!glset.map_notexturefill;
+	if (glset.map_brightfog == -1) glset.brightfog = gl_brightfog;
+	else glset.brightfog = !!glset.map_brightfog;
 }
 
 
@@ -388,11 +411,9 @@ CCMD(gl_resetmap)
 //  Gets the texture index for a sprite frame
 //
 //===========================================================================
-const BYTE SF_FRAMEMASK  = 0x1f;
 
 FTextureID gl_GetSpriteFrame(unsigned sprite, int frame, int rot, angle_t ang, bool *mirror)
 {
-	frame&=SF_FRAMEMASK;
 	spritedef_t *sprdef = &sprites[sprite];
 	if (frame >= sprdef->numframes)
 	{
@@ -431,6 +452,7 @@ void gl_RecalcVertexHeights(vertex_t * v)
 	int i,j,k;
 	float height;
 
+	//@sync-vertexheights
 	v->numheights=0;
 	for(i=0;i<v->numsectors;i++)
 	{
@@ -458,60 +480,13 @@ void gl_RecalcVertexHeights(vertex_t * v)
 }
 
 
-//==========================================================================
-//
-// Mark sectors dirty
-//
-//==========================================================================
-int DirtyCount;
-
-void sector_t::SetDirty(bool dolines, bool dovertices)
-{
-	Dirty.Clock();
-	if (currentrenderer == 1 && this == &sectors[sectornum])
-	{
-		dirty = true;
-
-		if (dirtyframe[0] != gl_frameCount)
-		{
-			DirtyCount++;
-			dirtyframe[0] = gl_frameCount;
-			for(unsigned i = 0; i < e->SectorDependencies.Size(); i++)
-				e->SectorDependencies[i]->dirty = true;
-		}
-
-		if (dolines)
-		{
-			if (dirtyframe[1] != gl_frameCount)
-			{
-				dirtyframe[1] = gl_frameCount;
-
-				for(unsigned i = 0; i < e->SideDependencies.Size(); i++)
-					e->SideDependencies[i]->dirty = true;
-			}
-		}
-
-		if (dovertices)
-		{
-			if (dirtyframe[2] != gl_frameCount)
-			{
-				dirtyframe[2] = gl_frameCount;
-
-				for(unsigned i = 0; i < e->VertexDependencies.Size(); i++)
-					e->VertexDependencies[i]->dirty = true;
-			}
-		}
-	}
-	Dirty.Unclock();
-}
 
 
 void gl_InitData()
 {
-	LineSpecials[157]=LS_SetGlobalFogParameter;
+	LineSpecials[157] = LS_SetGlobalFogParameter;
 	// [BB] This is set in p_lnspec.cpp
-	//LineSpecials[159]=LS_Sector_SetPlaneReflection;
-	gl_InitModels();
+	//LineSpecials[159] = LS_Sector_SetPlaneReflection;
 	AdjustSpriteOffsets();
 }
 
@@ -527,55 +502,39 @@ CCMD(dumpgeometry)
 	{
 		sector_t * sector = &sectors[i];
 
-		Printf("Sector %d\n",i);
+		Printf(PRINT_LOG, "Sector %d\n",i);
 		for(int j=0;j<sector->subsectorcount;j++)
 		{
 			subsector_t * sub = sector->subsectors[j];
 
-			Printf("    Subsector %d - real sector = %d - %s\n", sub-subsectors, sub->sector->sectornum, sub->hacked&1? "hacked":"");
+			Printf(PRINT_LOG, "    Subsector %d - real sector = %d - %s\n", int(sub-subsectors), sub->sector->sectornum, sub->hacked&1? "hacked":"");
 			for(DWORD k=0;k<sub->numlines;k++)
 			{
 				seg_t * seg = sub->firstline + k;
 				if (seg->linedef)
 				{
-				Printf("      (%4.4f, %4.4f), (%4.4f, %4.4f) - seg %d, linedef %d, side %d", 
+				Printf(PRINT_LOG, "      (%4.4f, %4.4f), (%4.4f, %4.4f) - seg %d, linedef %d, side %d", 
 					FIXED2FLOAT(seg->v1->x), FIXED2FLOAT(seg->v1->y), FIXED2FLOAT(seg->v2->x), FIXED2FLOAT(seg->v2->y),
-					seg-segs, seg->linedef-lines, seg->sidedef != seg->linedef->sidedef[0]);
+					int(seg-segs), int(seg->linedef-lines), seg->sidedef != seg->linedef->sidedef[0]);
 				}
 				else
 				{
-					Printf("      (%4.4f, %4.4f), (%4.4f, %4.4f) - seg %d, miniseg", 
+					Printf(PRINT_LOG, "      (%4.4f, %4.4f), (%4.4f, %4.4f) - seg %d, miniseg", 
 						FIXED2FLOAT(seg->v1->x), FIXED2FLOAT(seg->v1->y), FIXED2FLOAT(seg->v2->x), FIXED2FLOAT(seg->v2->y),
-						seg-segs);
+						int(seg-segs));
 				}
 				if (seg->PartnerSeg) 
 				{
 					subsector_t * sub2 = seg->PartnerSeg->Subsector;
-					Printf(", back sector = %d, real back sector = %d", sub2->render_sector->sectornum, seg->PartnerSeg->frontsector->sectornum);
+					Printf(PRINT_LOG, ", back sector = %d, real back sector = %d", sub2->render_sector->sectornum, seg->PartnerSeg->frontsector->sectornum);
 				}
-				Printf("\n");
+				else if (seg->backsector)
+				{
+					Printf(PRINT_LOG, ", back sector = %d (no partnerseg)", seg->backsector->sectornum);
+				}
+
+				Printf(PRINT_LOG, "\n");
 			}
 		}
 	}
 }
-
-CCMD(dumpdependencies)
-{
-	for(int i=0;i<numsectors;i++)
-	{
-		Printf(PRINT_LOG, "Dependencies of sector %d\n", i);
-		for(unsigned j = 0; j < sectors[i].e->VertexDependencies.Size(); j++)
-		{
-			Printf(PRINT_LOG,"\tVertex %d\n", int(sectors[i].e->VertexDependencies[j] - vertexes));
-		}
-		for(unsigned j = 0; j < sectors[i].e->SideDependencies.Size(); j++)
-		{
-			Printf(PRINT_LOG,"\tSide %d (Line %d)\n", int(sectors[i].e->SideDependencies[j] - sides), (sectors[i].e->SideDependencies[j]->linedef-lines));
-		}
-		for(unsigned j = 0; j < sectors[i].e->SectorDependencies.Size(); j++)
-		{
-			Printf(PRINT_LOG,"\tSector %d\n", int(sectors[i].e->SectorDependencies[j] - sectors));
-		}
-	}
-}
-

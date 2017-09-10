@@ -33,9 +33,8 @@
 **
 */
 
-#include "r_data.h"
+#include "doomstat.h"
 #include "p_setup.h"
-#include "sc_man.h"
 #include "p_lnspec.h"
 #include "templates.h"
 #include "i_system.h"
@@ -43,6 +42,10 @@
 #include "r_sky.h"
 #include "g_level.h"
 #include "v_palette.h"
+#include "p_udmf.h"
+#include "r_state.h"
+#include "r_data/colormaps.h"
+#include "w_wad.h"
 // [BB] New #includes.
 #include "g_game.h"
 
@@ -97,6 +100,11 @@ static char HexenSectorSpecialOk[256]={
 	1,1,1,1,1,
 };
 
+static inline bool P_IsThingSpecial(int specnum)
+{
+	return (specnum >= Thing_Projectile && specnum <= Thing_SpawnNoFog) ||
+			specnum == Thing_SpawnFacing || specnum == Thing_ProjectileIntercept || specnum == Thing_ProjectileAimed;
+}
 
 enum
 {
@@ -112,9 +120,8 @@ enum
 	// namespace for each game
 };
 
-
-void SetTexture (sector_t *sector, int index, int position, const char *name8);
-void P_ProcessSideTextures(bool checktranmap, side_t *sd, sector_t *sec, mapsidedef_t *msd, int special, int tag, short *alpha);
+void SetTexture (sector_t *sector, int index, int position, const char *name8, FMissingTextureTracker &);
+void P_ProcessSideTextures(bool checktranmap, side_t *sd, sector_t *sec, mapsidedef_t *msd, int special, int tag, short *alpha, FMissingTextureTracker &);
 void P_AdjustLine (line_t *ld);
 void P_FinishLoadingLineDef(line_t *ld, int alpha);
 void SpawnMapThing(int index, FMapThing *mt, int position);
@@ -125,6 +132,152 @@ extern TArray<int>		linemap;
 
 #define CHECK_N(f) if (!(namespace_bits&(f))) break;
 
+
+//===========================================================================
+//
+// Common parsing routines
+//
+//===========================================================================
+
+//===========================================================================
+//
+// Skip a key or block
+//
+//===========================================================================
+
+void UDMFParserBase::Skip()
+{
+	if (developer) sc.ScriptMessage("Ignoring unknown key \"%s\".", sc.String);
+	if(sc.CheckToken('{'))
+	{
+		int level = 1;
+		while(sc.GetToken())
+		{
+			if (sc.TokenType == '}')
+			{
+				level--;
+				if(level == 0)
+				{
+					sc.UnGet();
+					break;
+				}
+			}
+			else if (sc.TokenType == '{')
+			{
+				level++;
+			}
+		}
+	}
+	else
+	{
+		sc.MustGetToken('=');
+		do
+		{
+			sc.MustGetAnyToken();
+		}
+		while(sc.TokenType != ';');
+	}
+}
+
+//===========================================================================
+//
+// Parses a 'key = value' line of the map
+//
+//===========================================================================
+
+FName UDMFParserBase::ParseKey(bool checkblock, bool *isblock)
+{
+	sc.MustGetString();
+	FName key = sc.String;
+	if (checkblock)
+	{
+		if (sc.CheckToken('{'))
+		{
+			if (isblock) *isblock = true;
+			return key;
+		}
+		else if (isblock) *isblock = false;
+	}
+	sc.MustGetToken('=');
+
+	sc.Number = 0;
+	sc.Float = 0;
+	sc.MustGetAnyToken();
+
+	if (sc.TokenType == '+' || sc.TokenType == '-')
+	{
+		bool neg = (sc.TokenType == '-');
+		sc.MustGetAnyToken();
+		if (sc.TokenType != TK_IntConst && sc.TokenType != TK_FloatConst)
+		{
+			sc.ScriptMessage("Numeric constant expected");
+		}
+		if (neg)
+		{
+			sc.Number = -sc.Number;
+			sc.Float = -sc.Float;
+		}
+	}
+	if (sc.TokenType == TK_StringConst)
+	{
+		parsedString = sc.String;
+	}
+	int savedtoken = sc.TokenType;
+	sc.MustGetToken(';');
+	sc.TokenType = savedtoken;
+	return key;
+}
+
+//===========================================================================
+//
+// Syntax checks
+//
+//===========================================================================
+
+int UDMFParserBase::CheckInt(const char *key)
+{
+	if (sc.TokenType != TK_IntConst)
+	{
+		sc.ScriptMessage("Integer value expected for key '%s'", key);
+	}
+	return sc.Number;
+}
+
+double UDMFParserBase::CheckFloat(const char *key)
+{
+	if (sc.TokenType != TK_IntConst && sc.TokenType != TK_FloatConst)
+	{
+		sc.ScriptMessage("Floating point value expected for key '%s'", key);
+	}
+	return sc.Float;
+}
+
+fixed_t UDMFParserBase::CheckFixed(const char *key)
+{
+	return FLOAT2FIXED(CheckFloat(key));
+}
+
+angle_t UDMFParserBase::CheckAngle(const char *key)
+{
+	return angle_t(CheckFloat(key) * ANGLE_90 / 90.);
+}
+
+bool UDMFParserBase::CheckBool(const char *key)
+{
+	if (sc.TokenType == TK_True) return true;
+	if (sc.TokenType == TK_False) return false;
+	sc.ScriptMessage("Boolean value expected for key '%s'", key);
+	return false;
+}
+
+const char *UDMFParserBase::CheckString(const char *key)
+{
+	if (sc.TokenType != TK_StringConst)
+	{
+		sc.ScriptMessage("String value expected for key '%s'", key);
+	}
+	return parsedString;
+}
 
 //===========================================================================
 //
@@ -192,17 +345,14 @@ int GetUDMFInt(int type, int index, const char *key)
 {
 	assert(type >=0 && type <=3);
 
-	if (index > 0)
-	{
-		FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
+	FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
 
-		if (pKeys != NULL)
+	if (pKeys != NULL)
+	{
+		FUDMFKey *pKey = pKeys->Find(key);
+		if (pKey != NULL)
 		{
-			FUDMFKey *pKey = pKeys->Find(key);
-			if (pKey != NULL)
-			{
-				return FLOAT2FIXED(pKey->IntVal);
-			}
+			return pKey->IntVal;
 		}
 	}
 	return 0;
@@ -212,17 +362,14 @@ fixed_t GetUDMFFixed(int type, int index, const char *key)
 {
 	assert(type >=0 && type <=3);
 
-	if (index > 0)
-	{
-		FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
+	FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
 
-		if (pKeys != NULL)
+	if (pKeys != NULL)
+	{
+		FUDMFKey *pKey = pKeys->Find(key);
+		if (pKey != NULL)
 		{
-			FUDMFKey *pKey = pKeys->Find(key);
-			if (pKey != NULL)
-			{
-				return FLOAT2FIXED(pKey->FloatVal);
-			}
+			return FLOAT2FIXED(pKey->FloatVal);
 		}
 	}
 	return 0;
@@ -235,130 +382,29 @@ fixed_t GetUDMFFixed(int type, int index, const char *key)
 //
 //===========================================================================
 
-struct UDMFParser
+class UDMFParser : public UDMFParserBase
 {
-	FScanner sc;
-	FName namespc;
-	int namespace_bits;
 	bool isTranslated;
 	bool isExtended;
 	bool floordrop;
-	FString parsedString;
 
 	TArray<line_t> ParsedLines;
 	TArray<side_t> ParsedSides;
 	TArray<mapsidedef_t> ParsedSideTextures;
 	TArray<sector_t> ParsedSectors;
 	TArray<vertex_t> ParsedVertices;
+	TArray<vertexdata_t> ParsedVertexDatas;
 
 	FDynamicColormap	*fogMap, *normMap;
+	FMissingTextureTracker &missingTex;
 
-	UDMFParser()
+public:
+	UDMFParser(FMissingTextureTracker &missing)
+		: missingTex(missing)
 	{
 		linemap.Clear();
 		fogMap = normMap = NULL;
 	}
-
-	//===========================================================================
-	//
-	// Parses a 'key = value' line of the map
-	//
-	//===========================================================================
-
-	FName ParseKey()
-	{
-		sc.MustGetString();
-		FName key = sc.String;
-		sc.MustGetToken('=');
-
-		sc.Number = 0;
-		sc.Float = 0;
-		sc.MustGetAnyToken();
-
-		if (sc.TokenType == '+' || sc.TokenType == '-')
-		{
-			bool neg = (sc.TokenType == '-');
-			sc.MustGetAnyToken();
-			if (sc.TokenType != TK_IntConst && sc.TokenType != TK_FloatConst)
-			{
-				sc.ScriptMessage("Numeric constant expected");
-			}
-			if (neg)
-			{
-				sc.Number = -sc.Number;
-				sc.Float = -sc.Float;
-			}
-		}
-		if (sc.TokenType == TK_StringConst)
-		{
-			parsedString = sc.String;
-		}
-		int savedtoken = sc.TokenType;
-		sc.MustGetToken(';');
-		sc.TokenType = savedtoken;
-		return key;
-	}
-
-	//===========================================================================
-	//
-	// Syntax checks
-	//
-	//===========================================================================
-
-	int CheckInt(const char *key)
-	{
-		if (sc.TokenType != TK_IntConst)
-		{
-			sc.ScriptMessage("Integer value expected for key '%s'", key);
-		}
-		return sc.Number;
-	}
-
-	double CheckFloat(const char *key)
-	{
-		if (sc.TokenType != TK_IntConst && sc.TokenType != TK_FloatConst)
-		{
-			sc.ScriptMessage("Floating point value expected for key '%s'", key);
-		}
-		return sc.Float;
-	}
-
-	fixed_t CheckFixed(const char *key)
-	{
-		return FLOAT2FIXED(CheckFloat(key));
-	}
-
-	angle_t CheckAngle(const char *key)
-	{
-		return angle_t(CheckFloat(key) * ANGLE_90 / 90.);
-	}
-
-	bool CheckBool(const char *key)
-	{
-		if (sc.TokenType == TK_True) return true;
-		if (sc.TokenType == TK_False) return false;
-		sc.ScriptMessage("Boolean value expected for key '%s'", key);
-		return false;
-	}
-
-	const char *CheckString(const char *key)
-	{
-		if (sc.TokenType != TK_StringConst)
-		{
-			sc.ScriptMessage("String value expected for key '%s'", key);
-		}
-		return parsedString;
-	}
-
-	template<typename T>
-	void Flag(T &value, int mask, const char *key)
-	{
-		if (CheckBool(key))
-			value |= mask;
-		else
-			value &= ~mask;
-	}
-
 
 	void AddUserKey(FName key, int kind, int index)
 	{
@@ -370,14 +416,14 @@ struct UDMFParser
 			{
 				switch (sc.TokenType)
 				{
-				case TK_Int:
+				case TK_IntConst:
 					keyarray[i] = sc.Number;
 					break;
-				case TK_Float:
+				case TK_FloatConst:
 					keyarray[i] = sc.Float;
 					break;
 				default:
-				case TK_String:
+				case TK_StringConst:
 					keyarray[i] = parsedString;
 					break;
 				case TK_True:
@@ -394,14 +440,14 @@ struct UDMFParser
 		ukey.Key = key;
 		switch (sc.TokenType)
 		{
-		case TK_Int:
+		case TK_IntConst:
 			ukey = sc.Number;
 			break;
-		case TK_Float:
+		case TK_FloatConst:
 			ukey = sc.Float;
 			break;
 		default:
-		case TK_String:
+		case TK_StringConst:
 			ukey = parsedString;
 			break;
 		case TK_True:
@@ -422,7 +468,13 @@ struct UDMFParser
 
 	void ParseThing(FMapThing *th)
 	{
+		FString arg0str, arg1str;
+
 		memset(th, 0, sizeof(*th));
+		th->gravity = FRACUNIT;
+		th->RenderStyle = STYLE_Count;
+		th->alpha = -1;
+		th->health = 1;
 		sc.MustGetToken('{');
 		while (!sc.CheckToken('}'))
 		{
@@ -453,9 +505,19 @@ struct UDMFParser
 				th->type = (short)CheckInt(key);
 				break;
 
+			case NAME_Conversation:
+				CHECK_N(Zd | Zdt)
+				th->Conversation = CheckInt(key);
+				break;
+
 			case NAME_Special:
 				CHECK_N(Hx | Zd | Zdt | Va)
 				th->special = CheckInt(key);
+				break;
+
+			case NAME_Gravity:
+				CHECK_N(Zd | Zdt)
+				th->gravity = CheckFixed(key);
 				break;
 
 			case NAME_Arg0:
@@ -465,6 +527,16 @@ struct UDMFParser
 			case NAME_Arg4:
 				CHECK_N(Hx | Zd | Zdt | Va)
 				th->args[int(key)-int(NAME_Arg0)] = CheckInt(key);
+				break;
+
+			case NAME_Arg0Str:
+				CHECK_N(Zd);
+				arg0str = CheckString(key);
+				break;
+
+			case NAME_Arg1Str:
+				CHECK_N(Zd);
+				arg1str = CheckString(key);
 				break;
 
 			case NAME_Skill1:
@@ -554,13 +626,114 @@ struct UDMFParser
 				Flag(th->flags, MTF_STANDSTILL, key); 
 				break;
 
-			default:
-				if (!strnicmp("user_", key.GetChars(), 5))
+			case NAME_Countsecret:
+				CHECK_N(Zd | Zdt | Va)
+				Flag(th->flags, MTF_SECRET, key); 
+				break;
+
+			case NAME_Renderstyle:
 				{
-					// Custom user key - handle later
+				FName style = CheckString(key);
+				switch (style)
+				{
+				case NAME_None:
+					th->RenderStyle = STYLE_None;
+					break;
+				case NAME_Normal:
+					th->RenderStyle = STYLE_Normal;
+					break;
+				case NAME_Fuzzy:
+					th->RenderStyle = STYLE_Fuzzy;
+					break;
+				case NAME_SoulTrans:
+					th->RenderStyle = STYLE_SoulTrans;
+					break;
+				case NAME_OptFuzzy:
+					th->RenderStyle = STYLE_OptFuzzy;
+					break;
+				case NAME_Stencil:
+					th->RenderStyle = STYLE_Stencil;
+					break;
+				case NAME_Translucent:
+					th->RenderStyle = STYLE_Translucent;
+					break;
+				case NAME_Add:
+				case NAME_Additive:
+					th->RenderStyle = STYLE_Add;
+					break;
+				case NAME_Shaded:
+					th->RenderStyle = STYLE_Shaded;
+					break;
+				case NAME_TranslucentStencil:
+					th->RenderStyle = STYLE_TranslucentStencil;
+					break;
+				case NAME_Shadow:
+					th->RenderStyle = STYLE_Shadow;
+					break;
+				case NAME_Subtract:
+				case NAME_Subtractive:
+					th->RenderStyle = STYLE_Subtract;
+					break;
+				default:
+					break;
+				}
+				}
+				break;
+
+			case NAME_Alpha:
+				th->alpha = CheckFixed(key);
+				break;
+
+			case NAME_FillColor:
+				th->fillcolor = CheckInt(key);
+				break;
+
+			case NAME_Health:
+				th->health = CheckInt(key);
+				break;
+
+			case NAME_Score:
+				th->score = CheckInt(key);
+				break;
+
+			case NAME_Pitch:
+				th->pitch = (short)CheckInt(key);
+				break;
+
+			case NAME_Roll:
+				th->roll = (short)CheckInt(key);
+				break;
+
+			case NAME_ScaleX:
+				th->scaleX = CheckFixed(key);
+				break;
+
+			case NAME_ScaleY:
+				th->scaleY = CheckFixed(key);
+				break;
+
+			case NAME_Scale:
+				th->scaleX = th->scaleY = CheckFixed(key);
+				break;
+
+			default:
+				if (0 == strnicmp("user_", key.GetChars(), 5))
+				{ // Custom user key - Sets an actor's user variable directly
+					FMapThingUserData ud;
+					ud.Property = key;
+					ud.Value = CheckInt(key);
+					MapThingsUserData.Push(ud);
 				}
 				break;
 			}
+		}
+		if (arg0str.IsNotEmpty() && (P_IsACSSpecial(th->special) || th->special == 0))
+		{
+			th->args[0] = -FName(arg0str);
+		}
+		if (arg1str.IsNotEmpty() && (P_IsThingSpecial(th->special) || th->special == 0))
+		{
+			th->args[1] = -FName(arg1str);
 		}
 		// Thing specials are only valid in namespaces with Hexen-type specials
 		// and in ZDoomTranslated - which will use the translator on them.
@@ -597,6 +770,8 @@ struct UDMFParser
 	{
 		bool passuse = false;
 		bool strifetrans = false;
+		bool strifetrans2 = false;
+		FString arg0str, arg1str;
 
 		memset(ld, 0, sizeof(*ld));
 		ld->Alpha = FRACUNIT;
@@ -652,6 +827,16 @@ struct UDMFParser
 				ld->args[int(key)-int(NAME_Arg0)] = CheckInt(key);
 				continue;
 
+			case NAME_Arg0Str:
+				CHECK_N(Zd);
+				arg0str = CheckString(key);
+				continue;
+
+			case NAME_Arg1Str:
+				CHECK_N(Zd);
+				arg1str = CheckString(key);
+				continue;
+
 			case NAME_Blocking:
 				Flag(ld->flags, ML_BLOCKING, key); 
 				continue;
@@ -698,9 +883,14 @@ struct UDMFParser
 				Flag(ld->flags, ML_BLOCK_FLOATERS, key); 
 				continue;
 
-			case NAME_Transparent:	
+			case NAME_Translucent:
 				CHECK_N(St | Zd | Zdt | Va)
 				strifetrans = CheckBool(key); 
+				continue;
+
+			case NAME_Transparent:
+				CHECK_N(St | Zd | Zdt | Va)
+				strifetrans2 = CheckBool(key); 
 				continue;
 
 			case NAME_Passuse:
@@ -823,6 +1013,24 @@ struct UDMFParser
 				Flag(ld->flags, ML_BLOCKUSE, key); 
 				continue;
 
+			case NAME_blocksight:
+				Flag(ld->flags, ML_BLOCKSIGHT, key); 
+				continue;
+			
+			case NAME_blockhitscan:
+				Flag(ld->flags, ML_BLOCKHITSCAN, key); 
+				continue;
+			
+			// [TP] Locks the special with a key
+			case NAME_Locknumber:
+				ld->locknumber = CheckInt(key);
+				continue;
+
+			// [TP] Causes a 3d midtex to behave like an impassible line
+			case NAME_Midtex3dimpassible:
+				Flag(ld->flags, ML_3DMIDTEX_IMPASS, key);
+				continue;
+
 			default:
 				break;
 			}
@@ -852,10 +1060,26 @@ struct UDMFParser
 		{
 			ld->Alpha = FRACUNIT * 3/4;
 		}
+		if (strifetrans2 && ld->Alpha == FRACUNIT)
+		{
+			ld->Alpha = FRACUNIT * 1/4;
+		}
 		if (ld->sidedef[0] == NULL)
 		{
 			ld->sidedef[0] = (side_t*)(intptr_t)(1);
 			Printf("Line %d has no first side.\n", index);
+		}
+		if (arg0str.IsNotEmpty() && (P_IsACSSpecial(ld->special) || ld->special == 0))
+		{
+			ld->args[0] = -FName(arg0str);
+		}
+		if (arg1str.IsNotEmpty() && (P_IsThingSpecial(ld->special) || ld->special == 0))
+		{
+			ld->args[1] = -FName(arg1str);
+		}
+		if ((ld->flags & ML_3DMIDTEX_IMPASS) && !(ld->flags & ML_3DMIDTEX)) // [TP]
+		{
+			Printf ("Line %d has midtex3dimpassible without midtex3d.\n", index);
 		}
 	}
 
@@ -875,6 +1099,7 @@ struct UDMFParser
 		strncpy(sdt->midtexture, "-", 8);
 		sd->SetTextureXScale(FRACUNIT);
 		sd->SetTextureYScale(FRACUNIT);
+		sd->Index = index;
 
 		sc.MustGetToken('{');
 		while (!sc.CheckToken('}'))
@@ -968,6 +1193,10 @@ struct UDMFParser
 				Flag(sd->Flags, WALLF_ABSLIGHTING, key);
 				continue;
 
+			case NAME_lightfog:
+				Flag(sd->Flags, WALLF_LIGHT_FOG, key);
+				continue;
+
 			case NAME_nofakecontrast:
 				Flag(sd->Flags, WALLF_NOFAKECONTRAST, key);
 				continue;
@@ -1024,6 +1253,8 @@ struct UDMFParser
 		sec->SetYScale(sector_t::floor, FRACUNIT);
 		sec->SetXScale(sector_t::ceiling, FRACUNIT);
 		sec->SetYScale(sector_t::ceiling, FRACUNIT);
+		sec->SetAlpha(sector_t::floor, FRACUNIT);
+		sec->SetAlpha(sector_t::ceiling, FRACUNIT);
 		sec->thinglist = NULL;
 		sec->touching_thinglist = NULL;		// phares 3/14/98
 		sec->seqType = (level.flags & LEVEL_SNDSEQTOTALCTRL) ? 0 : -1;
@@ -1056,15 +1287,15 @@ struct UDMFParser
 				continue;
 
 			case NAME_Texturefloor:
-				SetTexture(sec, index, sector_t::floor, CheckString(key));
+				SetTexture(sec, index, sector_t::floor, CheckString(key), missingTex);
 				continue;
 
 			case NAME_Textureceiling:
-				SetTexture(sec, index, sector_t::ceiling, CheckString(key));
+				SetTexture(sec, index, sector_t::ceiling, CheckString(key), missingTex);
 				continue;
 
 			case NAME_Lightlevel:
-				sec->lightlevel = (BYTE)clamp<int>(CheckInt(key), 0, 255);
+				sec->lightlevel = sector_t::ClampLight(CheckInt(key));
 				continue;
 
 			case NAME_Special:
@@ -1135,6 +1366,32 @@ struct UDMFParser
 					sec->SetPlaneLight(sector_t::ceiling, CheckInt(key));
 					continue;
 
+				case NAME_Alphafloor:
+					sec->SetAlpha(sector_t::floor, CheckFixed(key));
+					continue;
+
+				case NAME_Alphaceiling:
+					sec->SetAlpha(sector_t::ceiling, CheckFixed(key));
+					continue;
+
+				case NAME_Renderstylefloor:
+				{
+					const char *str = CheckString(key);
+					if (!stricmp(str, "translucent")) sec->ChangeFlags(sector_t::floor, PLANEF_ADDITIVE, 0);
+					else if (!stricmp(str, "add")) sec->ChangeFlags(sector_t::floor, 0, PLANEF_ADDITIVE);
+					else sc.ScriptMessage("Unknown value \"%s\" for 'renderstylefloor'\n", str);
+					continue;
+				}
+
+				case NAME_Renderstyleceiling:
+				{
+					const char *str = CheckString(key);
+					if (!stricmp(str, "translucent")) sec->ChangeFlags(sector_t::ceiling, PLANEF_ADDITIVE, 0);
+					else if (!stricmp(str, "add")) sec->ChangeFlags(sector_t::ceiling, 0, PLANEF_ADDITIVE);
+					else sc.ScriptMessage("Unknown value \"%s\" for 'renderstyleceiling'\n", str);
+					continue;
+				}
+
 				case NAME_Lightfloorabsolute:
 					if (CheckBool(key)) sec->ChangeFlags(sector_t::floor, 0, PLANEF_ABSLIGHTING);
 					else sec->ChangeFlags(sector_t::floor, PLANEF_ABSLIGHTING, 0);
@@ -1181,6 +1438,14 @@ struct UDMFParser
 					sec->SeqName = CheckString(key);
 					sec->seqType = -1;
 					continue;
+
+				case NAME_hidden:
+					Flag(sec->MoreFlags, SECF_HIDDEN, key);
+					break;
+
+				case NAME_Waterzone:
+					Flag(sec->MoreFlags, SECF_UNDERWATER, key);
+					break;
 
 				default:
 					break;
@@ -1239,9 +1504,10 @@ struct UDMFParser
 	//
 	//===========================================================================
 
-	void ParseVertex(vertex_t *vt)
+	void ParseVertex(vertex_t *vt, vertexdata_t *vd)
 	{
 		vt->x = vt->y = 0;
+		vd->zCeiling = vd->zFloor = vd->flags = 0;
 		sc.MustGetStringName("{");
 		while (!sc.CheckString("}"))
 		{
@@ -1256,9 +1522,21 @@ struct UDMFParser
 			case NAME_X:
 				vt->x = FLOAT2FIXED(strtod(value, NULL));
 				break;
+
 			case NAME_Y:
 				vt->y = FLOAT2FIXED(strtod(value, NULL));
 				break;
+
+			case NAME_ZCeiling:
+				vd->zCeiling = FLOAT2FIXED(strtod(value, NULL));
+				vd->flags |= VERTEXFLAG_ZCeilingEnabled;
+				break;
+
+			case NAME_ZFloor:
+				vd->zFloor = FLOAT2FIXED(strtod(value, NULL));
+				vd->flags |= VERTEXFLAG_ZFloorEnabled;
+				break;
+
 			default:
 				break;
 			}
@@ -1309,8 +1587,9 @@ struct UDMFParser
 		numsides = sidecount;
 		lines = new line_t[numlines];
 		sides = new side_t[numsides];
+		int line, side;
 
-		for(int line = 0, side = 0; line < numlines; line++)
+		for(line = 0, side = 0; line < numlines; line++)
 		{
 			short tempalpha[2] = { SHRT_MIN, SHRT_MIN };
 
@@ -1321,20 +1600,33 @@ struct UDMFParser
 				if (lines[line].sidedef[sd] != NULL)
 				{
 					int mapside = int(intptr_t(lines[line].sidedef[sd]))-1;
-					sides[side] = ParsedSides[mapside];
-					sides[side].linedef = &lines[line];
-					sides[side].sector = &sectors[intptr_t(sides[side].sector)];
-					lines[line].sidedef[sd] = &sides[side];
+					if (mapside < sidecount)
+					{
+						sides[side] = ParsedSides[mapside];
+						sides[side].linedef = &lines[line];
+						sides[side].sector = &sectors[intptr_t(sides[side].sector)];
+						lines[line].sidedef[sd] = &sides[side];
 
-					P_ProcessSideTextures(!isExtended, &sides[side], sides[side].sector, &ParsedSideTextures[mapside],
-						lines[line].special, lines[line].args[0], &tempalpha[sd]);
+						P_ProcessSideTextures(!isExtended, &sides[side], sides[side].sector, &ParsedSideTextures[mapside],
+							lines[line].special, lines[line].args[0], &tempalpha[sd], missingTex);
 
-					side++;
+						side++;
+					}
+					else
+					{
+						lines[line].sidedef[sd] = NULL;
+					}
 				}
 			}
 
 			P_AdjustLine(&lines[line]);
 			P_FinishLoadingLineDef(&lines[line], tempalpha[0]);
+		}
+		assert(side <= numsides);
+		if (side < numsides)
+		{
+			Printf("Map had %d invalid side references\n", numsides - side);
+			numsides = side;
 		}
 	}
 
@@ -1368,6 +1660,7 @@ struct UDMFParser
 				isTranslated = false;
 				break;
 			case NAME_ZDoomTranslated:
+				level.flags2 |= LEVEL2_DUMMYSWITCHES;
 				namespace_bits = Zdt;
 				break;
 			case NAME_Vavoom:
@@ -1397,7 +1690,7 @@ struct UDMFParser
 				floordrop = true;
 				break;
 			default:
-				Printf("Unknown namespace %s. Using defaults for %s\n", sc.String, GameNames[gameinfo.gametype]);
+				Printf("Unknown namespace %s. Using defaults for %s\n", sc.String, GameTypeName());
 				switch (gameinfo.gametype)
 				{
 				default:			// Shh, GCC
@@ -1432,8 +1725,18 @@ struct UDMFParser
 			if (sc.Compare("thing"))
 			{
 				FMapThing th;
+				unsigned userdatastart = MapThingsUserData.Size();
 				ParseThing(&th);
 				MapThingsConverted.Push(th);
+				if (userdatastart < MapThingsUserData.Size())
+				{ // User data added
+					MapThingsUserDataIndex[MapThingsConverted.Size()-1] = userdatastart;
+					// Mark end of the user data for this map thing
+					FMapThingUserData ud;
+					ud.Property = NAME_None;
+					ud.Value = 0;
+					MapThingsUserData.Push(ud);
+				}
 			}
 			else if (sc.Compare("linedef"))
 			{
@@ -1467,8 +1770,14 @@ struct UDMFParser
 			else if (sc.Compare("vertex"))
 			{
 				vertex_t vt;
-				ParseVertex(&vt);
+				vertexdata_t vd;
+				ParseVertex(&vt, &vd);
 				ParsedVertices.Push(vt);
+				ParsedVertexDatas.Push(vd);
+			}
+			else
+			{
+				Skip();
 			}
 		}
 
@@ -1482,6 +1791,11 @@ struct UDMFParser
 		numvertexes = ParsedVertices.Size();
 		vertexes = new vertex_t[numvertexes];
 		memcpy(vertexes, &ParsedVertices[0], numvertexes * sizeof(*vertexes));
+
+		// Create the real vertex datas
+		numvertexdatas = ParsedVertexDatas.Size();
+		vertexdatas = new vertexdata_t[numvertexdatas];
+		memcpy(vertexdatas, &ParsedVertexDatas[0], numvertexdatas * sizeof(*vertexdatas));
 
 		// Create the real sectors
 		numsectors = ParsedSectors.Size();
@@ -1502,9 +1816,9 @@ struct UDMFParser
 	}
 };
 
-void P_ParseTextMap(MapData *map)
+void P_ParseTextMap(MapData *map, FMissingTextureTracker &missingtex)
 {
-	UDMFParser parse;
+	UDMFParser parse(missingtex);
 
 	parse.ParseTextMap(map);
 }

@@ -53,6 +53,7 @@
 #include "v_text.h"
 #include "d_net.h"
 #include "d_main.h"
+#include "farchive.h"
 // [BC] new #includes.
 #include "p_local.h"
 #include "g_level.h"
@@ -96,8 +97,8 @@ private:
 
 struct FActionMap
 {
-	unsigned int	Key;	// value from passing Name to MakeKey()
 	FButtonStatus	*Button;
+	unsigned int	Key;	// value from passing Name to MakeKey()
 	char			Name[12];
 };
 
@@ -113,6 +114,12 @@ static FConsoleCommand *ScanChainForName (FConsoleCommand *start, const char *na
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
 
+// [BB]
+extern TArray<FString> autoloadedwads;
+
+// [EP]
+extern bool ParsingPWO;
+
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 CVAR (Bool, lookspring, true, CVAR_ARCHIVE);	// Generate centerview when -mlook encountered?
@@ -125,7 +132,10 @@ FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
 	Button_MoveUp, Button_Jump, Button_ShowScores, Button_Crouch,
 	Button_Zoom, Button_Reload,
 	Button_User1, Button_User2, Button_User3, Button_User4,
+	Button_AM_PanLeft, Button_AM_PanRight, Button_AM_PanDown, Button_AM_PanUp,
+	Button_AM_ZoomIn, Button_AM_ZoomOut,
 	Button_ShowMedals;	// [BC] Added the "show medals" button.
+
 
 bool ParsingKeyConf;
 
@@ -137,35 +147,42 @@ bool ParsingKeyConf;
 
 FActionMap ActionMaps[] =
 {
-	{ 0x03fe31c3, &Button_ShowMedals,	"showmedals" },	// [BC] New "show medals" button.
-	{ 0x125f5226, &Button_User2,		"user2" },
-	{ 0x1eefa611, &Button_Jump,			"jump" },
-	{ 0x201f1c55, &Button_Right,		"right" },
-	{ 0x20ccc4d5, &Button_Zoom,			"zoom" },
-	{ 0x23a99cd7, &Button_Back,			"back" },
-	{ 0x426b69e7, &Button_Reload,		"reload" },
-	{ 0x4463f43a, &Button_LookDown,		"lookdown" },
-	{ 0x534c30ee, &Button_User4,		"user4" },
-	{ 0x5622bf42, &Button_Attack,		"attack" },
-	{ 0x577712d0, &Button_User1,		"user1" },
-	{ 0x57c25cb2, &Button_Klook,		"klook" },
-	{ 0x59f3e907, &Button_Forward,		"forward" },
-	{ 0x6167ce99, &Button_MoveDown,		"movedown" },
-	{ 0x676885b8, &Button_AltAttack,	"altattack" },
-	{ 0x6fa41b84, &Button_MoveLeft,		"moveleft" },
-	{ 0x818f08e6, &Button_MoveRight,	"moveright" },
-	{ 0xa2b62d8b, &Button_Mlook,		"mlook" },
-	{ 0xab2c3e71, &Button_Crouch,		"crouch" },
-	{ 0xb000b483, &Button_Left,			"left" },
-	{ 0xb62b1e49, &Button_LookUp,		"lookup" },
-	{ 0xb6f8fe92, &Button_User3,		"user3" },
-	{ 0xb7e6a54b, &Button_Strafe,		"strafe" },
-	{ 0xd5897c73, &Button_ShowScores,	"showscores" },
-	{ 0xe0ccb317, &Button_Speed,		"speed" },
-	{ 0xe0cfc260, &Button_Use,			"use" },
-	{ 0xfdd701c7, &Button_MoveUp,		"moveup" },
+	{ &Button_ShowMedals,	0x03fe31c3, "showmedals" },	// [BC] New "show medals" button.
+	{ &Button_AM_PanLeft,	0x0d52d67b, "am_panleft"},
+	{ &Button_User2,		0x125f5226, "user2" },
+	{ &Button_Jump,			0x1eefa611, "jump" },
+	{ &Button_Right,		0x201f1c55, "right" },
+	{ &Button_Zoom,			0x20ccc4d5, "zoom" },
+	{ &Button_Back,			0x23a99cd7, "back" },
+	{ &Button_AM_ZoomIn,	0x41df90c2, "am_zoomin"},
+	{ &Button_Reload,		0x426b69e7, "reload" },
+	{ &Button_LookDown,		0x4463f43a, "lookdown" },
+	{ &Button_AM_ZoomOut,	0x51f7a334, "am_zoomout"},
+	{ &Button_User4,		0x534c30ee, "user4" },
+	{ &Button_Attack,		0x5622bf42, "attack" },
+	{ &Button_User1,		0x577712d0, "user1" },
+	{ &Button_Klook,		0x57c25cb2, "klook" },
+	{ &Button_Forward,		0x59f3e907, "forward" },
+	{ &Button_MoveDown,		0x6167ce99, "movedown" },
+	{ &Button_AltAttack,	0x676885b8, "altattack" },
+	{ &Button_MoveLeft,		0x6fa41b84, "moveleft" },
+	{ &Button_MoveRight,	0x818f08e6, "moveright" },
+	{ &Button_AM_PanRight,	0x8197097b, "am_panright"},
+	{ &Button_AM_PanUp,		0x8d89955e, "am_panup"} ,
+	{ &Button_Mlook,		0xa2b62d8b, "mlook" },
+	{ &Button_Crouch,		0xab2c3e71, "crouch" },
+	{ &Button_Left,			0xb000b483, "left" },
+	{ &Button_LookUp,		0xb62b1e49, "lookup" },
+	{ &Button_User3,		0xb6f8fe92, "user3" },
+	{ &Button_Strafe,		0xb7e6a54b, "strafe" },
+	{ &Button_AM_PanDown,	0xce301c81, "am_pandown"},
+	{ &Button_ShowScores,	0xd5897c73, "showscores" },
+	{ &Button_Speed,		0xe0ccb317, "speed" },
+	{ &Button_Use,			0xe0cfc260, "use" },
+	{ &Button_MoveUp,		0xfdd701c7, "moveup" },
 };
 #define NUM_ACTIONS countof(ActionMaps)
+
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -627,7 +644,8 @@ void C_DoCommand (const char *cmd, int keynum)
 			return;
 		}
 
-		if (gamestate != GS_STARTUP || ParsingKeyConf ||
+		// [EP] PWO needs this.
+		if (gamestate != GS_STARTUP || ParsingKeyConf || ParsingPWO ||
 			(len == 3 && strnicmp (beg, "set", 3) == 0) ||
 			(len == 7 && strnicmp (beg, "logfile", 7) == 0) ||
 			(len == 9 && strnicmp (beg, "unbindall", 9) == 0) ||
@@ -642,7 +660,14 @@ void C_DoCommand (const char *cmd, int keynum)
 		}
 		else
 		{
-			new DStoredCommand (com, beg);
+			if (len == 4 && strnicmp(beg, "warp", 4) == 0)
+			{
+				StoredWarp = beg;
+			}
+			else
+			{
+				new DStoredCommand (com, beg);
+			}
 		}
 	}
 	else
@@ -680,12 +705,7 @@ void C_DoCommand (const char *cmd, int keynum)
 		}
 		else
 		{ // We don't know how to handle this command
-			char cmdname[64];
-			size_t minlen = MIN<size_t> (len, 63);
-
-			memcpy (cmdname, beg, minlen);
-			cmdname[minlen] = 0;
-			Printf ("Unknown command \"%s\"\n", cmdname);
+			Printf ("Unknown command \"%.*s\"\n", (int)len, beg);
 		}
 	}
 }
@@ -927,6 +947,28 @@ char *FCommandLine::operator[] (int i)
 	return _argv[i];
 }
 
+// [TP] Utility function for console commands to read in a number
+bool FCommandLine::SafeGetNumber( int i, int &value, const char *errormessage )
+{
+	if ( i >= argc() )
+		return false;
+
+	char* end;
+	int index = static_cast<int>( strtol(( *this )[i], &end, 10 ));
+
+	if ( *end != '\0' )
+	{
+		if ( errormessage )
+			Printf( "%s.\n", errormessage );
+		return false;
+	}
+	else
+	{
+		value = index;
+		return true;
+	}
+}
+
 static FConsoleCommand *ScanChainForName (FConsoleCommand *start, const char *name, size_t namelen, FConsoleCommand **prev)
 {
 	int comp;
@@ -985,6 +1027,11 @@ bool FConsoleCommand::AddToHash (FConsoleCommand **table)
 		}
 	}
 	return true;
+}
+
+FConsoleCommand* FConsoleCommand::FindByName (const char* name)
+{
+	return FindNameInHashTable (Commands, name, strlen (name));
 }
 
 FConsoleCommand::FConsoleCommand (const char *name, CCmdRun runFunc)
@@ -1051,32 +1098,7 @@ FConsoleAlias::~FConsoleAlias ()
 	m_Command[1] = m_Command[0] = FString();
 }
 
-FString BuildString (int argc, char **argv)
-{
-	if (argc == 1)
-	{
-		return *argv;
-	}
-	else
-	{
-		FString buf;
-		int arg;
-
-		for (arg = 0; arg < argc; arg++)
-		{
-			if (strchr (argv[arg], ' '))
-			{
-				buf.AppendFormat ("\"%s\" ", argv[arg]);
-			}
-			else
-			{
-				buf.AppendFormat ("%s ", argv[arg]);
-			}
-		}
-		return buf;
-	}
-}
-
+// Given an argument vector, reconstitute the command line it could have been produced from.
 FString BuildString (int argc, FString *argv)
 {
 	if (argc == 1)
@@ -1090,8 +1112,27 @@ FString BuildString (int argc, FString *argv)
 
 		for (arg = 0; arg < argc; arg++)
 		{
-			if (strchr (argv[arg], ' '))
-			{
+			if (argv[arg][0] == '\0')
+			{ // It's an empty argument, we need to convert it to '""'
+				buf << "\"\" ";
+			}
+			else if (strchr(argv[arg], '"'))
+			{ // If it contains one or more quotes, we need to escape them.
+				buf << '"';
+				long substr_start = 0, quotepos;
+				while ((quotepos = argv[arg].IndexOf('"', substr_start)) >= 0)
+				{
+					if (substr_start < quotepos)
+					{
+						buf << argv[arg].Mid(substr_start, quotepos - substr_start);
+					}
+					buf << "\\\"";
+					substr_start = quotepos + 1;
+				}
+				buf << argv[arg].Mid(substr_start) << "\" ";
+			}
+			else if (strchr(argv[arg], ' '))
+			{ // If it contains a space, it needs to be quoted.
 				buf << '"' << argv[arg] << "\" ";
 			}
 			else
@@ -1244,6 +1285,30 @@ void C_ArchiveAliases (FConfigFile *f)
 	}
 }
 
+void C_ClearAliases ()
+{
+	int bucket;
+	FConsoleCommand *alias;
+
+	for (bucket = 0; bucket < FConsoleCommand::HASH_SIZE; bucket++)
+	{
+		alias = Commands[bucket];
+		while (alias)
+		{
+			FConsoleCommand *next = alias->m_Next;
+			if (alias->IsAlias())
+				static_cast<FConsoleAlias *>(alias)->SafeDelete();
+			alias = next;
+		}
+	}
+}
+
+CCMD(clearaliases)
+{
+	C_ClearAliases();
+}
+
+
 // This is called only by the ini parser.
 void C_SetAlias (const char *name, const char *cmd)
 {
@@ -1345,7 +1410,7 @@ CCMD (key)
 
 // Execute any console commands specified on the command line.
 // These all begin with '+' as opposed to '-'.
-void C_ExecCmdLineParams ()
+FExecList *C_ParseCmdLineParams(FExecList *exec)
 {
 	for (int currArg = 1; currArg < Args->NumArgs(); )
 	{
@@ -1366,10 +1431,15 @@ void C_ExecCmdLineParams ()
 			cmdString = BuildString (cmdlen, Args->GetArgList (argstart));
 			if (!cmdString.IsEmpty())
 			{
-				C_DoCommand (&cmdString[1]);
+				if (exec == NULL)
+				{
+					exec = new FExecList;
+				}
+				exec->AddCommand(&cmdString[1]);
 			}
 		}
 	}
+	return exec;
 }
 
 bool FConsoleCommand::IsAlias ()
@@ -1446,30 +1516,62 @@ void FConsoleAlias::SafeDelete ()
 	}
 }
 
-static BYTE PullinBad = 2;
-static const char *PullinFile;
-extern TArray<FString> allwads;
-// [BB]
-extern TArray<FString> autoloadedwads;
+void FExecList::AddCommand(const char *cmd, const char *file)
+{
+	// Pullins are special and need to be separated from general commands.
+	// They also turned out to be a really bad idea, since they make things
+	// more complicated. :(
+	if (file != NULL && strnicmp(cmd, "pullin", 6) == 0 && isspace(cmd[6]))
+	{
+		FCommandLine line(cmd);
+		C_SearchForPullins(this, file, line);
+	}
+	// Recursive exec: Parse this file now.
+	else if (strnicmp(cmd, "exec", 4) == 0 && isspace(cmd[4]))
+	{
+		FCommandLine argv(cmd);
+		for (int i = 1; i < argv.argc(); ++i)
+		{
+			C_ParseExecFile(argv[i], this);
+		}
+	}
+	else
+	{
+		Commands.Push(cmd);
+	}
+}
 
-int C_ExecFile (const char *file, bool usePullin)
+void FExecList::ExecCommands() const
+{
+	for (unsigned i = 0; i < Commands.Size(); ++i)
+	{
+		AddCommandString(Commands[i].LockBuffer());
+		Commands[i].UnlockBuffer();
+	}
+}
+
+void FExecList::AddPullins(TArray<FString> &wads) const
+{
+	for (unsigned i = 0; i < Pullins.Size(); ++i)
+	{
+		// [BB] We consider this file as loaded automatically.
+		if ( D_AddFile(wads, Pullins[i]) )
+			autoloadedwads.Push ( wads[ wads.Size() - 1 ] );
+	}
+}
+
+FExecList *C_ParseExecFile(const char *file, FExecList *exec)
 {
 	FILE *f;
 	char cmd[4096];
 	int retval = 0;
 
-	BYTE pullinSaved = PullinBad;
-	const char *fileSaved = PullinFile;
-
 	if ( (f = fopen (file, "r")) )
 	{
-		PullinBad = 1-usePullin;
-		PullinFile = file;
-
-		while (fgets (cmd, 4095, f))
+		while (fgets(cmd, countof(cmd)-1, f))
 		{
 			// Comments begin with //
-			char *stop = cmd + strlen (cmd) - 1;
+			char *stop = cmd + strlen(cmd) - 1;
 			char *comment = cmd;
 			int inQuote = 0;
 
@@ -1496,90 +1598,78 @@ int C_ExecFile (const char *file, bool usePullin)
 			{ // Comment in middle of line
 				*comment = 0;
 			}
-
-			AddCommandString (cmd);
+			if (exec == NULL)
+			{
+				exec = new FExecList;
+			}
+			exec->AddCommand(cmd, file);
 		}
-		if (!feof (f))
+		if (!feof(f))
 		{
-			retval = 2;
+			Printf("Error parsing \"%s\"\n", file);
 		}
-		fclose (f);
+		fclose(f);
 	}
 	else
 	{
-		retval = 1;
+		Printf ("Could not open \"%s\"\n", file);
 	}
-	PullinBad = pullinSaved;
-	PullinFile = fileSaved;
-	return retval;
+	return exec;
+}
+
+bool C_ExecFile (const char *file)
+{
+	FExecList *exec = C_ParseExecFile(file, NULL);
+	if (exec != NULL)
+	{
+		exec->ExecCommands();
+		if (exec->Pullins.Size() > 0)
+		{
+			Printf(TEXTCOLOR_BOLD "Notice: Pullin files were ignored.\n");
+		}
+		delete exec;
+	}
+	return exec != NULL;
+}
+
+void C_SearchForPullins(FExecList *exec, const char *file, FCommandLine &argv)
+{
+	const char *lastSlash;
+
+	assert(exec != NULL);
+	assert(file != NULL);
+#ifdef __unix__
+	lastSlash = strrchr(file, '/');
+#else
+	const char *lastSlash1, *lastSlash2;
+
+	lastSlash1 = strrchr(file, '/');
+	lastSlash2 = strrchr(file, '\\');
+	lastSlash = MAX(lastSlash1, lastSlash2);
+#endif
+
+	for (int i = 1; i < argv.argc(); ++i)
+	{
+		// Try looking for the wad in the same directory as the .cfg
+		// before looking for it in the current directory.
+		if (lastSlash != NULL)
+		{
+			FString path(file, (lastSlash - file) + 1);
+			path += argv[i];
+			if (FileExists(path))
+			{
+				exec->Pullins.Push(path);
+				continue;
+			}
+		}
+		exec->Pullins.Push(argv[i]);
+	}
 }
 
 CCMD (pullin)
 {
-	if (PullinBad == 2)
-	{
-		Printf ("This command is only valid from .cfg\n"
-				"files and only when used at startup.\n");
-	}
-	else if (argv.argc() > 1)
-	{
-		const char *lastSlash;
-
-#ifdef unix
-		lastSlash = strrchr (PullinFile, '/');
-#else
-		const char *lastSlash1, *lastSlash2;
-
-		lastSlash1 = strrchr (PullinFile, '/');
-		lastSlash2 = strrchr (PullinFile, '\\');
-		lastSlash = MAX (lastSlash1, lastSlash2);
-#endif
-
-		if (PullinBad)
-		{
-			Printf ("Not loading:");
-		}
-		for (int i = 1; i < argv.argc(); ++i)
-		{
-			if (PullinBad)
-			{
-				Printf (" %s", argv[i]);
-			}
-			else
-			{
-				// Try looking for the wad in the same directory as the .cfg
-				// before looking for it in the current directory.
-				char *path = argv[i];
-
-				if (lastSlash != NULL)
-				{
-					size_t pathlen = lastSlash - PullinFile + strlen (argv[i]) + 2;
-					path = new char[pathlen];
-					strncpy (path, PullinFile, (lastSlash - PullinFile) + 1);
-					strcpy (path + (lastSlash - PullinFile) + 1, argv[i]);
-					if (!FileExists (path))
-					{
-						delete[] path;
-						path = argv[i];
-					}
-					else
-					{
-						FixPathSeperator (path);
-					}
-				}
-				// [BB] We consider this file as loaded automatically.
-				if ( D_AddFile (allwads, path) )
-					autoloadedwads.Push ( allwads[ allwads.Size() - 1 ] );
-				if (path != argv[i])
-				{
-					delete[] path;
-				}
-			}
-		}
-		if (PullinBad)
-		{
-			Printf ("\n");
-		}
-	}
+	// Actual handling for pullin is now completely special-cased above
+	Printf (TEXTCOLOR_BOLD "Pullin" TEXTCOLOR_NORMAL " is only valid from .cfg\n"
+			"files and only when used at startup.\n");
 }
 

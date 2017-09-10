@@ -54,8 +54,8 @@
 #include "cl_demo.h"
 #include "cooperative.h"
 
-// List of spawnable things for the Thing_Spawn and Thing_Projectile specials.
-const PClass *SpawnableThings[MAX_SPAWNABLES];
+// Set of spawnable things for the Thing_Spawn and Thing_Projectile specials.
+TMap<int, const PClass *> SpawnableThings;
 
 static FRandom pr_leadtarget ("LeadTarget");
 
@@ -66,14 +66,13 @@ bool P_Thing_Spawn (int tid, AActor *source, int type, angle_t angle, bool fog, 
 	AActor *spot, *mobj;
 	FActorIterator iterator (tid);
 
-	if (type >= MAX_SPAWNABLES)
-		return false;
+	kind = P_GetSpawnableType(type);
 
-	if ( (kind = SpawnableThings[type]) == NULL)
+	if (kind == NULL)
 		return false;
 
 	// Handle decorate replacements.
-	kind = kind->ActorInfo->GetReplacement()->Class;
+	kind = kind->GetReplacement();
 
 	if ((GetDefaultByType (kind)->flags3 & MF3_ISMONSTER) && 
 		((dmflags & DF_NO_MONSTERS) || (level.flags2 & LEVEL2_NOMONSTERS)))
@@ -149,15 +148,7 @@ bool P_Thing_Spawn (int tid, AActor *source, int type, angle_t angle, bool fog, 
 			{
 				// If this is a monster, subtract it from the total monster
 				// count, because it already added to it during spawning.
-				if (mobj->CountsAsKill())
-				{
-					level.total_monsters--;
-				}
-				// Same, for items
-				if (mobj->flags & MF_COUNTITEM)
-				{
-					level.total_items--;
-				}
+				mobj->ClearCounters();
 				mobj->Destroy ();
 			}
 		}
@@ -200,6 +191,10 @@ bool P_MoveThing(AActor *source, fixed_t x, fixed_t y, fixed_t z, bool fog)
 		source->PrevX = x;
 		source->PrevY = y;
 		source->PrevZ = z;
+		if (source == players[consoleplayer].camera)
+		{
+			R_ResetViewInterpolation();
+		}
 
 		ULONG ulFlags = 0;
 		if ( oldx != source->x )
@@ -256,21 +251,19 @@ bool P_Thing_Projectile (int tid, AActor *source, int type, const char *type_nam
 
 	if (type_name == NULL)
 	{
-		if (type >= MAX_SPAWNABLES)
-			return false;
-
-		if ((kind = SpawnableThings[type]) == NULL)
-			return false;
+		kind = P_GetSpawnableType(type);
 	}
 	else
 	{
-		if ((kind = PClass::FindClass(type_name)) == NULL || kind->ActorInfo == NULL)
-			return false;
+		kind = PClass::FindClass(type_name);
+	}
+	if (kind == NULL || kind->ActorInfo == NULL)
+	{
+		return false;
 	}
 
-
 	// Handle decorate replacements.
-	kind = kind->ActorInfo->GetReplacement()->Class;
+	kind = kind->GetReplacement();
 
 	defflags3 = GetDefaultByType (kind)->flags3;
 	if ((defflags3 & MF3_ISMONSTER) && 
@@ -414,7 +407,7 @@ nolead:						mobj->angle = R_PointToAngle2 (mobj->x, mobj->y, targ->x, targ->y);
 					bMissileExplode = false;
 					if (mobj->flags & MF_MISSILE)
 					{
-						if (P_CheckMissileSpawn (mobj))
+						if (P_CheckMissileSpawn (mobj, spot->radius))
 						{
 							rtn = true;
 						}
@@ -425,15 +418,7 @@ nolead:						mobj->angle = R_PointToAngle2 (mobj->x, mobj->y, targ->x, targ->y);
 					{
 						// If this is a monster, subtract it from the total monster
 						// count, because it already added to it during spawning.
-						if (mobj->CountsAsKill())
-						{
-							level.total_monsters--;
-						}
-						// Same, for items
-						if (mobj->flags & MF_COUNTITEM)
-						{
-							level.total_items--;
-						}
+						mobj->ClearCounters();
 						mobj->Destroy ();
 					}
 					else
@@ -525,31 +510,92 @@ void P_RemoveThing(AActor * actor)
 			SERVERCOMMANDS_DestroyThing( actor );
 
 		// be friendly to the level statistics. ;)
-		// [BB] Added client update.
-		if (actor->CountsAsKill() && actor->health > 0)
-		{
-			level.total_monsters--;
-
-			// [BB] Since a monster was removed, we also need to correct the number of monsters in invasion mode.
-			INVASION_UpdateMonsterCount( actor, true );
-
-			// [BB] Inform the clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetMapNumTotalMonsters( );
-		}
-		// [BB] Added client update.
-		if (actor->flags&MF_COUNTITEM)
-		{
-			level.total_items--;
-
-			// [BB] Inform the clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetMapNumTotalItems( );
-		}
+		actor->ClearCounters();
 
 		// [BB] Only destroy the actor if it's not needed for a map reset. Otherwise just hide it.
 		actor->HideOrDestroyIfSafe ();
 	}
+}
+
+// [BB] Added byClient: If the server instructs the client to raise
+// a thing with SERVERCOMMANDS_SetThingState, the client has to ignore the
+// P_CheckPosition check. For example this is relevant if an Archvile raised
+// the thing.
+// [EP] Ignore also the checks in AActor::GetRaiseState (in particular the
+// 'tics != -1' one, because the client might get the wrong value).
+bool P_Thing_Raise(AActor *thing, bool byClient)
+{
+	FState * RaiseState = byClient ? thing->FindState(NAME_Raise) : thing->GetRaiseState();	// [EP]
+	if (RaiseState == NULL)
+	{
+		return true;	// monster doesn't have a raise state
+	}
+	
+	AActor *info = thing->GetDefault ();
+
+	thing->velx = thing->vely = 0;
+
+	// [RH] Check against real height and radius
+	fixed_t oldheight = thing->height;
+	fixed_t oldradius = thing->radius;
+	int oldflags = thing->flags;
+
+	thing->flags |= MF_SOLID;
+	thing->height = info->height;	// [RH] Use real height
+	thing->radius = info->radius;	// [RH] Use real radius
+	if (!P_CheckPosition (thing, thing->x, thing->y) && !byClient)
+	{
+		thing->flags = oldflags;
+		thing->radius = oldradius;
+		thing->height = oldheight;
+		return false;
+	}
+
+
+	S_Sound (thing, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
+
+	thing->Revive();
+
+	// [BC] If we're the server, tell clients to put the thing into its raise state.
+	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
+		SERVERCOMMANDS_SetThingState( thing, STATE_RAISE );
+
+	thing->SetState (RaiseState);
+	return true;
+}
+
+bool P_Thing_CanRaise(AActor *thing)
+{
+	FState * RaiseState = thing->GetRaiseState();
+	if (RaiseState == NULL)
+	{
+		return false;
+	}
+	
+	AActor *info = thing->GetDefault();
+
+	// Check against real height and radius
+	int oldflags = thing->flags;
+	fixed_t oldheight = thing->height;
+	fixed_t oldradius = thing->radius;
+
+	thing->flags |= MF_SOLID;
+	thing->height = info->height;
+	thing->radius = info->radius;
+
+	bool check = P_CheckPosition (thing, thing->x, thing->y);
+
+	// Restore checked properties
+	thing->flags = oldflags;
+	thing->radius = oldradius;
+	thing->height = oldheight;
+
+	if (!check)
+	{
+		return false;
+	}
+
+	return true;
 }
 
 void P_Thing_SetVelocity(AActor *actor, fixed_t vx, fixed_t vy, fixed_t vz, bool add, bool setbob)
@@ -569,100 +615,58 @@ void P_Thing_SetVelocity(AActor *actor, fixed_t vx, fixed_t vy, fixed_t vz, bool
 			actor->player->velx += vx;
 			actor->player->vely += vy;
 		}
-		// [Dusk] Update momentum
-		SERVER_UpdateThingMomentum( actor, true );
+		// [Dusk] Update velocity
+		SERVER_UpdateThingVelocity( actor, true );
 	}
 }
 
-// [BB] Added bIgnorePositionCheck: If the server instructs the client to raise
-// a thing with SERVERCOMMANDS_SetThingState, the client has to ignore the
-// P_CheckPosition check. For example this is relevant if an Archvile raised
-// the thing.
-bool P_Thing_Raise(AActor *thing, bool bIgnorePositionCheck)
+const PClass *P_GetSpawnableType(int spawnnum)
 {
-	if (thing == NULL)
-		return false;	// not valid
-
-	if (!(thing->flags & MF_CORPSE) )
-		return true;	// not a corpse
-	
-	if (thing->tics != -1)
-		return true;	// not lying still yet
-	
-	FState * RaiseState = thing->FindState(NAME_Raise);
-	if (RaiseState == NULL)
-		return true;	// monster doesn't have a raise state
-	
-	AActor *info = thing->GetDefault ();
-
-	thing->velx = thing->vely = 0;
-
-	// [RH] Check against real height and radius
-	fixed_t oldheight = thing->height;
-	fixed_t oldradius = thing->radius;
-	int oldflags = thing->flags;
-
-	thing->flags |= MF_SOLID;
-	thing->height = info->height;	// [RH] Use real height
-	thing->radius = info->radius;	// [RH] Use real radius
-	if (!P_CheckPosition (thing, thing->x, thing->y) && !bIgnorePositionCheck)
-	{
-		thing->flags = oldflags;
-		thing->radius = oldradius;
-		thing->height = oldheight;
-		return false;
-	}
-
-	S_Sound (thing, CHAN_BODY, "vile/raise", 1, ATTN_IDLE);
-	
-	// [BC] If we're the server, tell clients to put the thing into its raise state.
-	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_SetThingState( thing, STATE_RAISE );
-
-	thing->SetState (RaiseState);
-	thing->flags = info->flags;
-	thing->flags2 = info->flags2;
-	thing->flags3 = info->flags3;
-	thing->flags4 = info->flags4;
-	thing->flags5 = info->flags5;
-	thing->flags6 = info->flags6;
-	// [BC] Apply new ST flags as well.
-	thing->ulSTFlags = info->ulSTFlags;
-	thing->ulNetworkFlags = info->ulNetworkFlags;
-	thing->health = info->health;
-	thing->target = NULL;
-	thing->lastenemy = NULL;
-
-	// [RH] If it's a monster, it gets to count as another kill
-	if (thing->CountsAsKill())
-	{
-		level.total_monsters++;
-
-		// [BC] Update invasion's HUD.
-		if (( invasion ) && ( NETWORK_GetState( ) != NETSTATE_CLIENT ) && ( CLIENTDEMO_IsPlaying( ) == false ))
+	if (spawnnum < 0)
+	{ // A named arg from a UDMF map
+		FName spawnname = FName(ENamedName(-spawnnum));
+		if (spawnname.IsValidName())
 		{
-			INVASION_SetNumMonstersLeft( INVASION_GetNumMonstersLeft( ) + 1 );
-
-			// [BC] If we're the server, tell the client how many monsters are left.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SetInvasionNumMonstersLeft( );
+			return PClass::FindClass(spawnname);
 		}
 	}
-
-	return true;
+	else
+	{ // A numbered arg from a Hexen or UDMF map
+		const PClass **type = SpawnableThings.CheckKey(spawnnum);
+		if (type != NULL)
+		{
+			return *type;
+		}
+	}
+	return NULL;
 }
 
+typedef TMap<int, const PClass *>::Pair SpawnablePair;
+
+static int STACK_ARGS SpawnableSort(const void *a, const void *b)
+{
+	return (*((SpawnablePair **)a))->Key - (*((SpawnablePair **)b))->Key;
+}
 
 CCMD (dumpspawnables)
 {
-	int i;
+	TMapIterator<int, const PClass *> it(SpawnableThings);
+	SpawnablePair *pair, **allpairs;
+	int i = 0;
 
-	for (i = 0; i < MAX_SPAWNABLES; i++)
+	// Sort into numerical order, since their arrangement in the map can
+	// be in an unspecified order.
+	allpairs = new TMap<int, const PClass *>::Pair *[SpawnableThings.CountUsed()];
+	while (it.NextPair(pair))
 	{
-		if (SpawnableThings[i] != NULL)
-		{
-			Printf ("%d %s\n", i, SpawnableThings[i]->TypeName.GetChars());
-		}
+		allpairs[i++] = pair;
 	}
+	qsort(allpairs, i, sizeof(*allpairs), SpawnableSort);
+	for (int j = 0; j < i; ++j)
+	{
+		pair = allpairs[j];
+		Printf ("%d %s\n", pair->Key, pair->Value->TypeName.GetChars());
+	}
+	delete[] allpairs;
 }
 

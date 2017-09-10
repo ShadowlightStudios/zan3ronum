@@ -37,6 +37,7 @@
 #include "p_local.h"
 #include "p_lnspec.h"
 #include "doomstat.h"
+#include "farchive.h"
 // [BB] New #includes.
 #include "a_movingcamera.h"
 #include "cl_demo.h"
@@ -293,7 +294,7 @@ void APathFollower::PostBeginPlay ()
 	// on the client, so apply a workaround for this here. If Activate has been called before
 	// PostBeginPlay we have to call Actiate again here.
 	if (( bActivateCalledBeforePostBeginPlay ) && ( this->IsKindOf ( PClass::FindClass("ActorMover" ) ) == false ) &&
-		(( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))))
+		NETWORK_InClientMode() )
 	{
 		APathFollower::Activate (NULL);
 		bActivateCalledBeforePostBeginPlay = false;
@@ -414,7 +415,7 @@ void APathFollower::NewNode ()
 
 	while ( (spec = iterator.Next ()) )
 	{
-		LineSpecials[spec->special] (NULL, NULL, false, spec->args[0],
+		P_ExecuteSpecial(spec->special, NULL, NULL, false, spec->args[0],
 			spec->args[1], spec->args[2], spec->args[3], spec->args[4]);
 	}
 }
@@ -618,7 +619,7 @@ void AActorMover::PostBeginPlay ()
 	// on the client, so apply a workaround for this here. If Activate has been called before
 	// PostBeginPlay we have to call Actiate again here.
 	if (( bActivateCalledBeforePostBeginPlay ) &&
-		(( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( ))))
+		NETWORK_InClientMode() )
 	{
 		bActivateCalledBeforePostBeginPlay = false;
 		Activate (NULL);

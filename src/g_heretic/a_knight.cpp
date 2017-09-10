@@ -41,8 +41,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_DripBlood)
 DEFINE_ACTION_FUNCTION(AActor, A_KnightAttack)
 {
 	// [BB] This is server-side.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -54,33 +53,19 @@ DEFINE_ACTION_FUNCTION(AActor, A_KnightAttack)
 	if (self->CheckMeleeRange ())
 	{
 		int damage = pr_knightatk.HitDice (3);
-		P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-		P_TraceBleed (damage, self->target, self);
-		S_Sound (self, CHAN_BODY, "hknight/melee", 1, ATTN_NORM);
-
-		// [BB] If we're the server, tell the clients to play the sound.
-		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_SoundActor( self, CHAN_BODY, "hknight/melee", 1, ATTN_NORM );
-
+		int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+		P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
+		S_Sound (self, CHAN_BODY, "hknight/melee", 1, ATTN_NORM, true);	// [BB] Inform the clients.
 		return;
 	}
 	// Throw axe
-	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM);
+	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM, true);	// [EP] Inform the clients.
 	if (self->flags & MF_SHADOW || pr_knightatk () < 40)
 	{ // Red axe
-		AActor *missile = P_SpawnMissileZ (self, self->z + 36*FRACUNIT, self->target, PClass::FindClass("RedAxe"));
-
-		// [BB] If we're the server, tell the clients to spawn this missile.
-		if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && missile )
-			SERVERCOMMANDS_SpawnMissile( missile );
-
+		P_SpawnMissileZ (self, self->z + 36*FRACUNIT, self->target, PClass::FindClass("RedAxe"), true); // [BB] Inform clients
 		return;
 	}
 	// Green axe
-	AActor *missile = P_SpawnMissileZ (self, self->z + 36*FRACUNIT, self->target, PClass::FindClass("KnightAxe"));
-
-	// [BB] If we're the server, tell the clients to spawn this missile.
-	if ( ( NETWORK_GetState( ) == NETSTATE_SERVER ) && missile )
-		SERVERCOMMANDS_SpawnMissile( missile );
+	P_SpawnMissileZ (self, self->z + 36*FRACUNIT, self->target, PClass::FindClass("KnightAxe"), true); // [BB] Inform clients
 }
 

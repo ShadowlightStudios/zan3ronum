@@ -61,6 +61,9 @@
 #include "lastmanstanding.h"
 #include "deathmatch.h"
 #include "chat.h"
+#include "network_enums.h"
+#include "p_acs.h"
+#include "v_video.h"
 
 //*****************************************************************************
 //	VARIABLES
@@ -114,7 +117,71 @@ bool CLIENT_AllowSVCheatMessage( void )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_UserInfo( ULONG ulFlags )
+bool UserInfoSortingFunction::operator()( FName cvar1Name, FName cvar2Name ) const
+{
+	FBaseCVar* cvar1 = FindCVar( cvar1Name, nullptr );
+	FBaseCVar* cvar2 = FindCVar( cvar2Name, nullptr );
+
+	if ( cvar1 && cvar2 && ((( cvar1->GetFlags() & CVAR_MOD ) ^ ( cvar2->GetFlags() & CVAR_MOD )) != 0 ))
+	{
+		// If one of the cvars contains the mod flag and the other one does not,the one that
+		// does is goes before the other one.
+		return !!( cvar2->GetFlags() & CVAR_MOD );
+	}
+	else
+	{
+		// Otherwise we don't really care.
+		return cvar1 < cvar2;
+	}
+}
+
+//*****************************************************************************
+//
+static void clientcommands_WriteCVarToUserinfo( FName name, FBaseCVar *cvar )
+{
+	// [BB] It's pointless to tell the server of the class, if only one class is available.
+	if (( name == NAME_PlayerClass ) && ( PlayerClasses.Size( ) == 1 ))
+		return;
+
+	// [TP] Don't bother sending these
+	if (( cvar == nullptr ) || ( cvar->GetFlags() & CVAR_UNSYNCED_USERINFO ))
+		return;
+
+	FString value;
+	// [BB] Skin needs special treatment, so that the clients can use skins the server doesn't have.
+	if ( name == NAME_Skin )
+		value = skins[players[consoleplayer].userinfo.GetSkin()].name;
+	else
+		value = cvar->GetGenericRep( CVAR_String ).String;
+
+	unsigned int elementNetSize = value.Len() + 1;
+
+	// [BB] Name will be transferred as short.
+	if ( name.IsPredefined() )
+		elementNetSize += 2;
+	// [BB] Name will be transferred as short (-1) + string + terminating 0.
+	else
+		elementNetSize += strlen ( name.GetChars() ) + 2 + 1;
+
+	// [BB] If the this cvar doesn't fit into the packet anymore, send what we have
+	// and start a new packet.
+	// NAME_None is transferred as short and the maximum packet size is intentionally
+	// hard coded to 1024. The clients shouldn't mess with this setting.
+	if ( ( CLIENT_GetLocalBuffer( )->CalcSize() + elementNetSize + 2 ) >= 1024 )
+	{
+		// [BB] Terminate the current CLC_USERINFO command.
+		NETWORK_WriteName( &CLIENT_GetLocalBuffer( )->ByteStream, NAME_None );
+		CLIENT_SendServerPacket();
+		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_USERINFO );
+	}
+
+	NETWORK_WriteName( &CLIENT_GetLocalBuffer( )->ByteStream, name );
+	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, value );
+}
+
+//*****************************************************************************
+//
+void CLIENTCOMMANDS_SendAllUserInfo()
 {
 	// Temporarily disable userinfo for when the player setup menu updates our userinfo. Then
 	// we can just send all our userinfo in one big bulk, instead of each time it updates
@@ -122,49 +189,54 @@ void CLIENTCOMMANDS_UserInfo( ULONG ulFlags )
 	if ( CLIENT_GetAllowSendingOfUserInfo( ) == false )
 		return;
 
-	// [BB] It's pointless to tell the server of the class, if only one class is available.
-	if (( PlayerClasses.Size( ) == 1 ) && ( ulFlags & USERINFO_PLAYERCLASS ))
-		ulFlags  &= ~USERINFO_PLAYERCLASS;
+	const userinfo_t &userinfo = players[consoleplayer].userinfo;
+	userinfo_t::ConstIterator iterator ( userinfo );
+	UserInfoChanges cvarNames;
 
-	// [BB] Nothing changed, nothing to send.
-	if ( ulFlags == 0 )
+	for ( userinfo_t::ConstPair *pair; iterator.NextPair( pair ); )
+		cvarNames.insert( pair->Key );
+
+	CLIENTCOMMANDS_UserInfo ( cvarNames );
+}
+
+//*****************************************************************************
+//
+void CLIENTCOMMANDS_UserInfo( const UserInfoChanges &cvars )
+{
+	// Temporarily disable userinfo for when the player setup menu updates our userinfo. Then
+	// we can just send all our userinfo in one big bulk, instead of each time it updates
+	// a userinfo property.
+	if ( CLIENT_GetAllowSendingOfUserInfo( ) == false )
+		return;
+
+	// [BB] Make sure that we only send anything to the server, if cvarNames actually
+	// contains cvars that we want to send.
+	bool sendUserinfo = false;
+
+	for ( UserInfoChanges::const_iterator iterator = cvars.begin(); iterator != cvars.end(); ++iterator )
+	{
+		FBaseCVar **cvarPointer = players[consoleplayer].userinfo.CheckKey( *iterator );
+		if ( cvarPointer && ( (*cvarPointer)->GetFlags() & CVAR_UNSYNCED_USERINFO ) == false )
+		{
+			sendUserinfo = true;
+			break;
+		}
+	}
+
+	if ( sendUserinfo == false )
 		return;
 
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_USERINFO );
 
-	// Tell the server which items are being updated.
-	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, ulFlags );
-
-	if ( ulFlags & USERINFO_NAME )
-	{ // [RC] Clean the name before we use it
-		V_CleanPlayerName(players[consoleplayer].userinfo.netname);
-		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.netname );
-	}
-	if ( ulFlags & USERINFO_GENDER )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.gender );
-	if ( ulFlags & USERINFO_COLOR )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.color );
-	if ( ulFlags & USERINFO_AIMDISTANCE )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.aimdist );
-	if ( ulFlags & USERINFO_SKIN )
-		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, skins[players[consoleplayer].userinfo.skin].name );
-	if ( ulFlags & USERINFO_RAILCOLOR )
-		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.lRailgunTrailColor );
-	if ( ulFlags & USERINFO_HANDICAP )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.lHandicap );
-	if ( ulFlags & USERINFO_TICSPERUPDATE )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.ulTicsPerUpdate );
-	if ( ulFlags & USERINFO_CONNECTIONTYPE )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.ulConnectionType );
-	if ( ulFlags & USERINFO_CLIENTFLAGS )
-		NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, players[consoleplayer].userinfo.clientFlags ); // [CK] Bitfields are used now.
-	if (( PlayerClasses.Size( ) > 1 ) && ( ulFlags & USERINFO_PLAYERCLASS ))
+	for ( UserInfoChanges::const_iterator iterator = cvars.begin(); iterator != cvars.end(); ++iterator )
 	{
-		if ( players[consoleplayer].userinfo.PlayerClass == -1 )
-			NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, "random" );
-		else
-			NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, PlayerClasses[players[consoleplayer].userinfo.PlayerClass].Type->Meta.GetMetaString( APMETA_DisplayName ));
+		FName name = *iterator;
+		FBaseCVar **cvarPointer = players[consoleplayer].userinfo.CheckKey( name );
+		FBaseCVar *cvar = cvarPointer ? *cvarPointer : nullptr;
+		clientcommands_WriteCVarToUserinfo( name, cvar );
 	}
+
+	NETWORK_WriteName( &CLIENT_GetLocalBuffer( )->ByteStream, NAME_None );
 }
 
 //*****************************************************************************
@@ -323,12 +395,12 @@ void CLIENTCOMMANDS_Pong( ULONG ulTime )
 	// immediately instead of sending the answer together with the the
 	// other commands tic-synced in CLIENT_EndTick().
 	NETBUFFER_s	TempBuffer;
-	NETWORK_InitBuffer( &TempBuffer, MAX_UDP_PACKET, BUFFERTYPE_WRITE );
-	NETWORK_ClearBuffer( &TempBuffer );
+	TempBuffer.Init( MAX_UDP_PACKET, BUFFERTYPE_WRITE );
+	TempBuffer.Clear();
 	NETWORK_WriteByte( &TempBuffer.ByteStream, CLC_PONG );
 	NETWORK_WriteLong( &TempBuffer.ByteStream, ulTime );
 	NETWORK_LaunchPacket( &TempBuffer, NETWORK_GetFromAddress( ) );
-	NETWORK_FreeBuffer( &TempBuffer );
+	TempBuffer.Free();
 }
 
 //*****************************************************************************
@@ -376,7 +448,7 @@ void CLIENTCOMMANDS_RequestJoin( const char *pszJoinPassword )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_RequestRCON( char *pszRCONPassword )
+void CLIENTCOMMANDS_RequestRCON( const char *pszRCONPassword )
 {
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_REQUESTRCON );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszRCONPassword );
@@ -384,7 +456,7 @@ void CLIENTCOMMANDS_RequestRCON( char *pszRCONPassword )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_RCONCommand( char *pszCommand )
+void CLIENTCOMMANDS_RCONCommand( const char *pszCommand )
 {
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_RCONCOMMAND );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszCommand );
@@ -447,9 +519,28 @@ void CLIENTCOMMANDS_GiveCheat( char *pszItem, LONG lAmount )
 
 //*****************************************************************************
 //
+void CLIENTCOMMANDS_TakeCheat( const char *item, LONG amount )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_TAKECHEAT );
+	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, item );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, amount );
+}
+
+//*****************************************************************************
+//
 void CLIENTCOMMANDS_SummonCheat( const char *pszItem, LONG lType, const bool bSetAngle, const SHORT sAngle )
 {
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, lType );
+	int commandtype = 0;
+
+	switch ( lType )
+	{
+	case DEM_SUMMON: commandtype = CLC_SUMMONCHEAT; break;
+	case DEM_SUMMONFRIEND: commandtype = CLC_SUMMONFRIENDCHEAT; break;
+	case DEM_SUMMONFOE: commandtype = CLC_SUMMONFOECHEAT; break;
+	default: return;
+	}
+
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, commandtype );
 	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, pszItem );
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, bSetAngle );
 	if ( bSetAngle )
@@ -525,6 +616,13 @@ void CLIENTCOMMANDS_RequestInventoryUse( AInventory *item )
 //
 void CLIENTCOMMANDS_RequestInventoryDrop( AInventory *pItem )
 {
+	// [BB] The server may forbid dropping completely.
+	if ( zadmflags & ZADF_NODROP )
+	{
+		Printf( "Dropping items is not allowed in this server.\n" );
+		return;
+	}
+
 	if ( sv_limitcommands && ( g_ulLastDropTime > 0 ) && ( (ULONG)gametic < g_ulLastDropTime + TICRATE ))
 	{
 		Printf( "You must wait at least one second before using drop again.\n" );
@@ -544,21 +642,32 @@ void CLIENTCOMMANDS_RequestInventoryDrop( AInventory *pItem )
 
 //*****************************************************************************
 //
-void CLIENTCOMMANDS_Puke ( LONG lScript, int args[3] )
+void CLIENTCOMMANDS_Puke ( int scriptNum, int args[4], bool always )
 {
-	// [Dusk] Calculate argn from args.
-	int argn = ( args[2] != 0 ) ? 3 :
+	if ( ACS_ExistsScript( scriptNum ) == false )
+		return;
+
+	// [TP] Calculate argn from args.
+	int argn = ( args[3] != 0 ) ? 4 :
+	           ( args[2] != 0 ) ? 3 :
 	           ( args[1] != 0 ) ? 2 :
 	           ( args[0] != 0 ) ? 1 : 0;
 
+	const int scriptNetID = NETWORK_ACSScriptToNetID( scriptNum );
+
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_PUKE );
-	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, (lScript < 0) ? -lScript : lScript );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, scriptNetID );
+
+	// [TP/BB] If we don't have a netID on file for this script, we send the name as a string.
+	if ( scriptNetID == NO_SCRIPT_NETID )
+		NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, FName( ENamedName( -scriptNum )));
+
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, argn );
 
-	for ( int Idx = 0; Idx < argn; ++Idx )
-		NETWORK_WriteLong ( &CLIENT_GetLocalBuffer( )->ByteStream, args[Idx] );
+	for ( int i = 0; i < argn; ++i )
+		NETWORK_WriteLong ( &CLIENT_GetLocalBuffer( )->ByteStream, args[i] );
 
-	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, (lScript < 0) );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, always );
 }
 
 //*****************************************************************************
@@ -595,4 +704,50 @@ void CLIENTCOMMANDS_InfoCheat( AActor* mobj, bool extended )
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_INFOCHEAT );
 	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, mobj->lNetID );
 	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, extended );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_WarpCheat( fixed_t x, fixed_t y )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_WARPCHEAT );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, x );
+	NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, y );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_KillCheat( const char* what )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_KILLCHEAT );
+	NETWORK_WriteString( &CLIENT_GetLocalBuffer( )->ByteStream, what );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_SpecialCheat( int special, const TArray<int> &args )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SPECIALCHEAT );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, special );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, args.Size() );
+
+	for ( unsigned int i = 0; i < args.Size(); ++i )
+		NETWORK_WriteLong( &CLIENT_GetLocalBuffer( )->ByteStream, args[i] );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_SetWantHideAccount( bool wantHideAccount )
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SETWANTHIDEACCOUNT );
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, wantHideAccount );
+}
+
+//*****************************************************************************
+// [TP]
+void CLIENTCOMMANDS_SetVideoResolution()
+{
+	NETWORK_WriteByte( &CLIENT_GetLocalBuffer( )->ByteStream, CLC_SETVIDEORESOLUTION );
+	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, SCREENWIDTH );
+	NETWORK_WriteShort( &CLIENT_GetLocalBuffer( )->ByteStream, SCREENHEIGHT );
 }

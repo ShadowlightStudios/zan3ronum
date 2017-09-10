@@ -58,6 +58,7 @@
 #include "c_dispatch.h"
 #include "cmdlib.h"
 #include "cooperative.h"
+#include "d_dehacked.h"
 #include "deathmatch.h"
 #include "doomstat.h"
 #include "duel.h"
@@ -203,7 +204,7 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 			SendMessage( GetDlgItem( hDlg, IDC_MAPMODE ), WM_SETFONT, (WPARAM) CreateFont( 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "Tahoma" ), (LPARAM) 1 );
 
 			// Initialize the server console text.
-			SetDlgItemText( hDlg, IDC_CONSOLEBOX, "=== "GAMENAME " server ===" );
+			SetDlgItemText( hDlg, IDC_CONSOLEBOX, "=== " GAMENAME " server ===" );
 			Printf( "\nRunning version: %s\n", GetVersionStringRev() );
 
 			// Append the time.
@@ -300,7 +301,7 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 				{
 					char	szIPString[256];
 			
-					sprintf( szIPString, "%s", NETWORK_AddressToString( g_LocalAddress ));
+					sprintf( szIPString, "%s", g_LocalAddress.ToString() );
 					Printf( "This server's IP address (%s) has been copied to the clipboard.\n", szIPString );
 
 					// Paste it into the clipboard.
@@ -394,7 +395,7 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 					// Fill in the box with the command.
 					//===================================
 
-					if ( iSelection >= IDC_HISTORY_MENU && iSelection < IDC_HISTORY_MENU + g_RecentConsoleMessages.size() )
+					if ( iSelection >= IDC_HISTORY_MENU && iSelection < IDC_HISTORY_MENU + static_cast<int> ( g_RecentConsoleMessages.size() ) )
 					{
 						FString entry = g_RecentConsoleMessages[ g_RecentConsoleMessages.size() - ( iSelection - IDC_HISTORY_MENU ) - 1];
 
@@ -487,8 +488,14 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 						if ( wadFullName )
 							arguments.AppendFormat( "\"%s\" ", wadFullName );
 					}
+
+					const TArray<FString> &dehfiles = D_GetDehFiles( );
+					for ( unsigned int dehidx = 0; dehidx < dehfiles.Size( ); ++dehidx )
+					{
+						arguments.AppendFormat( "-deh \"%s\" ", dehfiles[dehidx] );
+					}
 					arguments.AppendFormat( "-iwad %s ", NETWORK_GetIWAD( ) );
-					arguments.AppendFormat( "-connect %s ", NETWORK_AddressToString( g_LocalAddress ));
+					arguments.AppendFormat( "-connect %s ", g_LocalAddress.ToString() );
 
 					// Run it!
 					ShellExecute( hDlg, "open", Args->GetArg( 0 ), arguments.GetChars( ), NULL, SW_SHOW );
@@ -541,7 +548,8 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 			NotifyIconData.hIcon = g_hSmallIcon;
 			
 			Val = sv_hostname.GetGenericRep( CVAR_String );
-			sprintf( szString, "%s", Val.String );
+			strncpy( szString, Val.String, 63 );
+			szString[63] = 0;
 			lstrcpy( NotifyIconData.szTip, szString );
 
 			Shell_NotifyIcon( NIM_ADD, &NotifyIconData );
@@ -592,7 +600,8 @@ BOOL CALLBACK SERVERCONSOLE_ServerDialogBoxCallback( HWND hDlg, UINT Message, WP
 				NotifyIconData.hIcon = g_hSmallIcon;//LoadIcon( g_hInst, MAKEINTRESOURCE( IDI_ICONST ));
 
 				Val = sv_hostname.GetGenericRep( CVAR_String );
-				sprintf( szString, "%s", Val.String );
+				strncpy( szString, Val.String, 63 );
+				szString[63] = 0;
 				lstrcpy( g_NotifyIconData.szTip, szString );
 
 				Shell_NotifyIcon( NIM_DELETE, &NotifyIconData );
@@ -744,7 +753,7 @@ void serverconsole_ScoreboardRightClicked( void )
 			
 			if ( ulIndex != MAXPLAYERS )
 			{
-				sprintf( szIPString, "%s", NETWORK_AddressToString( SERVER_GetClient( ulIndex )->Address ));
+				sprintf( szIPString, "%s", SERVER_GetClient( ulIndex )->Address.ToString() );
 				Printf( "%s's IP address (%s) has been copied to the clipboard.\n", g_szScoreboard_SelectedUser, szIPString );
 		
 				// Paste it into the clipboard.
@@ -1622,7 +1631,7 @@ void SERVERCONSOLE_UpdateTitleString( const char *pszString )
 void SERVERCONSOLE_UpdateIP( NETADDRESS_s LocalAddress )
 {
 	g_LocalAddress = LocalAddress;
-	SendMessage( g_hDlgStatusBar, SB_SETTEXT, (WPARAM)2, (LPARAM) NETWORK_AddressToString( LocalAddress ));
+	SendMessage( g_hDlgStatusBar, SB_SETTEXT, (WPARAM)2, (LPARAM) LocalAddress.ToString() );
 	SERVERCONSOLE_UpdateBroadcasting( );
 }
 
@@ -1824,11 +1833,11 @@ void SERVERCONSOLE_SetupColumns( void )
 	{
 		ColumnData.mask = LVCF_TEXT;
 
-		if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNWINS )
+		if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNWINS )
 			ColumnData.pszText = "Wins";
-		else if ( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNFRAGS )
+		else if ( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNFRAGS )
 			ColumnData.pszText = "Frags";
-		else if (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetFlags( GAMEMODE_GetCurrentMode( )) & GMF_PLAYERSEARNKILLS ) && ( zadmflags & ZADF_AWARD_DAMAGE_INSTEAD_KILLS )))
+		else if (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNPOINTS ) || (( GAMEMODE_GetCurrentFlags() & GMF_PLAYERSEARNKILLS ) && ( zadmflags & ZADF_AWARD_DAMAGE_INSTEAD_KILLS )))
 			ColumnData.pszText = "Points";
 		else
 			ColumnData.pszText = "Kills";
@@ -1867,7 +1876,7 @@ void SERVERCONSOLE_ReListPlayers( void )
 		if ( playeringame[lIdx] == false )
 			continue;
 
-		sprintf( szString, "%s", players[lIdx].userinfo.netname );
+		sprintf( szString, "%s", players[lIdx].userinfo.GetName() );
 		V_RemoveColorCodes( szString );
 		Item.pszText = szString;
 
@@ -1909,7 +1918,7 @@ void SERVERCONSOLE_UpdatePlayerInfo( LONG lPlayer, ULONG ulUpdateFlags )
 	if ( ulUpdateFlags & UDF_NAME )
 	{
 		Item.iSubItem = COLUMN_NAME;
-		sprintf( szString, "%s", players[lPlayer].userinfo.netname );
+		sprintf( szString, "%s", players[lPlayer].userinfo.GetName() );
 		Item.pszText = szString;
 		V_RemoveColorCodes( szString );
 

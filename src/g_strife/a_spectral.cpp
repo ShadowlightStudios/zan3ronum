@@ -31,7 +31,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightningTail)
 	AActor *foo = Spawn("SpectralLightningHTail", self->x - self->velx, self->y - self->vely, self->z, ALLOW_REPLACE);
 
 	foo->angle = self->angle;
-	foo->health = self->health;
+	foo->FriendPlayer = self->FriendPlayer;
 }
 
 DEFINE_ACTION_FUNCTION(AActor, A_SpectralBigBallLightning)
@@ -56,7 +56,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 	fixed_t x, y;
 
 	// [CW] Clients may not do this.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) || ( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 		return;
 
 	if (self->threshold != 0)
@@ -67,7 +67,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 
 	// [CW] Tell clients to spawn the actor.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( self, CM_MOMX|CM_MOMY );
+		SERVERCOMMANDS_MoveThingExact( self, CM_VELX|CM_VELY );
 
 	x = self->x + pr_zap5.Random2(3) * FRACUNIT * 50;
 	y = self->y + pr_zap5.Random2(3) * FRACUNIT * 50;
@@ -77,7 +77,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 
 	flash->target = self->target;
 	flash->velz = -18*FRACUNIT;
-	flash->health = self->health;
+	flash->FriendPlayer = self->FriendPlayer;
 
 	flash = Spawn(NAME_SpectralLightningV2, self->x, self->y, ONCEILINGZ, ALLOW_REPLACE);
 
@@ -88,7 +88,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_SpectralLightning)
 
 	flash->target = self->target;
 	flash->velz = -18*FRACUNIT;
-	flash->health = self->health;
+	flash->FriendPlayer = self->FriendPlayer;
 
 	// [CW] Tell clients to spawn the missile.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
@@ -106,8 +106,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Tracer2)
 	fixed_t slope;
 
 	// [BC] Server takes care of movement.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -168,7 +167,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Tracer2)
 		}
 	}
 
-	// [BC] Update the thing's position, angle and momentum.
+	// [BC] Update the thing's position, angle and velocity.
 	if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-		SERVERCOMMANDS_MoveThingExact( self, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_MOMX|CM_MOMY|CM_MOMZ );
+		SERVERCOMMANDS_MoveThingExact( self, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_VELX|CM_VELY|CM_VELZ );
 }

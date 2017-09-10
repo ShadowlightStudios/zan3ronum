@@ -55,6 +55,7 @@ extern int ConBottom;
 // Initialize the console
 void C_InitConsole (int width, int height, bool ingame);
 void C_DeinitConsole ();
+void C_InitConback();
 
 // Adjust the console for a new screen mode
 void C_NewModeAdjust (void);
@@ -95,7 +96,7 @@ TArray<FString> C_GetTabCompletes (const FString& part);
 
 // [TP]
 void C_StartCapture();
-FString C_EndCapture();
+const char* C_EndCapture();
 bool C_IsCapturing();
 
 #endif

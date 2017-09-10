@@ -62,11 +62,9 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr1Attack)
 	fixed_t velz;
 	angle_t angle;
 
-	// [BC] In client mode, just play the attack sound and get out.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	// [BC] Don't do this in client mode.
+	if ( NETWORK_InClientMode() )
 	{
-		S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM);
 		return;
 	}
 
@@ -74,47 +72,29 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr1Attack)
 	{
 		return;
 	}
-	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM);
+	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NORM, true);	// [EP] Inform the clients.
 	if (self->CheckMeleeRange ())
 	{
 		int damage = pr_scrc1atk.HitDice (8);
-		P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-		P_TraceBleed (damage, self->target, self);
+		int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+		P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
 		return;
 	}
 
 	const PClass *fx = PClass::FindClass("SorcererFX1");
 	if (self->health > (self->SpawnHealth()/3)*2)
 	{ // Spit one fireball
-		mo = P_SpawnMissileZ (self, self->z + 48*FRACUNIT, self->target, fx );
-
-		// [BC] Spawn this to clients.
-		if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-			SERVERCOMMANDS_SpawnMissile( mo );
+		P_SpawnMissileZ (self, self->z + 48*FRACUNIT, self->target, fx, true); // [BB] Inform clients
 	}
 	else
 	{ // Spit three fireballs
-		mo = P_SpawnMissileZ (self, self->z + 48*FRACUNIT, self->target, fx);
+		mo = P_SpawnMissileZ (self, self->z + 48*FRACUNIT, self->target, fx, true); // [BB] Inform clients
 		if (mo != NULL)
 		{
 			velz = mo->velz;
 			angle = mo->angle;
-
-			// [BC] Spawn this to clients.
-			if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-				SERVERCOMMANDS_SpawnMissile( mo );
-
-			mo = P_SpawnMissileAngleZ (self, self->z + 48*FRACUNIT, fx, angle-ANGLE_1*3, velz);
-			
-			// [BC] Spawn this to clients.
-			if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-				SERVERCOMMANDS_SpawnMissile( mo );
-
-			mo = P_SpawnMissileAngleZ (self, self->z + 48*FRACUNIT, fx, angle+ANGLE_1*3, velz);
-
-			// [BC] Spawn this to clients.
-			if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-				SERVERCOMMANDS_SpawnMissile( mo );
+			P_SpawnMissileAngleZ (self, self->z + 48*FRACUNIT, fx, angle-ANGLE_1*3, velz, true); // [BB] Inform clients
+			P_SpawnMissileAngleZ (self, self->z + 48*FRACUNIT, fx, angle+ANGLE_1*3, velz, true); // [BB] Inform clients
 		}
 		if (self->health < self->SpawnHealth()/3)
 		{ // Maybe attack again
@@ -149,13 +129,13 @@ DEFINE_ACTION_FUNCTION(AActor, A_SorcererRise)
 	self->flags &= ~MF_SOLID;
 
 	// [BC] Let the server spawn this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
 
 	mo = Spawn("Sorcerer2", self->x, self->y, self->z, ALLOW_REPLACE);
+	mo->Translation = self->Translation;
 	mo->SetState (mo->FindState("Rise"));
 	mo->angle = self->angle;
 	mo->CopyFriendliness (self, true);
@@ -183,8 +163,7 @@ void P_DSparilTeleport (AActor *actor)
 	AActor *spot;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -201,27 +180,26 @@ void P_DSparilTeleport (AActor *actor)
 	if (P_TeleportMove (actor, spot->x, spot->y, spot->z, false))
 	{
 		mo = Spawn("Sorcerer2Telefade", prevX, prevY, prevZ, ALLOW_REPLACE);
-		S_Sound (mo, CHAN_BODY, "misc/teleport", 1, ATTN_NORM);
+		if (mo) mo->Translation = actor->Translation;
 
-		// [BC] Spawn the actor to clients and play the sound.
+		// [BC] Spawn the actor to clients.
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
 		{
 			SERVERCOMMANDS_SpawnThing( mo );
-			SERVERCOMMANDS_SoundActor( mo, CHAN_BODY, "misc/teleport", 1, ATTN_NORM );
-			SERVERCOMMANDS_SoundActor( actor, CHAN_BODY, "misc/teleport", 1, ATTN_NORM );
 			// [BB] Also notify the clients of the state change.
 			SERVERCOMMANDS_SetThingFrame( actor, actor->FindState("Teleport") );
 		}
 
+		S_Sound (mo, CHAN_BODY, "misc/teleport", 1, ATTN_NORM, true);	// [BC] Inform the clients.
 		actor->SetState (actor->FindState("Teleport"));
-		S_Sound (actor, CHAN_BODY, "misc/teleport", 1, ATTN_NORM);
+		S_Sound (actor, CHAN_BODY, "misc/teleport", 1, ATTN_NORM, true);	// [BC] Inform the clients.
 		actor->z = actor->floorz;
 		actor->angle = spot->angle;
 		actor->velx = actor->vely = actor->velz = 0;
 
 		// [BB] Tell clients of the new position of "actor".
 		if ( NETWORK_GetState( ) == NETSTATE_SERVER )
-			SERVERCOMMANDS_MoveThing( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_MOMX|CM_MOMY|CM_MOMZ );
+			SERVERCOMMANDS_MoveThing( actor, CM_X|CM_Y|CM_Z|CM_ANGLE|CM_VELX|CM_VELY|CM_VELZ );
 
 	}
 }
@@ -241,8 +219,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr2Decide)
 	};
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -267,15 +244,11 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr2Decide)
 
 DEFINE_ACTION_FUNCTION(AActor, A_Srcr2Attack)
 {
-	// [BC]
-	AActor	*mo;
 	int chance;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
-		S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NONE);
 		return;
 	}
 
@@ -283,12 +256,12 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr2Attack)
 	{
 		return;
 	}
-	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NONE);
+	S_Sound (self, CHAN_BODY, self->AttackSound, 1, ATTN_NONE, true);	// [EP] Inform the clients.
 	if (self->CheckMeleeRange())
 	{
 		int damage = pr_s2a.HitDice (20);
-		P_DamageMobj (self->target, self, self, damage, NAME_Melee);
-		P_TraceBleed (damage, self->target, self);
+		int newdam = P_DamageMobj (self->target, self, self, damage, NAME_Melee);
+		P_TraceBleed (newdam > 0 ? newdam : damage, self->target, self);
 		return;
 	}
 	chance = self->health < self->SpawnHealth()/2 ? 96 : 48;
@@ -298,27 +271,13 @@ DEFINE_ACTION_FUNCTION(AActor, A_Srcr2Attack)
 		const PClass *fx = PClass::FindClass("Sorcerer2FX2");
 		if (fx)
 		{
-			mo = P_SpawnMissileAngle (self, fx, self->angle-ANG45, FRACUNIT/2);
-
-			// [BC]
-			if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-				SERVERCOMMANDS_SpawnMissile( mo );
-
-			mo = P_SpawnMissileAngle (self, fx, self->angle+ANG45, FRACUNIT/2);
-
-			// [BC]
-			if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-				SERVERCOMMANDS_SpawnMissile( mo );
+			P_SpawnMissileAngle (self, fx, self->angle-ANG45, FRACUNIT/2, true); // [BB] Inform clients
+			P_SpawnMissileAngle (self, fx, self->angle+ANG45, FRACUNIT/2, true); // [BB] Inform clients
 		}
 	}
 	else
 	{ // Blue bolt
-		mo = P_SpawnMissile (self, self->target, PClass::FindClass("Sorcerer2FX1"));
-		
-		// [BC]
-		if (( mo ) && ( NETWORK_GetState( ) == NETSTATE_SERVER ))
-			SERVERCOMMANDS_SpawnMissile( mo );
-
+		P_SpawnMissile (self, self->target, PClass::FindClass("Sorcerer2FX1"), NULL, true); // [BB] Inform clients
 	}
 }
 
@@ -334,8 +293,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_BlueSpark)
 	AActor *mo;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -364,8 +322,7 @@ DEFINE_ACTION_FUNCTION(AActor, A_GenWizard)
 	AActor *mo;
 
 	// [BC] Don't do this in client mode.
-	if (( NETWORK_GetState( ) == NETSTATE_CLIENT ) ||
-		( CLIENTDEMO_IsPlaying( )))
+	if ( NETWORK_InClientMode() )
 	{
 		return;
 	}
@@ -376,8 +333,8 @@ DEFINE_ACTION_FUNCTION(AActor, A_GenWizard)
 		mo->z -= mo->GetDefault()->height/2;
 		if (!P_TestMobjLocation (mo))
 		{ // Didn't fit
+			mo->ClearCounters();
 			mo->Destroy ();
-			level.total_monsters--;
 		}
 		else
 		{ // [RH] Make the new wizards inherit D'Sparil's target
